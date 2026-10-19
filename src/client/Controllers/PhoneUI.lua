@@ -358,7 +358,12 @@ local function dealerPage()
 		elseif def.Pass then
 			text, color = "GAME PASS", PURPLE
 			click = function()
-				NotifyController.Show("The " .. (def.DisplayName or def.Id) .. " comes with a game pass (shop coming soon).", PURPLE)
+				for _, pass in ipairs(Shop.Passes) do
+					if pass.Key == def.Pass then
+						NotifyController.Show("The " .. (def.DisplayName or def.Id) .. " comes with the " .. pass.Name .. " pass.", PURPLE)
+					end
+				end
+				show("Shop")
 			end
 		else
 			text, color = "BUY " .. money(def.Price or 0), PINK

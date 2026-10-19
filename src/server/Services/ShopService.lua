@@ -6,7 +6,8 @@
 --   * Cash packs: MarketplaceService.ProcessReceipt, idempotent. Each PurchaseId is recorded in the
 --     buyer's saved profile (data.receipts) in the same save as the cash, and we only answer
 --     PurchaseGranted after that save succeeds. A repeat delivery of a recorded PurchaseId is
---     acknowledged without paying again. Buyer not in this server or profile not loaded ->
+--     not paid again, but is still only acknowledged after a successful save (the first save may
+--     have failed, leaving the payout in memory only). Buyer not in this server or profile not loaded ->
 --     NotProcessedYet (Roblox retries later).
 --   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") grants passes for testing.
 
@@ -81,7 +82,12 @@ local function processReceipt(info)
 	data.receipts = data.receipts or {}
 	local id = tostring(info.PurchaseId)
 	if data.receipts[id] then
-		return Enum.ProductPurchaseDecision.PurchaseGranted -- already paid out
+		-- Already paid out, but maybe only in memory (an earlier save failed): confirm it's saved
+		-- before telling Roblox, or a crash before the next autosave loses the purchase for good.
+		if not DataService.SaveNow(player) then
+			return Enum.ProductPurchaseDecision.NotProcessedYet
+		end
+		return Enum.ProductPurchaseDecision.PurchaseGranted
 	end
 	EconomyService.AddCash(player, product.Cash, "product:" .. product.Key)
 	data.receipts[id] = os.time()
