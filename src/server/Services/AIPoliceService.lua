@@ -477,6 +477,7 @@ local function assign(u, p)
 	u.repathAt = 0
 	u.arrestFor = 0
 	u.graceUntil = isTutorial(p) and os.clock() + Police.Tutorial.NoArrestSeconds or 0
+	u.assignedAt = os.clock() -- the tutorial grace is judged live from here (TutorialChase can arrive late)
 	u.car:SetAttribute("AITarget", p.UserId)
 end
 
@@ -728,7 +729,11 @@ local function update(u, dt, now)
 		local slow = info.inCar and info.vel.Magnitude < 8 or (not info.inCar and info.vel.Magnitude < 10)
 		local close = dist < Police.ArrestRange and math.abs(info.pos.Y - pos.Y) < Police.ArrestHeight
 			and HeatService.SeenAgo(p, chassis) < 1
-		if close and slow and now >= u.graceUntil then
+		-- Tutorial players get NoArrestSeconds from this unit's assignment, even when TutorialChase was
+		-- set a moment after the unit was assigned (TutorialService sets it 0.5 s after the robbery).
+		local grace = now < u.graceUntil
+			or (isTutorial(p) and now < (u.assignedAt or 0) + Police.Tutorial.NoArrestSeconds)
+		if close and slow and not grace then
 			u.arrestFor += dt
 			if u.arrestFor >= Police.ArrestSeconds then
 				u.arrestFor = 0
@@ -931,6 +936,12 @@ local function fillOne(p, now)
 	if full then
 		-- Make room for the tutorial chaser: a patrol goes home (or the busiest chase gives one up).
 		if tutorial then
+			-- One car at a time: while any car is already on its way out, wait for its slot.
+			for _, u in ipairs(units) do
+				if u.leaving then
+					return
+				end
+			end
 			local victim = loneliestPatrol()
 			if not victim then
 				local most
