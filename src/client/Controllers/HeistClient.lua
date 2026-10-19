@@ -1,7 +1,8 @@
 -- HeistClient (ModuleScript, StarterPlayerScripts.Controllers.HeistClient)
 -- Client side of heists:
---   * Rob prompts show only for robbers, and only while the site is Robbable (local-only toggle;
---     the server re-checks everything when a robbery finishes).
+--   * Rob prompts show only for citizens on foot, and only while the site is Robbable (local-only
+--     toggle; the server re-checks everything when a robbery finishes and refuses seated players, so
+--     a prompt in the car would only waste a long hold).
 --   * Site signs read "OPEN" or "CLOSED 2:10"; alarms flash red for cops.
 --   * Result toasts ("+$1,200 in your bag").
 
@@ -30,12 +31,17 @@ local function clock(seconds)
 	return string.format("%d:%02d", seconds // 60, seconds % 60)
 end
 
-local function updateSite(site)
+local function onFoot()
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.SeatPart == nil
+end
+
+local function updateSite(site, canRob)
 	local robbable = site:GetAttribute("Robbable") == true
 	for _, name in ipairs({ "RobPrompt", "PrepPrompt" }) do
 		local prompt = site:FindFirstChild(name, true)
-		if prompt then
-			local show = robbable and player:GetAttribute("Side") == "Civilian"
+		if prompt and prompt:IsA("ProximityPrompt") then
+			local show = robbable and canRob
 			if prompt.Enabled ~= show then
 				prompt.Enabled = show
 			end
@@ -68,9 +74,13 @@ function HeistClient.Init()
 	local heists = Workspace:WaitForChild("Heists")
 	task.spawn(function()
 		while true do
+			local canRob = player:GetAttribute("Side") == "Civilian" and onFoot()
 			for _, site in ipairs(heists:GetChildren()) do
 				if site:GetAttribute("HeistId") then
-					updateSite(site)
+					local ok, err = pcall(updateSite, site, canRob)
+					if not ok then
+						warn("[HeistClient] " .. tostring(err))
+					end
 				end
 			end
 			task.wait(0.33)

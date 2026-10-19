@@ -1,6 +1,8 @@
 -- TeamUI (ModuleScript, StarterPlayerScripts.Controllers.TeamUI)
--- Team picker: two big cards (ROBBER / COP) shown on first join, and a small team badge in the top-left
--- corner that reopens it. The server decides; this only asks (RequestTeam).
+-- Role picker: two big cards (CITIZEN / POLICE) shown on first join, and a small role badge in the
+-- top-left corner that reopens it. The server decides; this only asks (RequestTeam).
+-- Player-facing names live in LABEL here (the Side values stay "Civilian" / "Cop" / "Prisoner"):
+-- one word per role everywhere: CITIZEN, POLICE, PRISONER.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18,7 +20,7 @@ local ORANGE = Color3.fromRGB(255, 138, 61)
 local DARK = Color3.fromRGB(18, 14, 30)
 local FONT = Enum.Font.FredokaOne
 local COLOR = { Civilian = PINK, Cop = CYAN, Prisoner = ORANGE }
-local LABEL = { Civilian = "CITIZEN", Cop = "COP", Prisoner = "PRISONER" }
+local LABEL = { Civilian = "CITIZEN", Cop = "POLICE", Prisoner = "PRISONER" }
 
 local gui, overlay, badge, copCount, robberCount, copFull, closeButton
 local requestTeam
@@ -65,7 +67,7 @@ local function card(parent, side, xScale)
 	b.Parent = parent
 	corner(b)
 	stroke(b, color, 5)
-	text(b, TeamsConfig.BySide[side].Label, UDim2.fromScale(0.9, 0.22), UDim2.fromScale(0.5, 0.1), color)
+	text(b, LABEL[side], UDim2.fromScale(0.9, 0.22), UDim2.fromScale(0.5, 0.1), color)
 	text(b, TeamsConfig.BySide[side].Pitch, UDim2.fromScale(0.85, 0.2), UDim2.fromScale(0.5, 0.4))
 	local count = text(b, "", UDim2.fromScale(0.8, 0.12), UDim2.fromScale(0.5, 0.72), Color3.fromRGB(200, 200, 220))
 	b.Activated:Connect(function()
@@ -92,9 +94,9 @@ local function refresh()
 	copFull.Visible = full
 	closeButton.Visible = player:GetAttribute("HasPicked") == true
 	local side = player:GetAttribute("Side") or "Civilian"
-	badge.Text = LABEL[side]
-	badge.TextColor3 = COLOR[side]
-	badge.UIStroke.Color = COLOR[side]
+	badge.Text = LABEL[side] or LABEL.Civilian
+	badge.TextColor3 = COLOR[side] or PINK
+	badge.UIStroke.Color = COLOR[side] or PINK
 end
 
 local function build()
@@ -125,14 +127,20 @@ local function build()
 	copFull.Visible = false
 	copFull.Parent = copCard
 	corner(copFull)
-	-- New players: the free-roam card pulses a little so it is the obvious first choice.
+	-- New players: the citizen card pulses a little so it is the obvious first choice
+	-- (only while the picker is open; idle otherwise).
 	local scale = Instance.new("UIScale")
 	scale.Parent = robberCard
 	task.spawn(function()
 		local t = 0
 		while robberCard.Parent do
-			t += task.wait()
-			scale.Scale = overlay.Visible and (1 + 0.03 * math.sin(t * 4)) or 1
+			if overlay.Visible then
+				t += task.wait()
+				scale.Scale = 1 + 0.03 * math.sin(t * 4)
+			else
+				scale.Scale = 1
+				task.wait(0.5)
+			end
 		end
 	end)
 	local close = Instance.new("TextButton")

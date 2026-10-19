@@ -13,6 +13,7 @@ local Workspace = game:GetService("Workspace")
 
 local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
+local HUDController = require(script.Parent:WaitForChild("HUDController"))
 
 local player = Players.LocalPlayer
 
@@ -109,6 +110,16 @@ local function build()
 	p.PaddingTop, p.PaddingBottom = UDim.new(0, 5), UDim.new(0, 5)
 	p.PaddingLeft, p.PaddingRight = UDim.new(0, 12), UDim.new(0, 12)
 	p.Parent = label
+	-- Top row between the rank chip and the minimap (or EXIT/FLIP while driving): see HUDController.
+	local function layout()
+		local size = gui.AbsoluteSize
+		local x, width = HUDController.TopRowRect(size.X, size.Y)
+		label.Position = UDim2.fromOffset(x, 58)
+		label.Size = UDim2.fromOffset(width, 32)
+	end
+	label.AnchorPoint = Vector2.new(0, 0)
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(layout)
+	HUDController.OnLayout(layout)
 end
 
 local function hideRoute()

@@ -33,6 +33,7 @@ local ORDER = {
 	"CollectibleClient",
 	"CrewClient",
 	"MissionClient",
+	"ObjectiveClient",
 	"PedClient",
 }
 

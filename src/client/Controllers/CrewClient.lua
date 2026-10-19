@@ -113,7 +113,7 @@ local function showInvite(info)
 	card = Instance.new("Frame")
 	card.Name = "CrewInvite"
 	card.AnchorPoint = Vector2.new(0.5, 0)
-	card.Position = UDim2.new(0.5, 0, 0, 150)
+	card.Position = UDim2.new(0.5, 0, 0, 164) -- the toast area, drawn above the toasts (DisplayOrder)
 	card.Size = UDim2.fromOffset(320, 120)
 	card.BackgroundColor3 = DARK
 	card.BackgroundTransparency = 0.1
@@ -162,7 +162,7 @@ function CrewClient.Init()
 	gui.Name = "Crew"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
-	gui.DisplayOrder = 8
+	gui.DisplayOrder = 21 -- above the toasts (20): JOIN / NO THANKS are never covered
 	gui.Parent = player:WaitForChild("PlayerGui")
 	task.spawn(function()
 		Remotes.OnClient("CrewInvite", showInvite)

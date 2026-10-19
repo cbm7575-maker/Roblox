@@ -1,12 +1,16 @@
 -- PhoneUI (ModuleScript, StarterPlayerScripts.Controllers.PhoneUI)
--- The in-game phone (PHONE button or P). Apps:
+-- The in-game phone (PHONE button, P, or D-pad down on a gamepad). Apps:
 --   GARAGE    your cars for your current role: DELIVER (spawn), paint $500, rims $800,
---             underglow $3,000 once per car (then free colour swaps)
+--             underglow $3,000 once per car (then free colour swaps; not on boats)
 --   AUTONEON  the car dealer: stats, prices, BUY (tap twice to confirm)
 --   GPS       races, stunts, jobs, services and heist sites (open ones marked): sets a road route
---   JOBS      switch between free roam and police
+--   JOBS      switch between citizen and police; phone missions for your side
+--   HOMES     safehouses (Config.Properties): price or OWNED / HOME, rent waiting, rank needed,
+--             SHOW ME and SET HOME (RequestProperty "SetHome"). Buying and rent happen at the door.
+--   GOALS     ranks, Gus figurines found, today's challenges
+--   FEED      every Coast Feed post (FeedController.History); the tile shows how many are new
 --   SHOP      game passes and cash packs (prices read live from the Creator Hub)
--- The server decides everything (GarageService, VehicleService); this only sends requests.
+-- The server decides everything (GarageService, VehicleService, PropertyService); this only asks.
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -27,6 +31,7 @@ local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 local GPSClient = require(script.Parent:WaitForChild("GPSClient"))
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
+local FeedController = require(script.Parent:WaitForChild("FeedController"))
 
 local player = Players.LocalPlayer
 
@@ -37,6 +42,8 @@ local CYAN = Color3.fromRGB(34, 225, 255)
 local GOLD = Color3.fromRGB(255, 214, 10)
 local MINT = Color3.fromRGB(110, 242, 196)
 local PURPLE = Color3.fromRGB(123, 47, 255)
+local ORANGE = Color3.fromRGB(255, 138, 61)
+local LAVENDER = Color3.fromRGB(200, 190, 230)
 local DARK = Color3.fromRGB(18, 14, 30)
 local PANEL = Color3.fromRGB(34, 26, 56)
 local WHITE = Color3.new(1, 1, 1)
@@ -165,6 +172,19 @@ local function customOf(id)
 	return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
 end
 
+-- Player-facing role names (the Side values stay "Civilian" / "Cop" / "Prisoner").
+local ROLE = { Civilian = "CITIZEN", Cop = "POLICE", Prisoner = "IN PRISON" }
+
+-- An optional module (another feature may not be in this place yet): nil if missing or broken.
+local function optional(parent, name)
+	local m = parent:FindFirstChild(name)
+	if not m or not m:IsA("ModuleScript") then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return ok and type(mod) == "table" and mod or nil
+end
+
 local function canDrive(def)
 	local side = player:GetAttribute("Side") or "Civilian"
 	return (def.Police == true) == (side == "Cop")
@@ -186,10 +206,12 @@ local APPS = {
 	{ Name = "AUTONEON", Icon = "🏁", Color = CYAN, Page = "Dealer" },
 	{ Name = "GPS", Icon = "📍", Color = MINT, Page = "GPS" },
 	{ Name = "JOBS", Icon = "💼", Color = GOLD, Page = "Jobs" },
-	{ Name = "SHOP", Icon = "🛍️", Color = PURPLE, Page = "Shop" },
+	{ Name = "HOMES", Icon = "🏠", Color = ORANGE, Page = "Homes" },
 	{ Name = "GOALS", Icon = "🏆", Color = GOLD, Page = "Goals" },
+	{ Name = "FEED", Icon = "📰", Color = CYAN, Page = "Feed" },
 	{ Name = "CREW", Icon = "👥", Color = MINT, Page = "Crew" },
-	{ Name = "SETTINGS", Icon = "⚙️", Color = Color3.fromRGB(200, 190, 230), Page = "Settings" },
+	{ Name = "SHOP", Icon = "🛍️", Color = PURPLE, Page = "Shop" },
+	{ Name = "SETTINGS", Icon = "⚙️", Color = LAVENDER, Page = "Settings" },
 }
 
 local function homePage()
@@ -201,8 +223,8 @@ local function homePage()
 	grid.BackgroundTransparency = 1
 	grid.Parent = screen
 	local layout = Instance.new("UIGridLayout")
-	layout.CellSize = UDim2.fromScale(0.46, 0.225)
-	layout.CellPadding = UDim2.fromScale(0.06, 0.025)
+	layout.CellSize = UDim2.fromScale(0.3, 0.215) -- 3 across, 4 rows
+	layout.CellPadding = UDim2.fromScale(0.035, 0.03)
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.Parent = grid
@@ -220,6 +242,14 @@ local function homePage()
 		tile.Activated:Connect(function()
 			show(app.Page)
 		end)
+		if app.Page == "Feed" and FeedController.Unread > 0 then
+			local badge = label(tile, tostring(math.min(FeedController.Unread, 99)), UDim2.fromOffset(28, 28),
+				UDim2.new(1, -24, 0, -6), WHITE, Enum.TextXAlignment.Center)
+			badge.Name = "Unread"
+			badge.BackgroundTransparency = 0
+			badge.BackgroundColor3 = PINK
+			corner(badge, UDim.new(0.5, 0))
+		end
 	end
 	local tip = label(screen, "Tip: robbing stores makes you Wanted. Lose the cops, then bank your bag at the Hideout!",
 		UDim2.fromScale(0.94, 0.12), UDim2.fromScale(0.03, 0.86), Color3.fromRGB(200, 190, 230), Enum.TextXAlignment.Center)
@@ -321,10 +351,12 @@ local function customPage()
 	swatchRow(s, "Rims", money(Garage.RimPrice), Garage.Rims, rim, 2, function(i)
 		Remotes.Event("RequestRims"):FireServer(def.Id, i)
 	end)
-	local glowPrice = glow > 0 and "FREE SWAP" or money(Garage.UnderglowPrice)
-	swatchRow(s, "Underglow", glowPrice, Garage.Glows, glow, 3, function(i)
-		Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
-	end)
+	if not def.Boat then -- no underglow on boats (the server refuses it too)
+		local glowPrice = glow > 0 and "FREE SWAP" or money(Garage.UnderglowPrice)
+		swatchRow(s, "Underglow", glowPrice, Garage.Glows, glow, 3, function(i)
+			Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
+		end)
+	end
 	local hint = label(s, "Changes show on this car next time it's delivered (or right away if it's out).",
 		UDim2.new(1, 0, 0, 36), nil, Color3.fromRGB(200, 190, 230), Enum.TextXAlignment.Center)
 	hint.LayoutOrder = 4
@@ -465,8 +497,8 @@ local function jobsPage()
 	local s = list(0.02)
 	local side = player:GetAttribute("Side") or "Civilian"
 	local r = row(s, 90, 1)
-	label(r, "You are: " .. (side == "Cop" and "POLICE" or side == "Prisoner" and "IN PRISON" or "FREE ROAM"),
-		UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 8), side == "Cop" and CYAN or PINK)
+	label(r, "You are: " .. (ROLE[side] or ROLE.Civilian), UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 8),
+		side == "Cop" and CYAN or PINK)
 	button(r, "SWITCH ROLE", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 44), PURPLE, function()
 		PhoneUI.Close()
 		local TeamUI = require(script.Parent:WaitForChild("TeamUI"))
@@ -484,15 +516,25 @@ local function jobsPage()
 	for id in string.gmatch(player:GetAttribute("MissionsDone") or "", "[^,]+") do
 		done[id] = true
 	end
-	local mh = label(s, "MISSIONS", UDim2.new(1, 0, 0, 22), nil, MINT, Enum.TextXAlignment.Center)
-	mh.LayoutOrder = 50
-	for i, m in ipairs(Missions.List) do
+	-- Only your side's missions (Side defaults to "Civilian").
+	local mine = {}
+	for _, m in ipairs(Missions.List) do
+		if (m.Side or "Civilian") == side then
+			table.insert(mine, m)
+		end
+	end
+	if #mine > 0 then
+		local mh = label(s, "MISSIONS", UDim2.new(1, 0, 0, 22), nil, MINT, Enum.TextXAlignment.Center)
+		mh.LayoutOrder = 50
+	end
+	for i, m in ipairs(mine) do
 		local mr = row(s, 96, 50 + i)
 		mr.Name = m.Id
 		label(mr, m.Name .. (done[m.Id] and "  ✅" or ""), UDim2.new(0.66, 0, 0, 22), UDim2.fromOffset(10, 6), done[m.Id] and MINT or WHITE)
 		local b = label(mr, m.Blurb, UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 30), Color3.fromRGB(200, 190, 230))
 		b.TextWrapped = true
-		label(mr, (done[m.Id] and "repeat " or "") .. money(done[m.Id] and math.floor(m.Cash * Missions.RepeatShare) or m.Cash)
+		local share = type(Missions.RepeatShareFor) == "function" and Missions.RepeatShareFor(m) or Missions.RepeatShare
+		label(mr, (done[m.Id] and "repeat " or "") .. money(done[m.Id] and math.floor(m.Cash * share) or m.Cash)
 			.. (m.NeedsBoat and "  ·  boat" or ""), UDim2.new(0.5, 0, 0, 18), UDim2.new(0, 10, 1, -24), GOLD)
 		button(mr, "START", UDim2.new(0.3, 0, 0, 26), UDim2.new(0.68, -6, 1, -32), MINT, function()
 			Remotes.Event("RequestMission"):FireServer("Start", m.Id)
@@ -600,7 +642,7 @@ local function goalsPage()
 		local color = side == "Cop" and CYAN or PINK
 		local r = row(s, 86, i)
 		r.Name = side
-		label(r, (side == "Cop" and "POLICE" or "FREE ROAM") .. "  ·  RANK " .. rank, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), color)
+		label(r, ROLE[side] .. "  ·  RANK " .. rank, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), color)
 		local bg = Instance.new("Frame")
 		bg.Size = UDim2.new(1, -20, 0, 10)
 		bg.Position = UDim2.fromOffset(10, 36)
@@ -624,6 +666,33 @@ local function goalsPage()
 		local l = label(r, info, UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 52), Color3.fromRGB(200, 190, 230))
 		l.TextWrapped = true
 	end
+	-- Gus the Gator figurines (CollectibleService: GusFound / GusTotal), with a clue for the nearest one.
+	local found = player:GetAttribute("GusFound") or 0
+	local total = player:GetAttribute("GusTotal") or 40
+	local gus = row(s, 86, 5)
+	gus.Name = "Gus"
+	label(gus, "🐊 Gus figurines  " .. found .. "/" .. total, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), MINT)
+	local gbg = Instance.new("Frame")
+	gbg.Size = UDim2.new(1, -20, 0, 10)
+	gbg.Position = UDim2.fromOffset(10, 36)
+	gbg.BackgroundColor3 = DARK
+	gbg.Parent = gus
+	corner(gbg, UDim.new(0.5, 0))
+	local gfill = Instance.new("Frame")
+	gfill.Size = UDim2.fromScale(math.clamp(total > 0 and found / total or 0, 0.02, 1), 1)
+	gfill.BackgroundColor3 = MINT
+	gfill.Parent = gbg
+	corner(gfill, UDim.new(0.5, 0))
+	local clue = found >= total and "All found! Gator Green paint unlocked." or "Hidden all over Port Solana: $250 each."
+	local Collectibles = found < total and optional(script.Parent, "CollectibleClient")
+	if Collectibles and type(Collectibles.NextHint) == "function" then
+		local ok, hint = pcall(Collectibles.NextHint)
+		if ok and type(hint) == "string" and hint ~= "" then
+			clue = "Clue: " .. hint
+		end
+	end
+	local cl = label(gus, clue, UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 52), LAVENDER)
+	cl.TextWrapped = true
 	local head = label(s, "TODAY'S CHALLENGES  ·  $2,000 + 100 XP each", UDim2.new(1, 0, 0, 22), nil, GOLD, Enum.TextXAlignment.Center)
 	head.LayoutOrder = 10
 	local ok, listData = pcall(function()
@@ -701,8 +770,8 @@ local function crewPage()
 			order += 1
 			label(r, p.DisplayName, UDim2.new(0.62, 0, 0, 22), UDim2.fromOffset(10, 5))
 			local side = p:GetAttribute("Side") or ""
-			label(r, side == "Cop" and "Police" or side == "Prisoner" and "In prison" or "Free roam", UDim2.new(0.62, 0, 0, 16),
-				UDim2.fromOffset(10, 27), Color3.fromRGB(200, 190, 230))
+			label(r, side == "Cop" and "Police" or side == "Prisoner" and "In prison" or "Citizen", UDim2.new(0.62, 0, 0, 16),
+				UDim2.fromOffset(10, 27), LAVENDER)
 			button(r, "INVITE", UDim2.new(0.3, 0, 0, 32), UDim2.new(0.68, -6, 0, 8), MINT, function()
 				Remotes.Event("RequestCrew"):FireServer("Invite", p.UserId)
 			end).Name = "Invite"
@@ -714,6 +783,118 @@ local function crewPage()
 		none.TextWrapped = true
 		none.LayoutOrder = order
 	end
+end
+
+------------------------------------------------------------------ feed: every Coast Feed post
+
+local function ago(t)
+	local d = math.max(0, os.time() - (t or os.time()))
+	if d < 60 then
+		return "now"
+	elseif d < 3600 then
+		return (d // 60) .. "m ago"
+	end
+	return (d // 3600) .. "h ago"
+end
+
+local function feedPage()
+	setHeader("FEED", "Home")
+	FeedController.MarkRead()
+	local s = list(0.02)
+	local history = FeedController.History
+	if #history == 0 then
+		local none = label(s, "Nothing yet. Big moments in Port Solana show up here.", UDim2.new(1, 0, 0, 40), nil,
+			Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
+		none.TextWrapped = true
+		return
+	end
+	for i = #history, 1, -1 do -- newest first
+		local e = history[i]
+		local r = row(s, 78, #history - i + 1)
+		local accent = Instance.new("Frame")
+		accent.Size = UDim2.new(0, 6, 1, -20)
+		accent.Position = UDim2.fromOffset(8, 10)
+		accent.BackgroundColor3 = e.Color or PINK
+		accent.Parent = r
+		corner(accent, UDim.new(0.5, 0))
+		local t = label(r, e.Text, UDim2.new(1, -36, 0, 46), UDim2.fromOffset(22, 6), WHITE)
+		t.TextWrapped = true
+		t.TextTruncate = Enum.TextTruncate.AtEnd
+		local limit = Instance.new("UITextSizeConstraint")
+		limit.MinTextSize = 13
+		limit.MaxTextSize = 18
+		limit.Parent = t
+		label(r, ago(e.Time), UDim2.new(0.5, 0, 0, 16), UDim2.new(0.5, -12, 1, -22), Color3.fromRGB(160, 150, 190),
+			Enum.TextXAlignment.Right)
+	end
+end
+
+------------------------------------------------------------------ homes: safehouses (PropertyService)
+
+local function homesPage()
+	setHeader("HOMES", "Home")
+	local s = list(0.02)
+	local Properties = optional(ReplicatedStorage.Shared.Config, "Properties")
+	if not Properties or type(Properties.List) ~= "table" then
+		label(s, "Homes are coming soon!", UDim2.new(1, 0, 0, 40), nil, LAVENDER, Enum.TextXAlignment.Center)
+		return
+	end
+	local mine = {}
+	for id in string.gmatch(player:GetAttribute("OwnedProps") or "", "[^,]+") do
+		mine[id] = true
+	end
+	local home = player:GetAttribute("HomeId")
+	local rank = player:GetAttribute("CivRank") or 1
+	local intro = label(s, "Your own safehouse: respawn there, bank your bag on its pad, earn rent.",
+		UDim2.new(1, 0, 0, 36), nil, LAVENDER, Enum.TextXAlignment.Center)
+	intro.TextWrapped = true
+	intro.LayoutOrder = 0
+	for i, def in ipairs(Properties.List) do
+		local owned = mine[def.Id] == true
+		local r = row(s, 116, i)
+		r.Name = tostring(def.Id)
+		label(r, tostring(def.Name), UDim2.new(0.62, 0, 0, 24), UDim2.fromOffset(10, 6))
+		label(r, tostring(def.District or ""), UDim2.new(0.62, 0, 0, 16), UDim2.fromOffset(10, 32), LAVENDER)
+		local status, statusColor
+		if home == def.Id then
+			status, statusColor = "🏠 HOME", PINK
+		elseif owned then
+			status, statusColor = "OWNED", MINT
+		else
+			status, statusColor = money(def.Price or 0), GOLD
+		end
+		label(r, status, UDim2.new(0.36, 0, 0, 22), UDim2.new(0.64, -10, 0, 8), statusColor, Enum.TextXAlignment.Right)
+		local rent = "Rent " .. money(def.Rent or 0) .. "/h"
+		local info, infoColor = rent, LAVENDER
+		if owned then
+			info = rent .. "  ·  waiting " .. money(player:GetAttribute("Rent_" .. def.Id) or 0) .. " (collect at the door)"
+			infoColor = MINT
+		else
+			local need = def.MinRank or 1
+			if need > 1 then
+				info = rent .. "  ·  rank " .. need .. (rank >= need and " ✓" or " needed")
+				infoColor = rank >= need and LAVENDER or ORANGE
+			end
+		end
+		local il = label(r, info, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52), infoColor)
+		il.TextTruncate = Enum.TextTruncate.AtEnd
+		local canSetHome = owned and home ~= def.Id
+		button(r, "SHOW ME", UDim2.new(canSetHome and 0.46 or 1, canSetHome and -12 or -20, 0, 32),
+			UDim2.new(0, 10, 1, -40), MINT, function()
+				if typeof(def.Pos) == "Vector3" then
+					GPSClient.SetTarget(tostring(def.Name), def.Pos)
+					PhoneUI.Close()
+				end
+			end).Name = "ShowMe"
+		if canSetHome then
+			button(r, "SET HOME", UDim2.new(0.46, -12, 0, 32), UDim2.new(0.54, 2, 1, -40), PINK, function()
+				Remotes.Event("RequestProperty"):FireServer("SetHome", def.Id)
+			end).Name = "SetHome"
+		end
+	end
+	local foot = label(s, "Buy it and collect rent in person, at the door.", UDim2.new(1, 0, 0, 18), nil,
+		Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
+	foot.LayoutOrder = 100
 end
 
 ------------------------------------------------------------------ settings
@@ -750,7 +931,7 @@ local function settingsPage()
 		Settings.Set("Performance", not perf)
 		show("Settings")
 	end).Name = "Toggle"
-	local keys = label(s, "Keys: P phone · E enter/use · F exit · Space drift · Shift nitro · H horn/siren · V radio · R flip",
+	local keys = label(s, "Keys: P phone (gamepad: D-pad down) · E enter/use · F exit · Space drift · Shift nitro · H horn/siren · V radio · R flip",
 		UDim2.new(1, 0, 0, 40), nil, Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
 	keys.TextWrapped = true
 	keys.LayoutOrder = 4
@@ -758,6 +939,8 @@ end
 
 local PAGES = {
 	Home = homePage,
+	Feed = feedPage,
+	Homes = homesPage,
 	Settings = settingsPage,
 	Crew = crewPage,
 	Goals = goalsPage,
@@ -922,21 +1105,23 @@ function PhoneUI.Init()
 		if processed then
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.P then
+		if input.KeyCode == Enum.KeyCode.P or input.KeyCode == Enum.KeyCode.DPadDown then
 			PhoneUI.Toggle()
 		end
 	end)
 	-- Keep open pages fresh when the server changes what we own or how our cars look.
 	local function maybeRefresh()
 		if phone.Visible and (current == "Garage" or current == "Custom" or current == "Dealer" or current == "Shop"
-			or current == "Goals" or current == "Crew" or current == "Jobs") then
+			or current == "Goals" or current == "Crew" or current == "Jobs" or current == "Homes") then
 			show(current)
 		end
 	end
 	player.AttributeChanged:Connect(function(name)
 		if name == "OwnedCars" or string.sub(name, 1, 7) == "Custom_" or string.sub(name, 1, 5) == "Pass_"
 			or string.sub(name, 1, 7) == "Unlock_" or name == "Challenges" or name == "CivXP" or name == "CopXP"
-			or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" then
+			or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" or name == "GusFound"
+			or name == "GusTotal" or name == "OwnedProps" or name == "HomeId" or string.sub(name, 1, 5) == "Rent_"
+			or name == "CivRank" then
 			maybeRefresh()
 		elseif name == "Cash" and phone.Visible then
 			refreshStatus()
@@ -947,6 +1132,58 @@ function PhoneUI.Init()
 			else
 				maybeRefresh()
 			end
+		end
+	end)
+	-- Property moments (PropertyService): a stamp for a new home and for rent collected at the door.
+	Remotes.OnClient("PropertyEvent", function(kind, info)
+		info = type(info) == "table" and info or {}
+		if kind == "Bought" then
+			HUDController.Stamp("NEW HOME!", tostring(info.Name or "Your place") .. (info.Home and " is your home now" or " is yours"),
+				ORANGE)
+		elseif kind == "Rent" and type(info.Amount) == "number" then
+			HUDController.Stamp("RENT COLLECTED", "+" .. money(info.Amount), MINT)
+		end
+	end)
+	-- Door prompts (Workspace.Properties, attributes PropId / PropAction): only the ones that apply
+	-- to this player. The server re-checks every action anyway.
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			pcall(function()
+				local folder = Workspace:FindFirstChild("Properties")
+				if not folder then
+					return
+				end
+				local mine = {}
+				for id in string.gmatch(player:GetAttribute("OwnedProps") or "", "[^,]+") do
+					mine[id] = true
+				end
+				local home = player:GetAttribute("HomeId")
+				local citizen = player:GetAttribute("Side") == "Civilian"
+				for _, pp in ipairs(folder:GetDescendants()) do
+					local id = pp:IsA("ProximityPrompt") and pp:GetAttribute("PropId")
+					if id then
+						local action = pp:GetAttribute("PropAction")
+						local on = true
+						if action == "Buy" then
+							on = citizen and not mine[id]
+						elseif action == "SetHome" then
+							on = mine[id] == true and home ~= id
+						elseif action == "Collect" then
+							on = mine[id] == true
+						end
+						if pp.Enabled ~= on then
+							pp.Enabled = on
+						end
+					end
+				end
+			end)
+		end
+	end)
+	-- New Coast Feed posts: refresh the FEED page, or the unread badge on the home screen.
+	FeedController.OnPost(function()
+		if phone.Visible and (current == "Feed" or current == "Home") then
+			show(current)
 		end
 	end)
 	Remotes.OnClient("GarageResult", function(result)

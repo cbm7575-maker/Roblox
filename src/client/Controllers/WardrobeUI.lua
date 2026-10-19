@@ -1,5 +1,6 @@
 -- WardrobeUI (ModuleScript, StarterPlayerScripts.Controllers.WardrobeUI)
--- Inside a hideout (player attribute InHideout, set by the server) a WARDROBE button appears.
+-- Inside a hideout (player attribute InHideout, set by the server) and on foot, a WARDROBE button
+-- appears (DisguiseService refuses seated players, so it hides while you're in a car).
 -- It opens a picker of hats and masks; choosing asks the server (RequestDisguise), which checks
 -- you're really in a hideout and handles the heat drop.
 
@@ -149,9 +150,11 @@ local function build()
 end
 
 local function refresh()
-	local inside = player:GetAttribute("InHideout") == true
-	openButton.Visible = inside
-	if not inside then
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	local seated = hum ~= nil and hum.SeatPart ~= nil
+	local usable = player:GetAttribute("InHideout") == true and not seated
+	openButton.Visible = usable
+	if not usable then
 		panel.Visible = false
 	end
 end
@@ -160,6 +163,18 @@ function WardrobeUI.Init()
 	build()
 	refresh()
 	player:GetAttributeChangedSignal("InHideout"):Connect(refresh)
+	-- Getting in or out of a car shows or hides it.
+	local function watch(character)
+		local hum = character:WaitForChild("Humanoid", 10)
+		if hum and hum:IsA("Humanoid") then
+			hum:GetPropertyChangedSignal("SeatPart"):Connect(refresh)
+		end
+		refresh()
+	end
+	player.CharacterAdded:Connect(watch)
+	if player.Character then
+		task.spawn(watch, player.Character)
+	end
 end
 
 return WardrobeUI

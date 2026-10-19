@@ -114,6 +114,13 @@ local function showJobMarker()
 	ring.Transparency, beam.Transparency = 0.55, 0.65
 end
 
+-- Checkpoints sit under the race timer; the drift score sits just above DriveUI's speed gauge and
+-- car-health bar (their top is at about 0.834 of the screen height minus 22 px), clear of the top bar.
+local function placeLabel(drift)
+	cpLabel.AnchorPoint = Vector2.new(0.5, drift and 1 or 0)
+	cpLabel.Position = drift and UDim2.new(0.5, 0, 0.83, -28) or UDim2.new(0.5, 0, 0.1, 56)
+end
+
 local function showCheckpoint()
 	if not current then
 		ring.Transparency, beam.Transparency = 1, 1
@@ -132,6 +139,7 @@ local function showCheckpoint()
 	local last = current.index == #race.Checkpoints
 	ring.Color = last and PINK or GOLD
 	beam.Color = ring.Color
+	placeLabel(false)
 	cpLabel.Visible = true
 	cpLabel.Text = last and "FINAL CHECKPOINT" or string.format("CHECKPOINT %d / %d", current.index, #race.Checkpoints)
 end
@@ -155,6 +163,9 @@ local function onRace(kind, d)
 	elseif kind == "Finished" then
 		local par = d.Time <= d.Par
 		local sub = fmt(d.Time) .. "  +" .. HUDController.Money(d.Reward) .. (d.NewBest and "  NEW BEST!" or ("  best " .. fmt(d.Best or d.Time)))
+		if d.Repeat then
+			sub ..= string.format("  (repeat: %d%%)", math.floor((Activities.RaceRepeatShare or 0.3) * 100 + 0.5))
+		end
 		endRace()
 		HUDController.Stamp(par and "FINISH! UNDER PAR" or "FINISH!", sub, GOLD)
 	elseif kind == "Cancelled" then
@@ -189,6 +200,7 @@ end
 local function refreshDrift()
 	local score = player:GetAttribute("DriftScore")
 	if score then
+		placeLabel(true)
 		cpLabel.Visible = true
 		cpLabel.TextColor3 = Color3.fromRGB(123, 47, 255)
 		cpLabel.Text = string.format("DRIFT %s  x%d", HUDController.Money(score):sub(2), player:GetAttribute("DriftCombo") or 1)
@@ -286,6 +298,7 @@ function ActivityClient.Init()
 	player:GetAttributeChangedSignal("DriftCombo"):Connect(refreshDrift)
 	Remotes.OnClient("DriftEvent", function(d)
 		local sub = HUDController.Money(d.Score):sub(2) .. " pts  +" .. HUDController.Money(d.Pay) .. (d.Best and "  NEW BEST!" or "")
+			.. (d.Reduced and "  (reduced pay today)" or "")
 		HUDController.Stamp(d.Reason == "crash" and "DRIFT (CRASHED)" or "DRIFT!", sub, Color3.fromRGB(123, 47, 255))
 	end)
 	RunService.RenderStepped:Connect(function()
