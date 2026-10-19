@@ -410,6 +410,11 @@ function HUDController.Stamp(title, sub, color, opts)
 	end)
 end
 
+-- Is a stamp on screen or queued? (DistrictClient waits for it before showing a district title.)
+function HUDController.IsStamping()
+	return stamping
+end
+
 showStamp = function(title, sub, color, big)
 	task.spawn(function()
 		require(script.Parent:WaitForChild("SoundClient")).Play("Stamp")

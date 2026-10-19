@@ -35,6 +35,7 @@ local ORDER = {
 	"MissionClient",
 	"ObjectiveClient",
 	"PedClient",
+	"DistrictClient",
 }
 
 for _, name in ipairs(ORDER) do

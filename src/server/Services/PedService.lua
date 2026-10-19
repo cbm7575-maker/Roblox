@@ -1,7 +1,8 @@
 -- PedService (ModuleScript, ServerScriptService.Services.PedService)
 -- Makes a handful of pedestrian looks at start-up (R15 rigs from HumanoidDescriptions: skin tones,
--- pastel "shirts" and "shorts" as body colours) into ReplicatedStorage.PedTemplates. Each client then
--- runs its own pedestrians from these (PedClient), so they cost the server nothing.
+-- pastel "shirts" and "shorts" as body colours, a spread of heights and builds) into
+-- ReplicatedStorage.PedTemplates. Each client then runs its own pedestrians from these (PedClient), so
+-- they cost the server nothing; EventService also borrows them for its performers, dancers and tourists.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,7 +23,7 @@ local SHORTS = {
 	Color3.fromRGB(120, 200, 230), Color3.fromRGB(200, 90, 160),
 }
 
-local TEMPLATES = 10
+local TEMPLATES = 14
 
 function PedService.Init()
 	local folder = ReplicatedStorage:FindFirstChild("PedTemplates") or Instance.new("Folder")
@@ -39,6 +40,13 @@ function PedService.Init()
 				desc.HeadColor, desc.LeftArmColor, desc.RightArmColor = skin, skin, skin
 				desc.TorsoColor = shirt
 				desc.LeftLegColor, desc.RightLegColor = shorts, shorts
+				-- Not everyone is the same size: a few teens, tall folks, broad folks.
+				desc.HeightScale = rng:NextNumber(0.88, 1.06)
+				desc.WidthScale = rng:NextNumber(0.85, 1.05)
+				desc.DepthScale = rng:NextNumber(0.9, 1)
+				desc.HeadScale = rng:NextNumber(0.95, 1.02)
+				desc.BodyTypeScale = rng:NextNumber(0, 0.3)
+				desc.ProportionScale = rng:NextNumber(0, 0.5)
 				return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
 			end)
 			if ok and model then

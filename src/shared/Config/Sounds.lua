@@ -65,4 +65,11 @@ Sounds.Radio = {
 	} },
 }
 
+-- Florida moments (EventService) play one of the radio tracks above at the scene: a looped 3D sound on
+-- the prop, made by SoundClient (Music volume). Same asset ids as the radio, nothing new.
+Sounds.EventMusic = {
+	Performer = 1837091161, -- "Be Steel My Beating Drum" (Gator Radio): steel drums for the street drummer
+	BeachParty = 9042511992, -- "Dance With You" (Palm 99): summer disco for the beach party
+}
+
 return Sounds

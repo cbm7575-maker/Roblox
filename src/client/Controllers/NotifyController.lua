@@ -81,6 +81,11 @@ NotifyController.Messages = {
 	PropNeedsRank_5 = "Reach citizen rank 5 to buy this place.",
 	PropNeedsRank_10 = "Reach citizen rank 10 to buy this place.",
 	PropHotNoBank = "Lose your heat before you stash cash at home.",
+	-- Florida moments (EventService)
+	PerformerTip = "Great show! The drummer flipped you a lucky coin. +$100",
+	PartyJoined = "You joined the beach party! +$150",
+	FlamingoCaught = "Gotcha! The flamingo is safe and sound. +$250",
+	TouristHelped = "You pointed the way. The tourist says thanks! +$200",
 	-- Police (HeatService, AIPoliceService)
 	RammedCop = "You rammed a police car! +1 star.",
 	EvadingArrest = "Evading arrest! +1 star.",

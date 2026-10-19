@@ -1,12 +1,16 @@
 -- SoundClient (ModuleScript, StarterPlayerScripts.Controllers.SoundClient)
 -- Everything you hear (IDs in Config.Sounds). All sounds are created locally on this device.
 --   SoundClient.Play(name, where)  one-shot: where = nil (flat), a Vector3 or a BasePart (3D)
---   * Engines: every driven car (players and AI) hums, pitch rising with speed.
+--   SoundClient.SetDistrict(key)    DistrictClient: which district you're in (ambience mix), nil = unknown
+--   * Engines: every driven car (players and AI) hums, pitch rising with speed; loops further away
+--     than they can be heard are stopped.
 --   * Sirens: AI patrols that are chasing someone, and player cop cars with the siren on (H).
 --   * Horn: civilians press H; everyone nearby hears it (car attribute HonkAt, VehicleService).
---   * Your car: tyre squeal when sliding, nitro whoosh, door thunk, splash when it sinks.
+--   * Your car: tyre squeal when sliding, nitro whoosh, door thunk, splash when it sinks (not boats).
 --   * Heist alarms ring at a site while its AlarmUntil time runs.
---   * Rain and thunder in storms; surf and gulls at the beach; a city hum downtown.
+--   * Rain and thunder in storms; surf and gulls at the beach; a city hum downtown (mixed per district).
+--   * Event music: any part in Workspace.Events with a MusicId attribute (an Id from Config.Sounds.Radio,
+--     set by EventService) plays that track locally as a 3D loop (Music volume).
 --   * Car radio: three stations (Config.Sounds.Radio) while you drive. V or the RADIO pill cycles
 --     Neon FM -> Palm 99 -> Gator Radio -> off.
 --   * Moments: cash, stamps, cuffs, taser zaps, race beeps, UI clicks.
@@ -139,6 +143,7 @@ local function updateCars()
 end
 
 local function carAudio()
+	local camPos = Workspace.CurrentCamera.CFrame.Position
 	for car, rec in pairs(tracked) do
 		local chassis = car.PrimaryPart
 		if not car.Parent or not chassis then
@@ -152,7 +157,9 @@ local function carAudio()
 		local speed = chassis.AssemblyLinearVelocity.Magnitude
 		local maxSpeed = car:GetAttribute("MaxSpeed") or 150
 		if rec.engine then
-			if driven then
+			-- Too far away to hear: don't keep the loop running.
+			local audible = (chassis.Position - camPos).Magnitude < rec.engine.RollOffMaxDistance
+			if driven and audible then
 				rec.engine.PlaybackSpeed = 0.75 + 0.85 * math.min(speed / maxSpeed, 1.2)
 				rec.engine.Volume = (effect("EngineLoop").Volume or 0.5) * (0.55 + 0.45 * math.min(speed / maxSpeed, 1))
 				if not rec.engine.IsPlaying then
@@ -164,6 +171,7 @@ local function carAudio()
 		end
 		if rec.siren then
 			local on = car:GetAttribute("Siren") == true or (car:GetAttribute("AIPolice") == true and car:GetAttribute("AITarget") ~= nil)
+			on = on and (chassis.Position - camPos).Magnitude < rec.siren.RollOffMaxDistance
 			if on and not rec.siren.IsPlaying then
 				rec.siren:Play()
 			elseif not on and rec.siren.IsPlaying then
@@ -212,8 +220,8 @@ local function ownCarAudio(dt)
 		SoundClient.Play("Door", (seat or lastSeat))
 	end
 	lastSeat = seat
-	-- Splash when your car hits the water.
-	if chassis and chassis.Position.Y < 0.5 then
+	-- Splash when your car hits the water (boats sit in it all the time).
+	if chassis and chassis.Position.Y < 0.5 and not car:GetAttribute("Boat") then
 		sankFor += dt
 		if sankFor > 0 and sankFor - dt <= 0 then
 			SoundClient.Play("Splash", chassis.Position)
@@ -257,6 +265,32 @@ end
 
 local rain, waves, city
 local nextGull = 0
+local district -- DistrictClient's key for where you are (nil until it knows)
+-- Per district: how much city hum and surf to mix in (on top of the beach-distance surf).
+local DISTRICT_MIX = {
+	SolanaHeights = { city = 1, surf = 0 },
+	PalmHills = { city = 0.55, surf = 0 },
+	RustwaterDocks = { city = 0.7, surf = 0.15 },
+	MarinaRow = { city = 0.45, surf = 0.35 },
+	FlamingoBeach = { city = 0.2, surf = 0 },
+	GatorGlades = { city = 0, surf = 0 },
+	SaltmarshIsland = { city = 0.05, surf = 0.2 },
+	LighthouseKey = { city = 0, surf = 0.6 },
+}
+local mix = { city = 0, surf = 0 }
+
+function SoundClient.SetDistrict(key)
+	district = key
+end
+
+local function setLoop(sound, volume)
+	sound.Volume = volume
+	if volume > 0.01 and not sound.IsPlaying then
+		sound:Play()
+	elseif volume <= 0.01 and sound.IsPlaying then
+		sound:Stop()
+	end
+end
 
 local function ambience()
 	local cam = Workspace.CurrentCamera.CFrame.Position
@@ -272,24 +306,56 @@ local function ambience()
 	if cam.Z > 800 or cam.Z < -2000 then
 		beach *= 0.3
 	end
-	waves.Volume = (effect("Waves").Volume or 0.4) * beach
-	if beach > 0.05 and not waves.IsPlaying then
-		waves:Play()
-	elseif beach <= 0.05 and waves.IsPlaying then
-		waves:Stop()
+	-- City hum within ~700 studs of downtown, or by district once DistrictClient knows where you are.
+	local d = (Vector3.new(cam.X, 0, cam.Z) - Vector3.new(0, 0, -250)).Magnitude
+	local c = math.clamp(1 - (d - 300) / 400, 0, 1)
+	local m = district and DISTRICT_MIX[district]
+	if m then
+		c = math.max(m.city, c * 0.5)
+		beach = math.max(beach, m.surf)
 	end
-	if beach > 0.5 and os.clock() > nextGull then
+	-- Ease between mixes so district borders don't jump.
+	mix.city += (c - mix.city) * 0.35
+	mix.surf += (beach - mix.surf) * 0.35
+	setLoop(waves, (effect("Waves").Volume or 0.4) * mix.surf)
+	if mix.surf > 0.5 and os.clock() > nextGull then
 		nextGull = os.clock() + math.random(14, 30)
 		SoundClient.Play("Seagulls", nil, 0.7)
 	end
-	-- City hum within ~700 studs of downtown.
-	local d = (Vector3.new(cam.X, 0, cam.Z) - Vector3.new(0, 0, -250)).Magnitude
-	local c = math.clamp(1 - (d - 300) / 400, 0, 1)
-	city.Volume = (effect("CityAmbience").Volume or 0.25) * c
-	if c > 0.05 and not city.IsPlaying then
-		city:Play()
-	elseif c <= 0.05 and city.IsPlaying then
-		city:Stop()
+	setLoop(city, (effect("CityAmbience").Volume or 0.25) * mix.city)
+end
+
+------------------------------------------------------------------ event music (EventService)
+
+local music = {} -- [part] = sound
+
+local function updateMusic()
+	for part, sound in pairs(music) do
+		if not part.Parent or not sound.Parent or part:GetAttribute("MusicId") == nil then
+			sound:Destroy()
+			music[part] = nil
+		end
+	end
+	local events = Workspace:FindFirstChild("Events")
+	if not events then
+		return
+	end
+	for _, d in ipairs(events:GetDescendants()) do
+		local id = d:IsA("BasePart") and d:GetAttribute("MusicId")
+		if type(id) == "number" and not music[d] then
+			local s = Instance.new("Sound")
+			s.Name = "EventMusic"
+			s.SoundId = "rbxassetid://" .. id
+			s.Looped = true
+			s.Volume = 0.5
+			s.RollOffMode = Enum.RollOffMode.InverseTapered
+			s.RollOffMinDistance = 30
+			s.RollOffMaxDistance = 220
+			s.SoundGroup = require(script.Parent:WaitForChild("SettingsClient")).Group("Music")
+			s.Parent = d
+			s:Play()
+			music[d] = s
+		end
 	end
 end
 
@@ -460,6 +526,7 @@ function SoundClient.Init()
 			updateCars()
 			updateAlarms()
 			ambience()
+			updateMusic()
 		end
 		carAudio()
 		ownCarAudio(dt)
