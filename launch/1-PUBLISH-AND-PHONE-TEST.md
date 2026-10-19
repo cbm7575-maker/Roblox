@@ -8,9 +8,11 @@ phone test needs one too. New experiences start private, so nobody else can join
 1. Open `NeonCoast.rbxl`, sync the latest scripts (see the main README: `python tools/manifest.py`,
    `python -m http.server 34999 --bind 127.0.0.1`, then `require(game.ServerStorage.Tools.DevSync).Run()`
    in the command bar), and save (Ctrl+S).
-2. **Pick the owner account.** Whoever publishes owns the game, its passes and its Robux. Your PRD
-   names **NightShift_Dev** as the account to verify, but the place file's lock shows Studio signed in
-   as **TCTRADES_CHRIS**. Sign into the one that should own Neon Coast before publishing.
+2. **Publish under NightShift Dev.** The owner gets the game, its passes and its Robux.
+   - If NightShift Dev is a **group**: stay signed in as TCTRADES_CHRIS and, in the Publish to Roblox
+     window, choose **NightShift Dev** as the creator/owner instead of your own account. In the
+     Creator Hub, switch Creations to the group to find the game.
+   - If NightShift Dev is a **separate account**: sign Studio into that account before publishing.
 3. The settings scripts can't change (from the design doc's "UserOnly" list):
 
 | Where | Setting |

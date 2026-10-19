@@ -28,5 +28,6 @@ matches tasers and arrests being part of every chase. This is your PRD's target 
 reaches the 9-15 accounts. If any answer would push it to Moderate, check it against the evidence
 above first.
 
-**Also from the PRD (account to-do):** turn on ID verification and 2-step verification on the
-owner account. Both are needed before a game can reach players under 16.
+**Also from the PRD (account to-do):** turn on ID verification and 2-step verification. Both are
+needed before a game can reach players under 16. Do it on TCTRADES_CHRIS; if NightShift Dev is a
+group, Roblox may check the group owner's account, so if that's a different account, do it there too.

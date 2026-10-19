@@ -4,7 +4,7 @@ Create these after the private publish (step 1). Prices are the starting prices 
 game reads live prices from Roblox, so you can change them later without touching code. Icons are
 in `launch/icons/` (512 x 512 PNG).
 
-**Where:** Creator Hub > Creations > Neon Coast > Monetization. Passes: *Passes > Create a Pass*
+**Where:** Creator Hub > Creations (switch to NightShift Dev if it's a group) > Neon Coast > Monetization. Passes: *Passes > Create a Pass*
 (upload the icon, name, description), then open the pass and turn on *Item for Sale* with the price.
 Cash packs: *Developer Products > Create*. Menu names may have moved slightly; the fields are the same.
 
