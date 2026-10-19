@@ -32,6 +32,7 @@ local Telemetry = require(ServerScriptService.Services.Telemetry)
 local MissionService = {}
 
 local TICK = 0.1 -- Fragile steps compare speeds a tenth of a second apart (hard braking stays legal)
+local START_GAP = 200 -- studs: a mission can't start this close to its first Goto/Hold stop
 
 local active = {} -- [player] = { m, step, deadline, got = {}, holdSince, caught, fragileCar, lastSpeed, startHealth }
 local lastEnd = {} -- [player] = os.clock()
@@ -298,6 +299,15 @@ local function onRequest(player, action, id)
 	end
 	if lastEnd[player] and os.clock() - lastEnd[player] < Missions.Cooldown then
 		notify:FireClient(player, "MissionCooldown")
+		return
+	end
+	-- Starting right at the first stop would finish it on the spot (a mission that ends where it
+	-- starts could be repeated without moving): you have to travel to it.
+	local first = m.Steps[1]
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if first and (first.Kind == "Goto" or first.Kind == "Hold") and typeof(first.Pos) == "Vector3" and root
+		and (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(first.Pos.X, 0, first.Pos.Z)).Magnitude < START_GAP then
+		notify:FireClient(player, "MissionTooClose")
 		return
 	end
 	local s = { m = m, step = 1, deadline = now() + m.TimeLimit, got = {} }

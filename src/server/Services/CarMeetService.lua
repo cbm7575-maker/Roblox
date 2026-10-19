@@ -34,6 +34,7 @@ local FAVOURITE_BONUS = CFG.FavouriteBonus
 
 local lot, spots = nil, {}
 local shown = {} -- [car] = { owner, likes, npc, likedBy = {}, gui, prompt }
+local tally = setmetatable({}, { __mode = "k" }) -- [car] = { likes, npc, likedBy } kept for this meet
 local feed
 
 local function now()
@@ -142,7 +143,9 @@ end
 
 local function show(car, owner)
 	local chassis = car.PrimaryPart
-	local rec = { owner = owner, likes = 0, npc = 0, likedBy = {} }
+	-- Likes count for the whole meet: driving off the spot and back doesn't reset the caps.
+	local kept = tally[car]
+	local rec = { owner = owner, likes = kept and kept.likes or 0, npc = kept and kept.npc or 0, likedBy = kept and kept.likedBy or {} }
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "MeetTag"
 	gui.Size = UDim2.fromOffset(180, 34)
@@ -191,6 +194,7 @@ local function unshow(car)
 	local rec = shown[car]
 	shown[car] = nil
 	if rec then
+		tally[car] = { likes = rec.likes, npc = rec.npc, likedBy = rec.likedBy }
 		if rec.gui then
 			rec.gui:Destroy()
 		end
@@ -220,6 +224,7 @@ local function finish()
 		end
 		unshow(car)
 	end
+	table.clear(tally) -- the next meet starts from zero
 end
 
 local function runMeet()

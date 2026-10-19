@@ -279,11 +279,16 @@ local function canSee(fromPos, target)
 end
 
 local function escaped(player, heat)
+	-- Heat from a phone mission's "lose the cops" step: no stat or server-wide post (ProgressService
+	-- already gives it no XP), so missions can't be farmed for escapes.
+	local missionHeat = player:GetAttribute("MissionHeat") == true
 	progress().Event(player, "Escape", heat)
 	HeatService.Clear(player, "escaped")
 	notify:FireClient(player, "LostTheCops")
-	player:SetAttribute("Evasions", (player:GetAttribute("Evasions") or 0) + 1)
-	feed:FireAllClients("Escaped", { Name = player.DisplayName })
+	if not missionHeat then
+		player:SetAttribute("Evasions", (player:GetAttribute("Evasions") or 0) + 1)
+		feed:FireAllClients("Escaped", { Name = player.DisplayName })
+	end
 end
 
 local function tick(dt)

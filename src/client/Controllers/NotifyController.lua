@@ -70,6 +70,7 @@ NotifyController.Messages = {
 	RaceCooldown = "Catch your breath: this race reopens in a few seconds.",
 	NoGlowOnBoats = "Boats can't take underglow (the hull hides it).",
 	MissionWrongSide = "That mission is for the other side. Switch roles in JOBS.",
+	MissionTooClose = "You're already at the first stop. Head somewhere else and start it from there.",
 	-- Safehouses (PropertyService)
 	PropBought = "Welcome home! You'll respawn here, and you can stash your bag on the pad.",
 	PropHomeSet = "Home set! You'll respawn here.",
