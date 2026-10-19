@@ -35,6 +35,7 @@ local ORDER = {
 	"JobService",
 	"CarMeetService", -- before MapService: it builds the lot MapService lists
 	"MapService",
+	"CollectibleService", -- after every service that builds props, so placement sees them
 	"DebugService", -- Studio only
 }
 

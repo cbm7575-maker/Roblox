@@ -25,6 +25,7 @@ NotifyController.Messages = {
 	ShakeCopsFirst = "The cops can see you! Lose them before you bank.",
 	LostTheCops = "You lost the cops! Heat cleared.",
 	TiresPopped = "Tires popped! You're slow for a few seconds.",
+	NeedsUnlock_GusHunter = "Find all 40 Gus figurines to unlock Gator Green paint!",
 	NoSpikes = "No spike strips left. They recharge every 30 seconds.",
 	Released = "You served your time. Welcome back to Port Solana.",
 	VentJammed = "The vent is jammed. Try again in a few seconds.",

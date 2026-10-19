@@ -30,6 +30,7 @@ local ORDER = {
 	"ShopClient",
 	"MinimapClient",
 	"ProgressClient",
+	"CollectibleClient",
 	"CrewClient",
 	"MissionClient",
 	"PedClient",
