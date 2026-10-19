@@ -1,13 +1,16 @@
 -- Heists (ModuleScript, ReplicatedStorage.Shared.Config.Heists)
 -- Every heist type, from the Game Design Spec. Payouts are in in-game dollars.
 -- Hold = seconds the Rob button must be held (quick heists); multi-step heists add their steps in 2.3.
+-- Economy: crime must pay at least twice the best risk-free activity (about $500/min, see
+-- Config.Activities). A run of 2-3 quick heists then a getaway pays about $1,200/min, tier 2 about
+-- $2,000/min, tier 3 more, before the night (+25%), crew (+20%) and VIP bonuses.
 
 local Heists = {}
 
 Heists.Types = {
-	GlowMart = { Display = "Glow Mart", Tier = 1, CrewMin = 1, Hold = 8, Payout = { 1200, 1200 }, Heat = 1, Cooldown = 150 },
-	FuelStop = { Display = "Fuel Stop", Tier = 1, CrewMin = 1, Hold = 10, Payout = { 1500, 1500 }, Heat = 1, Cooldown = 150 },
-	ATM = { Display = "ATM", Tier = 1, CrewMin = 1, Hold = 12, Payout = { 900, 900 }, Heat = 1, Cooldown = 120 },
+	GlowMart = { Display = "Glow Mart", Tier = 1, CrewMin = 1, Hold = 8, Payout = { 1800, 1800 }, Heat = 1, Cooldown = 150 },
+	FuelStop = { Display = "Fuel Stop", Tier = 1, CrewMin = 1, Hold = 10, Payout = { 2200, 2200 }, Heat = 1, Cooldown = 150 },
+	ATM = { Display = "ATM", Tier = 1, CrewMin = 1, Hold = 12, Payout = { 1300, 1300 }, Heat = 1, Cooldown = 120 },
 	SparkleCo = { Display = "Sparkle & Co.", Tier = 2, CrewMin = 1, Hold = 14, Payout = { 4000, 6000 }, Heat = 2, Cooldown = 240 },
 	ClubNova = { Display = "Club Nova", Tier = 2, CrewMin = 1, Hold = 14, Payout = { 5000, 5000 }, Heat = 2, Cooldown = 240 },
 	CoastalBank = { Display = "Coastal Bank", Tier = 3, CrewMin = 2, Hold = 20, Payout = { 16000, 16000 }, Heat = 3, Cooldown = 900, Event = true, MinRank = 3 },

@@ -23,6 +23,7 @@ local ORDER = {
 	"HeatService",
 	"HeistService",
 	"HideoutService",
+	"PropertyService", -- safehouses: after the hideout (shares its banking flow)
 	"ArrestService",
 	"PrisonService",
 	"RobberToolsService",

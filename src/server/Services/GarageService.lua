@@ -4,9 +4,11 @@
 --   data.custom[carId] = { paint = Garage.Paints index, glow = Garage.Glows index, rim = Garage.Rims index }
 -- Remotes (all validated here):
 --   RequestBuyCar(id)                   -> costs Config.Vehicles price; pass cars need their game pass
---   RequestPaint(id, paintIndex)        -> $500
---   RequestUnderglow(id, glowIndex)     -> $3,000 the first time on a car, then colour changes are free
---   RequestRims(id, rimIndex)           -> $800
+--   RequestPaint(id, paintIndex)        -> Garage.PaintPrice ($500)
+--   RequestUnderglow(id, glowIndex)     -> Garage.UnderglowPrice ($3,000) the first time on a car, then
+--                                          colour changes are free; never on boats (it can't show)
+--   RequestRims(id, rimIndex)           -> Garage.RimPrice ($1,500)
+-- Picking the paint, rims or glow a car already has does nothing (and costs nothing).
 -- Pass cars count as owned while the player has attribute "Pass_<PassName>" (set by the shop, step 4.5);
 -- cop-rank cars while "CopRank" >= UnlockCopRank.
 -- The owned list is mirrored to the player attribute "OwnedCars" (comma list) for the phone UI, and
@@ -130,6 +132,9 @@ local function onRims(player, id, index)
 		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
 		return
 	end
+	if data.custom[id] and data.custom[id].rim == index then
+		return -- already on the car: no charge
+	end
 	if not EconomyService.Spend(player, Garage.RimPrice, "rims:" .. id) then
 		notify:FireClient(player, "NotEnoughCash")
 		return
@@ -184,6 +189,9 @@ local function onPaint(player, id, index)
 		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
 		return
 	end
+	if data.custom[id] and data.custom[id].paint == index then
+		return -- already this colour: no charge
+	end
 	if not EconomyService.Spend(player, Garage.PaintPrice, "paint:" .. id) then
 		notify:FireClient(player, "NotEnoughCash")
 		return
@@ -207,6 +215,10 @@ local function onGlow(player, id, index)
 	if not data or not GarageService.Owns(player, id) or not Garage.Glows[index] then
 		return
 	end
+	if Vehicles.ById[id].Boat then
+		notify:FireClient(player, "NoGlowOnBoats") -- the hull hides it (ApplyCustom skips boats)
+		return
+	end
 	local entry = Garage.Glows[index]
 	if not Garage.Allowed(player, entry) then
 		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
@@ -214,6 +226,9 @@ local function onGlow(player, id, index)
 	end
 	data.custom[id] = data.custom[id] or {}
 	local c = data.custom[id]
+	if c.glowUnlocked and c.glow == index then
+		return -- already this colour
+	end
 	if not c.glowUnlocked then
 		if not EconomyService.Spend(player, Garage.UnderglowPrice, "underglow:" .. id) then
 			notify:FireClient(player, "NotEnoughCash")

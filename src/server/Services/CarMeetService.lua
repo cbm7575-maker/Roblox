@@ -1,9 +1,11 @@
 -- CarMeetService (ModuleScript, ServerScriptService.Services.CarMeetService)
 -- Neon Nights Car Meet (PRD Phase 6): a show lot at Marina Row. Every few minutes a meet runs:
 --   * Park your own car on one of the 6 glowing show spots and step out: it's on show.
---   * Other players press "Like" on shown cars (once per car per meet): $150 to the owner each.
---   * NPC fans drop a few likes too, so it pays even in a quiet server.
---   * When the meet ends, the car with the most likes is the Crowd Favourite: +$1,000.
+--   * Other players press "Like" on shown cars (once per car per meet): LikePay to the owner each.
+--   * NPC fans drop a few likes too (up to NpcCap), so it pays a little even in a quiet server.
+--   * When the meet ends, the car with the most likes is the Crowd Favourite (+FavouriteBonus), but only
+--     a car at least one real player liked can win, and only those cars earn the show XP: parking
+--     alone and going AFK no longer pays the bonus. Numbers: Config.Activities.CarMeet.
 -- The lot is built at start-up if the place doesn't have it (Workspace.Activities.CarMeet).
 -- Workspace attributes: CarMeetState ("Idle" | "Soon" | "Live"), CarMeetEndsAt (server time).
 
@@ -13,6 +15,7 @@ local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
+local Activities = require(ReplicatedStorage.Shared.Config.Activities)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local Telemetry = require(ServerScriptService.Services.Telemetry)
@@ -23,10 +26,11 @@ CarMeetService.Center = Vector3.new(620, 0, 780)
 local EVERY = RunService:IsStudio() and 150 or 480 -- seconds between meets
 local WARNING = 60
 local LENGTH = 180
-local LIKE_PAY = 150
-local LIKE_CAP = 10 -- paid likes per car per meet
-local NPC_CAP = 5
-local FAVOURITE_BONUS = 1000
+local CFG = Activities.CarMeet
+local LIKE_PAY = CFG.LikePay
+local LIKE_CAP = CFG.LikeCap -- paid likes per car per meet
+local NPC_CAP = CFG.NpcCap
+local FAVOURITE_BONUS = CFG.FavouriteBonus
 
 local lot, spots = nil, {}
 local shown = {} -- [car] = { owner, likes, npc, likedBy = {}, gui, prompt }
@@ -198,21 +202,21 @@ end
 
 local function finish()
 	local best, bestLikes
-	for car, rec in pairs(shown) do
+	for _, rec in pairs(shown) do
 		local total = rec.likes + rec.npc
-		if not bestLikes or total > bestLikes then
+		if rec.likes > 0 and rec.owner.Parent and (not bestLikes or total > bestLikes) then
 			best, bestLikes = rec, total
 		end
 	end
-	if best and best.owner.Parent and bestLikes > 0 then
+	if best and bestLikes then
 		EconomyService.AddCash(best.owner, FAVOURITE_BONUS, "carmeet:favourite")
 		Remotes.Event("CarMeetResult"):FireClient(best.owner, { Favourite = true, Bonus = FAVOURITE_BONUS })
 		feed:FireAllClients("Event", { Text = best.owner.DisplayName .. "'s ride was Crowd Favourite at the car meet!" })
 		Telemetry.Custom(best.owner, "CarMeetFavourite", bestLikes)
 	end
 	for car, rec in pairs(shown) do
-		if rec.owner.Parent then
-			require(ServerScriptService.Services.ProgressService).Event(rec.owner, "Mission", 40)
+		if rec.owner.Parent and rec.likes > 0 then
+			require(ServerScriptService.Services.ProgressService).Event(rec.owner, "Mission", CFG.ShowXP)
 		end
 		unshow(car)
 	end

@@ -3,17 +3,20 @@
 --   * Drive your own car onto the Taxi Stand (Workspace.Activities.TaxiStand) and press E.
 --   * A passenger waits beside a road 250-800 studs away. Stop next to them (within 18 studs, under
 --     6 studs/s) and they hop in.
---   * Drive them to their stop (500-1400 studs away) and stop there: paid $150 + 35 cents a stud, and a
---     $100 tip if you beat the estimate. The next fare comes automatically.
---   * The shift ends if you leave your car for 10 s, become wanted, or press END SHIFT.
+--   * Drive them to their stop (500-1400 studs away) and stop there: paid Base + PerStud x route length,
+--     plus a Tip if you beat the estimate (Config.Activities.Jobs; about $500 a minute). The next fare
+--     comes automatically.
+--   * The shift ends if you leave your car for 10 s, become wanted, stop being a civilian (switch to
+--     cop, get arrested), or press END SHIFT.
 -- Courier shifts (Courier Depot at Marina Row, built here if missing) use the same flow with packages:
--- pick one up from a shop, deliver it: $120 + 40 cents a stud, +$120 for a fast delivery.
+-- pick one up from a shop, deliver it (Activities.Jobs.Courier rates).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
+local Activities = require(ReplicatedStorage.Shared.Config.Activities)
 local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
@@ -156,6 +159,8 @@ local function tick()
 			if s.passenger then
 				s.passenger:Destroy()
 			end
+		elseif player:GetAttribute("Side") ~= "Civilian" then
+			endShift(player, "Side") -- switched to cop (the 10 s out-of-car grace must not carry a shift over)
 		elseif (player:GetAttribute("Heat") or 0) > 0 then
 			endShift(player, "Wanted")
 		else
@@ -199,8 +204,9 @@ local function tick()
 					if (flat(chassis.Position) - flat(s.drop)).Magnitude < DROP_RADIUS and speed < STOP_SPEED then
 						local took = t - s.pickedAt
 						local courier = s.kind == "Courier"
-						local tip = took <= s.est and (courier and 120 or 100) or 0
-						local pay = math.floor((courier and 120 or 150) + s.length * (courier and 0.4 or 0.35)) + tip
+						local rates = Activities.Jobs[courier and "Courier" or "Taxi"]
+						local tip = took <= s.est and rates.Tip or 0
+						local pay = math.floor(rates.Base + s.length * rates.PerStud) + tip
 						EconomyService.AddCash(player, pay, courier and "courier" or "taxi")
 						require(game:GetService("ServerScriptService").Services.ProgressService).Event(player, "TaxiFare")
 						s.fares += 1

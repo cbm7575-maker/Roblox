@@ -5,6 +5,9 @@
 --   * Checkpoints must be passed in order (within 32 studs); the server tracks them 10 times a second.
 --   * Finish: reward + a bonus for beating par; personal bests are saved; the server leaderboard
 --     (top 5 per race) lives in ReplicatedStorage attributes "RaceBoard_<Id>".
+--   * Only the first finish of each race per UTC day pays in full (saved in data.flags.raceDay); later
+--     finishes pay Activities.RaceRepeatShare (cash and XP), and the same race can't be restarted for
+--     Activities.RaceCooldown seconds after a finish (toast "RaceCooldown").
 --   * Cancelled if you get out, become wanted, lose the car, or take longer than 2.5 x par.
 --   * A finish faster than the route could be driven at 1.3 x the car's top speed is rejected.
 
@@ -19,6 +22,7 @@ local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local DataService = require(ServerScriptService.Services.DataService)
+local DailyService = require(ServerScriptService.Services.DailyService)
 local VehicleGuard = require(ServerScriptService.Services.VehicleGuard)
 
 local RaceService = {}
@@ -29,6 +33,7 @@ local COUNTDOWN = 3
 local racesById = {}
 local active = {} -- [player] = { race, car, index, startAt, lengthStuds }
 local boards = {} -- [raceId] = { {name, time} }
+local lastFinish = {} -- [player] = { [raceId] = os.clock() of the last finish }
 local raceEvent
 
 local function now()
@@ -85,10 +90,13 @@ local function finish(player, r)
 		raceEvent:FireClient(player, "Cancelled", { Reason = "Invalid" })
 		return
 	end
+	lastFinish[player] = lastFinish[player] or {}
+	lastFinish[player][race.Id] = os.clock()
 	local reward = race.Reward + (time <= race.Par and race.ParBonus or 0)
 	local data = DataService.Get(player)
 	local best
 	local newBest = false
+	local first = false -- no save loaded: repeat pay
 	if data then
 		data.races = data.races or {}
 		best = data.races[race.Id]
@@ -96,9 +104,16 @@ local function finish(player, r)
 			data.races[race.Id] = time
 			newBest = true
 		end
+		-- Full pay once per race per UTC day.
+		local day = DailyService.DayRecord(data, "raceDay")
+		day.done = type(day.done) == "table" and day.done or {}
+		first = not day.done[race.Id]
+		day.done[race.Id] = true
 	end
+	local share = first and 1 or Activities.RaceRepeatShare
+	reward = math.floor(reward * share)
 	EconomyService.AddCash(player, reward, "race:" .. race.Id)
-	require(game:GetService("ServerScriptService").Services.ProgressService).Event(player, "RaceFinish", time <= race.Par and 1 or 0)
+	require(game:GetService("ServerScriptService").Services.ProgressService).Event(player, "RaceFinish", time <= race.Par and 1 or 0, share)
 	player:SetAttribute("RacesWon", (player:GetAttribute("RacesWon") or 0) + 1)
 	-- Server leaderboard (top 5, one entry per player).
 	local board = boards[race.Id] or {}
@@ -122,6 +137,7 @@ local function finish(player, r)
 	publishBoard(race.Id)
 	raceEvent:FireClient(player, "Finished", {
 		Id = race.Id, Time = time, Par = race.Par, Reward = reward, NewBest = newBest, Best = newBest and time or best,
+		Repeat = not first,
 	})
 end
 
@@ -130,6 +146,11 @@ local function start(player, race)
 		return
 	end
 	if active[player] or player:GetAttribute("Side") ~= "Civilian" or (player:GetAttribute("Heat") or 0) > 0 then
+		return
+	end
+	local last = lastFinish[player] and lastFinish[player][race.Id]
+	if last and os.clock() - last < Activities.RaceCooldown then
+		Remotes.Event("Notify"):FireClient(player, "RaceCooldown")
 		return
 	end
 	local car = ownCar(player)
@@ -222,6 +243,7 @@ function RaceService.Init()
 	end)
 	Players.PlayerRemoving:Connect(function(p)
 		active[p] = nil
+		lastFinish[p] = nil
 	end)
 end
 

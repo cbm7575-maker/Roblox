@@ -4,6 +4,10 @@
 -- day resets to day 1. Reaching day 7 unlocks the streak-only paint (player attribute
 -- "Unlock_Streak7", saved in data.flags.streak7).
 -- Saved in data.daily = { last = day number, streak = n }.
+-- Shared day helpers for other services (all clock-skew safe: a record only rolls over when the day
+-- number is GREATER than the saved one, so a server clock a little behind never pays a day twice):
+--   DailyService.Today()               UTC day number
+--   DailyService.DayRecord(data, key)  data.flags[key] = { day = today, ... }, a fresh table each new day
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,6 +24,19 @@ local MAX_DAY = 7
 
 local function today()
 	return math.floor(os.time() / 86400)
+end
+
+DailyService.Today = today
+
+function DailyService.DayRecord(data, key)
+	data.flags = data.flags or {}
+	local rec = data.flags[key]
+	local day = today()
+	if type(rec) ~= "table" or type(rec.day) ~= "number" or rec.day < day then
+		rec = { day = day }
+		data.flags[key] = rec
+	end
+	return rec
 end
 
 local function onLoaded(player, data)

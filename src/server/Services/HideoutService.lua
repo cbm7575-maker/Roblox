@@ -1,7 +1,11 @@
 -- HideoutService (ModuleScript, ServerScriptService.Services.HideoutService)
 -- Hideouts (models named "Hideout" in Workspace.Spawns, with a Pad): where Wanted players bank loot.
--- A robber inside a hideout with cash in the bag banks it, as long as no cop can see them right now
--- (HeatSpotted). Banking also clears their heat: they laid low. On foot or in a car both count.
+-- A civilian inside a hideout, unseen by any cop right now (HeatSpotted false), lays low:
+--   * cash in the bag is banked (the "Banked" event), and
+--   * any heat is cleared. That counts as an escape (ProgressService "Escape" XP and the "lose the
+--     cops" challenge, the Escapes stat), with or without loot; heat from a phone mission's
+--     "lose the cops" step (attribute MissionHeat) clears too but earns no escape credit.
+-- While a cop can see them they get the "ShakeCopsFirst" toast instead. On foot or in a car both count.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -47,35 +51,66 @@ local function clearHeat(player)
 	end
 end
 
+-- Laying low with heat > 0 is an escape: read the stars BEFORE clearing them.
+local function escape(player)
+	local heat = player:GetAttribute("Heat") or 0
+	if heat <= 0 then
+		return
+	end
+	if not player:GetAttribute("MissionHeat") then
+		player:SetAttribute("Escapes", (player:GetAttribute("Escapes") or 0) + 1)
+	end
+	-- ProgressService itself skips mission heat (no XP, no challenge).
+	local ok, err = pcall(function()
+		require(ServerScriptService.Services.ProgressService).Event(player, "Escape", heat)
+	end)
+	if not ok then
+		warn("[HideoutService] " .. tostring(err))
+	end
+	clearHeat(player)
+end
+
+local notify, banked
+
+local function check(player)
+	-- InHideout drives the client's WARDROBE button.
+	local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local inside = r ~= nil and player:GetAttribute("Side") == "Civilian" and HideoutService.IsInside(r.Position)
+	if player:GetAttribute("InHideout") ~= inside then
+		player:SetAttribute("InHideout", inside)
+	end
+	local carried = EconomyService.GetCarried(player)
+	local heat = player:GetAttribute("Heat") or 0
+	if not inside or (carried <= 0 and heat <= 0) then
+		return
+	end
+	if player:GetAttribute("HeatSpotted") then
+		local t = os.clock()
+		if not lastWarn[player] or t - lastWarn[player] > 6 then
+			lastWarn[player] = t
+			notify:FireClient(player, "ShakeCopsFirst")
+		end
+		return
+	end
+	local amount = carried > 0 and EconomyService.BankCarried(player, "hideout") or 0
+	escape(player)
+	if amount > 0 then
+		banked:FireClient(player, amount)
+	elseif heat > 0 then
+		notify:FireClient(player, "LostTheCops")
+	end
+end
+
 function HideoutService.Init()
-	local notify = Remotes.Event("Notify")
-	local banked = Remotes.Event("Banked")
+	notify = Remotes.Event("Notify")
+	banked = Remotes.Event("Banked")
 	task.spawn(function()
 		while true do
 			task.wait(CHECK_EVERY)
 			for _, player in ipairs(Players:GetPlayers()) do
-				-- InHideout drives the client's WARDROBE button.
-				local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-				local inside = r ~= nil and player:GetAttribute("Side") == "Civilian" and HideoutService.IsInside(r.Position)
-				if player:GetAttribute("InHideout") ~= inside then
-					player:SetAttribute("InHideout", inside)
-				end
-				if player:GetAttribute("Side") == "Civilian" and EconomyService.GetCarried(player) > 0 then
-					local root = r
-					if root and inside then
-						if player:GetAttribute("HeatSpotted") then
-							local t = os.clock()
-							if not lastWarn[player] or t - lastWarn[player] > 6 then
-								lastWarn[player] = t
-								notify:FireClient(player, "ShakeCopsFirst")
-							end
-						else
-							local amount = EconomyService.BankCarried(player, "hideout")
-							clearHeat(player)
-							player:SetAttribute("Escapes", (player:GetAttribute("Escapes") or 0) + 1)
-							banked:FireClient(player, amount)
-						end
-					end
+				local ok, err = pcall(check, player)
+				if not ok then
+					warn("[HideoutService] " .. tostring(err))
 				end
 			end
 		end

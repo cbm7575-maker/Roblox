@@ -1,8 +1,12 @@
 -- ProgressService (ModuleScript, ServerScriptService.Services.ProgressService)
 -- XP, ranks and daily challenges (Config.Progression).
---   ProgressService.Event(player, kind, amount)   called by the gameplay services:
+--   ProgressService.Event(player, kind, amount, scale)   called by the gameplay services:
 --     Heist (tier), Bank (dollars), Escape (stars), RaceFinish (1 = under par), Stunt, Drift (points),
---     TaxiFare, CarBoost, Arrest (stars), SpikeHit, TaserHit, PatrolMinute
+--     TaxiFare, CarBoost, Arrest (stars), SpikeHit, TaserHit, PatrolMinute, PropertyBought,
+--     Mission (XP; goes to the side the player is on), FloridaMoment and Collectible (either side).
+--     scale (optional, default 1) multiplies the XP: reduced repeat pay (races, drift) passes e.g. 0.3.
+--   Escapes from heat a phone mission gave you (player attribute MissionHeat, MissionService) earn no
+--   Escape XP or challenge credit, so missions can't be farmed for escapes.
 --   Saved: data.xp = { civilian, cop }, data.daily.ch = { day, list = { { id, p, done } } }.
 --   Player attributes (for the HUD and perks): CivXP, CivRank, CopXP, CopRank, Title,
 --     Unlock_CivRank10, Unlock_CopRank10, Unlock_Rank20, and "Challenges" (JSON for the phone).
@@ -23,7 +27,7 @@ local ProgressService = {}
 
 local XP = Progression.XP
 local CIV_KINDS = { Heist = true, Bank = true, Escape = true, RaceFinish = true, Stunt = true, Drift = true, TaxiFare = true,
-	CarBoost = true, Mission = true }
+	CarBoost = true, Mission = true, PropertyBought = true }
 
 local rankUp, challengeDone
 
@@ -133,8 +137,9 @@ local function progressChallenges(player, data, kind, amount)
 	end
 end
 
-function ProgressService.Event(player, kind, amount)
+function ProgressService.Event(player, kind, amount, scale)
 	amount = amount or 1
+	scale = type(scale) == "number" and math.clamp(scale, 0, 1) or 1
 	local data = DataService.Get(player)
 	if not data then
 		return
@@ -151,6 +156,9 @@ function ProgressService.Event(player, kind, amount)
 			progressChallenges(player, data, "BankBig", 1)
 		end
 	elseif kind == "Escape" then
+		if player:GetAttribute("MissionHeat") then
+			return -- heat from a mission's "lose the cops" step: no XP, no challenge
+		end
 		xp = XP.Escape * math.max(amount, 1)
 		if amount >= 2 then
 			progressChallenges(player, data, "EscapeBig", 1)
@@ -186,14 +194,20 @@ function ProgressService.Event(player, kind, amount)
 		progressChallenges(player, data, "TaserHit", 1)
 	elseif kind == "Mission" then
 		xp = amount -- missions pass their XP directly
+		side = player:GetAttribute("Side") == "Cop" and "cop" or "civ" -- cop missions level the cop side
 	elseif kind == "FloridaMoment" then
 		xp = 30
 		side = player:GetAttribute("Side") == "Cop" and "cop" or "civ"
+	elseif kind == "Collectible" then
+		xp = XP.Collectible
+		side = player:GetAttribute("Side") == "Cop" and "cop" or "civ"
+	elseif kind == "PropertyBought" then
+		xp = XP.PropertyBought
 	elseif kind == "PatrolMinute" then
 		xp = XP.PatrolMinute
 		progressChallenges(player, data, "PatrolMinute", 1)
 	end
-	addXP(player, data, side, xp)
+	addXP(player, data, side, xp * scale)
 end
 
 function ProgressService.Init()

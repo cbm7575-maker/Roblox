@@ -1,11 +1,18 @@
 -- Activities (ModuleScript, ReplicatedStorage.Shared.Config.Activities)
--- Open-world activities around Port Solana: street races (one on the water), stunt jumps.
--- Coordinates are world studs (y ignored).
+-- Open-world activities around Port Solana: street races (one on the water), stunt jumps, the drift
+-- zone, taxi/courier shifts and the car meet. Coordinates are world studs (y ignored).
+-- Economy rule of thumb: risk-free activities pay about $500 a minute at best, so crime (heists, about
+-- $1,000-2,000 a minute) always pays at least twice as much. The UTC-day limits below are per player.
 
 local Activities = {}
 
 -- Street races: solo time trials with a server leaderboard. Drive onto the start pad and press E.
 -- Checkpoints are passed within 30 studs, in order. Par = a good time; beating it pays the bonus.
+-- The first finish of each race per UTC day pays Reward (+ ParBonus under par); later finishes that day
+-- pay RaceRepeatShare of it (XP too). After a finish the same race can't start again for RaceCooldown s.
+Activities.RaceRepeatShare = 0.3
+Activities.RaceCooldown = 30
+
 Activities.Races = {
 	{
 		Id = "OceanSprint",
@@ -79,7 +86,39 @@ Activities.Stunts = {
 	{ Id = "GladesHopper", Name = "Glades Hopper", Ramp = Vector3.new(-1500, 0, 150), Travel = Vector3.new(0, 0, -1), MinDist = 50 },
 	{ Id = "HighwayNorth", Name = "Northern Lights", Ramp = Vector3.new(-500, 0, -1862), Travel = Vector3.new(-1, 0, 0), MinDist = 60 },
 }
+-- First landing ever on a ramp: StuntFirstReward (counts toward 8/8). After that the first landing on
+-- each ramp per UTC day pays StuntDailyReward (+ XP); more landings that day pay nothing.
 Activities.StuntFirstReward = 250
-Activities.StuntRepeatReward = 50
+Activities.StuntDailyReward = 100
+
+-- Drift zone: $1 per PointsPerDollar points, at most MaxChainPay a chain (XP is capped the same way).
+-- The first DailyFull dollars each UTC day pay in full, then AfterShare (cash and XP).
+-- Circling on the spot (every position of the last CircleSeconds within CircleRadius studs) scores nothing.
+Activities.Drift = {
+	PointsPerDollar = 25,
+	MaxChainPay = 600,
+	DailyFull = 5000,
+	AfterShare = 0.25,
+	CircleRadius = 40,
+	CircleSeconds = 6,
+}
+
+-- Taxi and courier shifts (JobService): Base + PerStud x route length, + Tip for beating the estimate.
+-- A typical fare (about 1,200 studs in 40-50 s) pays about $350-400: roughly $500 a minute.
+Activities.Jobs = {
+	Taxi = { Base = 80, PerStud = 0.18, Tip = 50 },
+	Courier = { Base = 70, PerStud = 0.2, Tip = 60 },
+}
+
+-- Neon Nights car meet (CarMeetService). LikeCap = paid player likes per car per meet; NPC fans add up
+-- to NpcCap likes. Crowd Favourite needs at least one like from a real player (no AFK solo wins).
+-- ShowXP goes to every shown car that got a real like.
+Activities.CarMeet = {
+	LikePay = 150,
+	LikeCap = 10,
+	NpcCap = 3,
+	FavouriteBonus = 1000,
+	ShowXP = 40,
+}
 
 return Activities
