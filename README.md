@@ -34,3 +34,9 @@ scripts in Studio, then commit.
 
 Scripts are kept with LF line endings (`.gitattributes`) so their SHA-1 matches the `SyncSha`
 DevSync stamps in Studio.
+
+## Launch
+
+`launch/` holds the step-by-step launch kit, in order: private publish and phone test, Creator Hub
+passes and cash packs (with icons in `launch/icons/`), the friends test plan, store page copy, and
+maturity questionnaire answers.
