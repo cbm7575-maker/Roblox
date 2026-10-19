@@ -1,9 +1,11 @@
 -- DriveUI (ModuleScript, StarterPlayerScripts.Controllers.DriveUI)
 -- The driving HUD, shown only while driving:
---   * Every device: speed gauge (MPH) with a nitro bar.
+--   * Every device: speed gauge (MPH) with a nitro bar, and a slim car-health bar over it once the
+--     car is damaged (STALLED / LIMP written on it at zero).
 --   * Touch devices: big GAS and BRAKE pedals, NITRO and DRIFT buttons, EXIT, and FLIP when the car
 --     is upside down. Steering stays on Roblox's thumbstick (it feeds the seat's SteerFloat).
 -- Pedals override the throttle so the thumbstick only steers. Icons first, very few words.
+-- Labels and bars are only rewritten when what they show changes.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,6 +24,9 @@ local DriveUI = {}
 local PINK = Color3.fromRGB(255, 62, 165)
 local CYAN = Color3.fromRGB(34, 225, 255)
 local ORANGE = Color3.fromRGB(255, 138, 61)
+local MINT = Color3.fromRGB(110, 242, 196)
+local YELLOW = Color3.fromRGB(255, 214, 10)
+local RED = Color3.fromRGB(255, 60, 80)
 local DARK = Color3.fromRGB(18, 14, 30)
 local FONT = Enum.Font.FredokaOne
 local STUDS_TO_MPH = 0.626 -- 1 stud ~ 0.28 m
@@ -31,6 +36,7 @@ local touchFrame
 local smokeButton
 local gauge
 local speedLabel, nitroFill
+local healthBar, healthFill, healthStroke, healthLabel
 local flipButton
 local held = { Gas = false, Brake = false }
 local forceTouch = false -- Studio preview of the phone layout
@@ -177,6 +183,38 @@ local function build()
 	nitroFill.Parent = bar
 	corner(nitroFill)
 
+	-- Car health, just above the gauge (hidden while the car is undamaged).
+	healthBar = Instance.new("Frame")
+	healthBar.Name = "HealthBar"
+	healthBar.AnchorPoint = Vector2.new(0.5, 1)
+	healthBar.Position = UDim2.new(0.5, 0, 0, -4)
+	healthBar.Size = UDim2.fromScale(0.62, 0.2)
+	healthBar.BackgroundColor3 = DARK
+	healthBar.BackgroundTransparency = 0.3
+	healthBar.Visible = false
+	healthBar.Parent = gauge
+	corner(healthBar)
+	healthStroke = stroke(healthBar, MINT, 2)
+	healthFill = Instance.new("Frame")
+	healthFill.Name = "Fill"
+	healthFill.Size = UDim2.fromScale(1, 1)
+	healthFill.BackgroundColor3 = MINT
+	healthFill.Parent = healthBar
+	corner(healthFill)
+	healthLabel = Instance.new("TextLabel")
+	healthLabel.Name = "State"
+	healthLabel.BackgroundTransparency = 1
+	healthLabel.Size = UDim2.fromScale(1, 1.8)
+	healthLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	healthLabel.Position = UDim2.fromScale(0.5, 0.5)
+	healthLabel.Font = FONT
+	healthLabel.TextScaled = true
+	healthLabel.TextColor3 = Color3.new(1, 1, 1)
+	healthLabel.TextStrokeTransparency = 0.2
+	healthLabel.ZIndex = 2
+	healthLabel.Visible = false
+	healthLabel.Parent = healthBar
+
 	-- Touch controls, bottom right cluster (sizes follow screen height)
 	touchFrame = Instance.new("Frame")
 	touchFrame.Name = "Touch"
@@ -237,6 +275,7 @@ local function build()
 end
 
 local wasDriving = false
+local shown: { [string]: any } = {} -- what each label/bar shows now; cleared whenever driving starts
 
 local function update()
 	local status = DriveController.Status
@@ -244,6 +283,7 @@ local function update()
 	if driving ~= wasDriving then
 		wasDriving = driving
 		gui.Enabled = driving
+		table.clear(shown)
 		if not driving then
 			held.Gas, held.Brake = false, false
 			for _, r in ipairs(resets) do
@@ -256,21 +296,59 @@ local function update()
 		return
 	end
 	local touch = isTouch()
-	touchFrame.Visible = touch
+	if touch ~= shown.touch then
+		shown.touch = touch
+		touchFrame.Visible = touch
+	end
 	if touch then
 		DriveController.Input.Throttle = (held.Gas and 1 or 0) - (held.Brake and 1 or 0)
 	else
 		DriveController.Input.Throttle = nil
 	end
-	speedLabel.Text = string.format("%d MPH", math.floor(math.abs(status.Speed) * STUDS_TO_MPH + 0.5))
-	nitroFill.Size = UDim2.fromScale(math.clamp(status.NitroFuel, 0, 1), 1)
-	nitroFill.BackgroundColor3 = status.NitroActive and ORANGE or CYAN
+	local mph = math.floor(math.abs(status.Speed) * STUDS_TO_MPH + 0.5)
+	if mph ~= shown.mph then
+		shown.mph = mph
+		speedLabel.Text = string.format("%d MPH", mph)
+	end
+	local fuel = math.floor(math.clamp(status.NitroFuel, 0, 1) * 100 + 0.5) -- whole percent
+	if fuel ~= shown.fuel then
+		shown.fuel = fuel
+		nitroFill.Size = UDim2.fromScale(fuel / 100, 1)
+	end
+	if status.NitroActive ~= shown.nitroOn then
+		shown.nitroOn = status.NitroActive
+		nitroFill.BackgroundColor3 = status.NitroActive and ORANGE or CYAN
+	end
+	local health = math.clamp(math.floor((status.Health or 100) + 0.5), 0, 100)
+	local mode = status.Stalled and "STALLED" or (status.Limp and "LIMP" or "")
+	if health ~= shown.health or mode ~= shown.mode then
+		shown.health, shown.mode = health, mode
+		healthBar.Visible = health < 100
+		healthFill.Size = UDim2.fromScale(health / 100, 1)
+		healthFill.Visible = health > 0
+		local color = health >= 60 and MINT or (health >= 35 and YELLOW or RED)
+		healthFill.BackgroundColor3 = color
+		healthStroke.Color = color
+		healthLabel.Text = mode
+		healthLabel.Visible = mode ~= ""
+	end
 	local wanted = player:GetAttribute("Side") == "Civilian" and (player:GetAttribute("Heat") or 0) > 0
-	smokeButton.Visible = wanted
-	smokeButton.TextTransparency = (player:GetAttribute("SmokeCharges") or 0) > 0 and 0 or 0.6
+	if wanted ~= shown.wanted then
+		shown.wanted = wanted
+		smokeButton.Visible = wanted
+	end
+	local smokeDim = (player:GetAttribute("SmokeCharges") or 0) > 0 and 0 or 0.6
+	if smokeDim ~= shown.smokeDim then
+		shown.smokeDim = smokeDim
+		smokeButton.TextTransparency = smokeDim
+	end
 	local car = status.Car
 	local chassis = car and car.PrimaryPart
-	flipButton.Visible = chassis ~= nil and chassis.CFrame.UpVector.Y < 0.5 and chassis.AssemblyLinearVelocity.Magnitude < 15
+	local flip = chassis ~= nil and chassis.CFrame.UpVector.Y < 0.5 and chassis.AssemblyLinearVelocity.Magnitude < 15
+	if flip ~= shown.flip then
+		shown.flip = flip
+		flipButton.Visible = flip
+	end
 end
 
 -- Studio only: preview the phone layout on a PC (DriveUI.PreviewTouch(true)).

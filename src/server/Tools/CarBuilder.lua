@@ -12,9 +12,11 @@
 -- Mesh bodies: if ServerStorage.CarBodies has a model named after the car, it replaces the greybox
 -- shell. Body models are prepared once in Studio (see tools/CAR_BODIES.md): front facing -Z, pivot at
 -- the point between the four wheel centres, already scaled to the car. Parts are named Body (painted,
--- texture stripped), Windows, Headlight, Taillight, Trim (kept as generated) and Wheels (hidden:
+-- texture stripped), Windows, Headlight, Taillight, Trim (kept as generated) and Wheels (dropped:
 -- our own wheels spin). The chassis box then turns invisible but keeps the car's colour (the
--- Suspect Card reads it).
+-- Suspect Card reads it); the greybox shell it replaces (Cabin, Roof, Headlight, Taillight parts) is
+-- destroyed. Only the Body and Windows cast shadows.
+-- Every car starts with attribute Health = 100 (VehicleDamageService).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
@@ -86,6 +88,19 @@ local function attachBody(model, chassis, cfg, template, wheelY)
 	local wx, wz, wr = template:GetAttribute("WheelX"), template:GetAttribute("WheelZ"), template:GetAttribute("WheelRadius")
 	local centreY = wheelY + (wr and (wr - cfg.WheelRadius) or 0)
 	body:PivotTo(chassis.CFrame * CFrame.new(0, centreY, 0))
+	-- The greybox shell goes before the mesh parts (some share its names) move in.
+	for _, name in ipairs({ "Cabin", "Roof", "Headlight", "Taillight" }) do
+		for _, d in ipairs(model:GetChildren()) do
+			if d.Name == name and d:IsA("Part") then
+				d:Destroy()
+			end
+		end
+	end
+	for _, d in ipairs(body:GetDescendants()) do
+		if d:IsA("BasePart") and d.Name == "Wheels" then
+			d:Destroy() -- the mesh's own wheels never show (ours spin)
+		end
+	end
 	for _, d in ipairs(body:GetDescendants()) do
 		if d:IsA("BasePart") then
 			d.Anchored = false
@@ -93,7 +108,8 @@ local function attachBody(model, chassis, cfg, template, wheelY)
 			d.CanTouch = false
 			d.CanQuery = false
 			d.Massless = true
-			d.CastShadow = true
+			-- Lights and trim are small: their shadows sit inside the body's anyway.
+			d.CastShadow = d.Name == "Body" or d.Name == "Windows"
 			if d.Name == "Body" then
 				d:SetAttribute("BodyPaint", true)
 				if d:IsA("MeshPart") then
@@ -101,9 +117,6 @@ local function attachBody(model, chassis, cfg, template, wheelY)
 				end
 				d.Material = Enum.Material.SmoothPlastic
 				d.Color = cfg.Color
-			elseif d.Name == "Wheels" then
-				d.Transparency = 1
-				d.CastShadow = false
 			elseif d.Name == "Headlight" then
 				d.Material = Enum.Material.Neon
 				d.Color = Color3.fromRGB(255, 244, 210)
@@ -121,14 +134,8 @@ local function attachBody(model, chassis, cfg, template, wheelY)
 		d.Parent = model
 	end
 	body:Destroy()
-	for _, name in ipairs({ "Cabin", "Roof", "Headlight", "Taillight" }) do
-		for _, d in ipairs(model:GetChildren()) do
-			if d.Name == name and d:IsA("Part") then
-				d.Transparency = 1
-			end
-		end
-	end
 	chassis.Transparency = 1
+	chassis.CastShadow = false
 	-- Underglow sized to the body, just under it.
 	local under = model:FindFirstChild("Underglow")
 	local _, ext = template:GetBoundingBox()
@@ -186,6 +193,14 @@ end
 -- Boats: a textured hull mesh (pivot at the bottom centre, front -Z). It hangs below the chassis so the
 -- hull sits in the water while the water rays hold the chassis up. Keeps its own colours.
 local function attachBoatBody(model, chassis, cfg, template)
+	-- The greybox shell (and underglow, which would show through the hull) goes.
+	for _, name in ipairs({ "Cabin", "Roof", "Headlight", "Taillight", "Underglow" }) do
+		for _, d in ipairs(model:GetChildren()) do
+			if d.Name == name and d:IsA("Part") then
+				d:Destroy()
+			end
+		end
+	end
 	local body = template:Clone()
 	body:PivotTo(chassis.CFrame * CFrame.new(0, -cfg.Size.Y / 2 - (template:GetAttribute("Draft") or 0.9), 0))
 	for _, d in ipairs(body:GetDescendants()) do
@@ -203,14 +218,8 @@ local function attachBoatBody(model, chassis, cfg, template)
 		end
 	end
 	body:Destroy()
-	for _, name in ipairs({ "Cabin", "Roof", "Headlight", "Taillight", "Underglow" }) do
-		for _, d in ipairs(model:GetChildren()) do
-			if d.Name == name and d:IsA("Part") then
-				d.Transparency = 1
-			end
-		end
-	end
 	chassis.Transparency = 1
+	chassis.CastShadow = false
 	-- Rider height on the deck (template attribute SeatY, studs above the chassis centre).
 	-- The passenger sits 2.4 studs behind the driver, at the same height.
 	local seatY = template:GetAttribute("SeatY")
@@ -362,6 +371,7 @@ function CarBuilder.Build(id)
 	seat.Size = Vector3.new(2, 0.4, 2.2)
 	seat.CFrame = cfg.Boat and CFrame.new(0, H / 2 + 0.2, L * 0.1) or CFrame.new(-W / 2 + 2.1, H / 2 - 1.3, L * 0.12)
 	seat.Color = Color3.fromRGB(30, 30, 36)
+	seat.CastShadow = false
 	seat.Massless = true
 	seat.CanCollide = false
 	seat.CanTouch = false -- no sitting by bumping into it; VehicleService seats the driver
@@ -390,6 +400,7 @@ function CarBuilder.Build(id)
 	pseat.Size = seat.Size
 	pseat.CFrame = cfg.Boat and CFrame.new(0, H / 2 + 0.2, L * 0.1 + 2.4) or CFrame.new(W / 2 - 2.1, H / 2 - 1.3, L * 0.12)
 	pseat.Color = seat.Color
+	pseat.CastShadow = false
 	pseat.Massless = true
 	pseat.CanCollide = false
 	pseat.CanTouch = false
@@ -413,6 +424,7 @@ function CarBuilder.Build(id)
 	model:SetAttribute("DisplayName", cfg.DisplayName)
 	model:SetAttribute("Police", cfg.Police == true)
 	model:SetAttribute("Boat", cfg.Boat == true)
+	model:SetAttribute("Health", 100)
 	for _, k in ipairs(CarBuilder.TuningKeys) do
 		model:SetAttribute(k, cfg[k])
 	end

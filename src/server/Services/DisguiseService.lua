@@ -3,8 +3,9 @@
 --   * Wardrobe (inside a hideout, on foot): RequestDisguise(hatId, maskId) puts on a hat and mask
 --     built from parts. If you're wanted and no cop can see you, a new look drops 1 star and wipes
 --     the outfit clue from your Suspect Card.
---   * Spray & Go (drive onto the pad while unseen): $500 repaints your car a new colour, drops 1 star
---     and wipes the car clue. 30-second cooldown per car.
+--   * Spray & Go (drive onto the pad while unseen): $500 repaints your car a new colour, fixes all its
+--     damage (VehicleDamageService.Repair), drops 1 star and wipes the car clue. 30-second cooldown
+--     per car.
 -- Your look is kept in attributes LookHat / LookMask and re-applied when you respawn.
 
 local Players = game:GetService("Players")
@@ -19,6 +20,7 @@ local HeatService = require(ServerScriptService.Services.HeatService)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local HideoutService = require(ServerScriptService.Services.HideoutService)
 local CarBuilder = require(game:GetService("ServerStorage").Tools.CarBuilder)
+local VehicleDamageService = require(ServerScriptService.Services.VehicleDamageService)
 
 local DisguiseService = {}
 
@@ -146,6 +148,7 @@ local function sprayTick()
 							new = PAINTS[rng:NextInteger(1, #PAINTS)]
 						end
 						CarBuilder.Paint(car, new)
+						VehicleDamageService.Repair(car)
 						player:SetAttribute("SuspectCar", nil)
 						HeatService.Reduce(player, 1, "spray")
 						notify:FireClient(player, "Resprayed")

@@ -7,6 +7,7 @@ local ORDER = {
 	"WorldService",
 	"VehicleService",
 	"VehicleGuard",
+	"VehicleDamageService", -- crash damage, limp mode (DisguiseService requires it)
 	"TeamService",
 	"EconomyService",
 	"DataService",

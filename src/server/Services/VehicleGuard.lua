@@ -7,9 +7,12 @@
 --   * Spinning faster than 25 rad/s two samples in a row (used to fling others) -> snap back
 --   * 5 flags within 5 minutes -> the car is removed ("CarRemoved"); kicks only after we confirm
 --     there are no false alarms in live servers.
--- A fast sample never moves the reference point, so one lag burst can't double-count.
+-- A fast sample never moves the reference point (the last GOOD position, where a snap back goes).
+-- The second strike is judged over a fresh window that starts at the first fast sample, so a
+-- network stall (the car frozen, then catching up in one jump) can't count twice.
 -- In Studio it only logs, unless Workspace attribute GuardEnforceInStudio = true.
--- Server-side moves (future teleports) must call VehicleGuard.Allow(car) first.
+-- Server-side moves (teleports, resets) must call VehicleGuard.Allow(car) first; that window also
+-- keeps VehicleDamageService from reading the move as a crash (VehicleGuard.Allowed(car)).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31,7 +34,7 @@ local SPIN_LIMIT = 25 -- rad/s
 local FLAG_LIMIT = 5
 local FLAG_WINDOW = 300
 
-local last = setmetatable({}, { __mode = "k" }) -- [car] = { cf, t, strikes, spins }
+local last = setmetatable({}, { __mode = "k" }) -- [car] = { cf, t, strikes, spins, freshCf, freshT }
 local allowUntil = setmetatable({}, { __mode = "k" })
 local flags = {} -- [userId] = { times }
 
@@ -52,6 +55,12 @@ end
 function VehicleGuard.Allow(car, seconds)
 	allowUntil[car] = os.clock() + (seconds or 2)
 	last[car] = nil
+end
+
+-- Is this car inside a server move's grace window?
+function VehicleGuard.Allowed(car)
+	local untilT = allowUntil[car]
+	return untilT ~= nil and os.clock() < untilT
 end
 
 -- Take physics away from the client, put the car back, then return control to its driver.
@@ -120,11 +129,15 @@ local function check(car, now)
 		last[car] = { cf = cf, t = now, strikes = 0, spins = 0 }
 		return
 	end
-	local dt = now - prev.t
+	-- After a first fast sample, judge over the fresh window that starts there (a lag burst inflates
+	-- one window only); otherwise over the window since the last good sample.
+	local fromCf = prev.freshCf or prev.cf
+	local fromT = prev.freshT or prev.t
+	local dt = now - fromT
 	if dt <= 0 then
 		return
 	end
-	local delta = cf.Position - prev.cf.Position
+	local delta = cf.Position - fromCf.Position
 	local flat = Vector3.new(delta.X, 0, delta.Z).Magnitude
 	local maxSpeed = (car:GetAttribute("MaxSpeed") or 150) * (car:GetAttribute("NitroSpeed") or 1.2)
 	local limit = maxSpeed * SPEED_SLACK + SPEED_EXTRA
@@ -139,7 +152,9 @@ local function check(car, now)
 		if prev.strikes >= 2 then
 			reason = string.format("speed %.0f studs/s (limit %.0f)", flat / dt, limit)
 		else
-			return -- keep the last good point; judge again next sample over a longer window
+			-- Keep the last good point (for a snap back), and judge the next sample from here.
+			prev.freshCf, prev.freshT = cf, now
+			return
 		end
 	elseif chassis.AssemblyAngularVelocity.Magnitude > SPIN_LIMIT then
 		prev.spins += 1
@@ -150,6 +165,7 @@ local function check(car, now)
 		prev.spins = 0
 	end
 
+	prev.freshCf, prev.freshT = nil, nil
 	if reason then
 		prev.strikes, prev.spins = 0, 0
 		if flag(car, owner, reason) then

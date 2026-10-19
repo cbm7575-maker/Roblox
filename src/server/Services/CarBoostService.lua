@@ -5,6 +5,8 @@
 --   * 40% carry a GPS tracker: 20 s after the theft the cops get a ping (LastSeen follows the car).
 --   * Deliver it to the Chop Shop (Docks) while no cop can see you -> its value goes in your bag.
 --   * Unclaimed hot cars leave after 6 minutes; stolen ones 5 minutes after being abandoned.
+--   * The thief can get out and back in (Drive prompt, shown only to the thief by VehicleVisuals).
+--   * Not while tased (StunnedUntil): no lock picking, no getting in.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -40,6 +42,10 @@ local rng = Random.new()
 local startedAt = os.clock()
 local lastTopUp = 0
 local notify, feed
+
+local function stunned(player)
+	return (player:GetAttribute("StunnedUntil") or 0) > Workspace:GetServerTimeNow()
+end
 
 local function chopPad()
 	local m = Workspace.Spawns:FindFirstChild("ChopShop")
@@ -132,10 +138,9 @@ local function spawnHot()
 	car:SetAttribute("HotValue", value)
 	car:PivotTo(cf)
 	local seat = car:FindFirstChild("DriverSeat")
+	-- The Drive prompt stays: after the theft it lets the thief back in (clients show it only to the
+	-- ThiefUserId; before the theft nobody sees it).
 	local drive = seat:FindFirstChild("DrivePrompt")
-	if drive then
-		drive:Destroy()
-	end
 	local pick = Instance.new("ProximityPrompt")
 	pick.Name = "PickLockPrompt"
 	pick.ActionText = "Pick lock"
@@ -173,7 +178,7 @@ local function spawnHot()
 	pick.Triggered:Connect(function(p)
 		local began = holdStart[p]
 		holdStart[p] = nil
-		if h.thief or p:GetAttribute("Side") ~= "Civilian" or not began or os.clock() - began < PICK_HOLD - 0.4 then
+		if h.thief or p:GetAttribute("Side") ~= "Civilian" or not began or os.clock() - began < PICK_HOLD - 0.4 or stunned(p) then
 			return
 		end
 		local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
@@ -201,6 +206,18 @@ local function spawnHot()
 			end)
 		end
 	end)
+	if drive then
+		drive.Triggered:Connect(function(p)
+			if p ~= h.thief or seat.Occupant or p:GetAttribute("Side") ~= "Civilian" or stunned(p) then
+				return
+			end
+			local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+			local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and not hum.SeatPart and root and (root.Position - seat.Position).Magnitude <= 20 then
+				seat:Sit(hum)
+			end
+		end)
+	end
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		onSeat(h, seat)
 	end)
