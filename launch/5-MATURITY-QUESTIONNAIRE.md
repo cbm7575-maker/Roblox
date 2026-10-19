@@ -6,11 +6,12 @@ the average.
 
 I couldn't open Roblox's questionnaire from here, so the questions may be worded differently. Below
 is every content category it covers, with the answer for Neon Coast and the evidence. Each answer
-comes from searching all 85 scripts (2026-10-19), not from the plan alone.
+comes from searching all the scripts (re-checked after the Oct 19 update, 95 scripts), not from the
+plan alone.
 
 | Category | Answer | Evidence in the game |
 |---|---|---|
-| Violence | **Yes, mild and unrealistic, and frequent** (it's core gameplay) | Cops tase wanted players (a 3-second stun), cuff them and send them to prison; spike strips pop tires; cars can ram ambient traffic, which gets knocked away. No weapons or guns, no fighting, and no player ever takes damage or dies (nothing in the code changes a player's health). |
+| Violence | **Yes, mild and unrealistic, and frequent** (it's core gameplay) | Cops tase wanted players (a 3-second stun), cuff them and send them to prison; spike strips pop tires; cars can ram ambient traffic, which gets knocked away; cars (never people) take crash damage: they smoke, stall and limp, with no explosions or fire. Pedestrians dodge out of the way and are never knocked down. No weapons or guns, no fighting, and no player ever takes damage or dies (nothing in the code changes a player's health). |
 | Blood or gore | **None** | No blood anywhere. |
 | Crude humor | **None** | Jokes are kid-safe puns on signs and in the Coast Feed ("Gus says: wear sunscreen!", "Man Tries to Outrun Police on a Pool Noodle"). |
 | Fear / horror | **None** | No scary content. The gator is scenery and never hurts anyone; the UFO event is lights in the sky and a joke reward. |

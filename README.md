@@ -39,4 +39,4 @@ DevSync stamps in Studio.
 
 `launch/` holds the step-by-step launch kit, in order: private publish and phone test, Creator Hub
 passes and cash packs (with icons in `launch/icons/`), the friends test plan, store page copy, and
-maturity questionnaire answers.
+maturity questionnaire answers, and the playtest list for the Oct 19 update (6).
