@@ -47,6 +47,9 @@ Garage.Paints = {
 	-- Earned: rank 10
 	{ Name = "Neon Legend", Color = Color3.fromRGB(255, 0, 170), Unlock = "CivRank10" },
 	{ Name = "Midnight Blue", Color = Color3.fromRGB(16, 30, 90), Unlock = "CopRank10" },
+	-- Earned: find all hidden Gus figurines (CollectibleService). Saved customisations store paint
+	-- indices, so new paints always go at the end of this list.
+	{ Name = "Gator Green", Color = Color3.fromRGB(46, 180, 90), Unlock = "GusHunter" },
 }
 
 Garage.Glows = {
