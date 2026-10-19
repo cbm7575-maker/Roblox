@@ -147,7 +147,8 @@ local function districts()
 	local city = Workspace:FindFirstChild("City")
 	local ground = city and city:FindFirstChild("Ground")
 	for _, p in ipairs(ground and ground:GetChildren() or {}) do
-		if p:IsA("BasePart") then
+		-- District tiles are plain Parts; the ShoreSlope wedges along the beach are not districts.
+		if p.ClassName == "Part" and p.Name ~= "ShoreSlope" then
 			local _, yaw = p.CFrame:ToEulerAnglesYXZ()
 			table.insert(list, {
 				n = p.Name, x = math.floor(p.Position.X), z = math.floor(p.Position.Z),

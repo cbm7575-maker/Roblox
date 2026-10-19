@@ -224,10 +224,25 @@ end
 
 ------------------------------------------------------------------ sidewalk routes
 
+-- The Causeway to Lighthouse Key crosses open water (about x 1520-2090 at z -1350): its sidewalks
+-- hang over the sea, so walkers never use it (traffic still does).
+local SEA_MIN, SEA_MAX = Vector2.new(1520, -1390), Vector2.new(2090, -1310)
+
+local function overSea(a, b)
+	for k = 0, 10 do
+		local p = a:Lerp(b, k / 10)
+		if p.X > SEA_MIN.X and p.X < SEA_MAX.X and p.Z > SEA_MIN.Y and p.Z < SEA_MAX.Y then
+			return true
+		end
+	end
+	return false
+end
+
 local function neighbours(i)
 	local list = {}
 	for j in pairs(RoadGraph.Edges[i] or {}) do
-		if TrafficClient.EdgeAllowed(i, j) then
+		local a, b = RoadGraph.Nodes[i], RoadGraph.Nodes[j]
+		if TrafficClient.EdgeAllowed(i, j) and a and b and not overSea(a, b) then
 			table.insert(list, j)
 		end
 	end
@@ -830,12 +845,15 @@ local function updateHangouts()
 	table.sort(candidates, function(x, y)
 		return x.d < y.d
 	end)
+	-- At most two new rigs per tick: each is a fresh R15 clone, and a burst of them stutters phones.
+	local spawned = 0
 	for _, c in ipairs(candidates) do
-		if count >= cap then
+		if count >= cap or spawned >= 2 then
 			break
 		end
 		spawnHang(c.index, spots[c.index])
 		count += 1
+		spawned += 1
 	end
 end
 

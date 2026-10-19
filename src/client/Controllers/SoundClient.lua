@@ -328,6 +328,28 @@ end
 ------------------------------------------------------------------ event music (EventService)
 
 local music = {} -- [part] = sound
+local musicParts = {} -- [part] = true: Workspace.Events parts with a MusicId (kept by signals, never rescanned)
+local watchedEvents
+
+local function watchEvents()
+	local events = Workspace:FindFirstChild("Events")
+	if not events or events == watchedEvents then
+		return
+	end
+	watchedEvents = events
+	local function consider(d)
+		if d:IsA("BasePart") and d:GetAttribute("MusicId") ~= nil then
+			musicParts[d] = true
+		end
+	end
+	for _, d in ipairs(events:GetDescendants()) do
+		consider(d)
+	end
+	events.DescendantAdded:Connect(consider)
+	events.DescendantRemoving:Connect(function(d)
+		musicParts[d] = nil
+	end)
+end
 
 local function updateMusic()
 	for part, sound in pairs(music) do
@@ -336,12 +358,9 @@ local function updateMusic()
 			music[part] = nil
 		end
 	end
-	local events = Workspace:FindFirstChild("Events")
-	if not events then
-		return
-	end
-	for _, d in ipairs(events:GetDescendants()) do
-		local id = d:IsA("BasePart") and d:GetAttribute("MusicId")
+	watchEvents()
+	for d in pairs(musicParts) do
+		local id = d.Parent and d:GetAttribute("MusicId")
 		if type(id) == "number" and not music[d] then
 			local s = Instance.new("Sound")
 			s.Name = "EventMusic"
