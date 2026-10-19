@@ -236,6 +236,8 @@ local function tick()
 			removeHot(h)
 		elseif h.thief and (h.thief.Parent ~= Players or (h.emptySince and now - h.emptySince > ABANDONED_LIFE)) then
 			removeHot(h)
+		elseif h.thief and h.thief:GetAttribute("Side") ~= "Civilian" then
+			removeHot(h) -- busted (or switched to cop): the stolen car is lost, not waiting after prison
 		elseif h.thief and pad then
 			-- Delivered?
 			local rel = pad.CFrame:PointToObjectSpace(chassis.Position)

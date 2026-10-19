@@ -86,7 +86,9 @@ end
 local HANDLERS = {
 	HeistOpen = function(d)
 		if player:GetAttribute("Side") == "Civilian" then
-			post("@CoastFeed: " .. display(d.Type) .. " just opened for business...", ORANGE, relevant(d))
+			-- Worth a toast for anyone free to act on it (not while already on the run).
+			post("@CoastFeed: " .. display(d.Type) .. " just opened for business...", ORANGE,
+				relevant(d) or (player:GetAttribute("Heat") or 0) <= 0)
 		end
 	end,
 	HeistAlarm = function(d)
@@ -126,7 +128,8 @@ local HANDLERS = {
 	end,
 	-- Florida moments (EventService)
 	Event = function(d)
-		post("@CoastFeed: " .. tostring(d.Text), MINT, relevant(d))
+		-- Florida moments and car meet calls are server-wide invitations (a few minutes apart): always toast.
+		post("@CoastFeed: " .. tostring(d.Text), MINT, true)
 	end,
 	EventDone = function(d)
 		post("@CoastFeed: " .. tostring(d.Name) .. " " .. tostring(d.Text) .. "!", MINT, relevant(d))

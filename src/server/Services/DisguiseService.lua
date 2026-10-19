@@ -26,6 +26,7 @@ local DisguiseService = {}
 
 local SPRAY_COST = 500
 local SPRAY_COOLDOWN = 30
+local REPAIR_COST = 250 -- no heat: repair only (a wanted respray includes the repair)
 local PAINTS = {
 	Color3.fromRGB(255, 62, 165), Color3.fromRGB(34, 225, 255), Color3.fromRGB(123, 47, 255),
 	Color3.fromRGB(255, 138, 61), Color3.fromRGB(255, 214, 10), Color3.fromRGB(110, 242, 196),
@@ -130,9 +131,26 @@ local function sprayTick()
 		local seat = hum and hum.SeatPart
 		local car = seat and seat.Parent
 		local chassis = car and car.PrimaryPart
-		if chassis and car:GetAttribute("NCVehicle") and HeatService.GetHeat(player) > 0 then
+		local onPad = false
+		if chassis and car:GetAttribute("NCVehicle") then
 			local rel = pad.CFrame:PointToObjectSpace(chassis.Position)
-			if math.abs(rel.X) <= pad.Size.X / 2 and math.abs(rel.Z) <= pad.Size.Z / 2 and rel.Y < 12 then
+			onPad = math.abs(rel.X) <= pad.Size.X / 2 and math.abs(rel.Z) <= pad.Size.Z / 2 and rel.Y < 12
+		end
+		if onPad and HeatService.GetHeat(player) <= 0 and seat.Name == "DriverSeat" and (car:GetAttribute("Health") or 100) < 100 then
+			-- No heat: a plain repair for whoever drives (no respray, the cops aren't looking).
+			local t = os.clock()
+			if not sprayedAt[car] or t - sprayedAt[car] > SPRAY_COOLDOWN then
+				if EconomyService.Spend(player, REPAIR_COST, "repair") then
+					sprayedAt[car] = t
+					VehicleDamageService.Repair(car)
+					notify:FireClient(player, "Repaired")
+				elseif not lastWarn[player] or t - lastWarn[player] > 6 then
+					lastWarn[player] = t
+					notify:FireClient(player, "RepairNoCash")
+				end
+			end
+		elseif onPad and HeatService.GetHeat(player) > 0 then
+			do
 				local t = os.clock()
 				if player:GetAttribute("HeatSpotted") then
 					if not lastWarn[player] or t - lastWarn[player] > 6 then

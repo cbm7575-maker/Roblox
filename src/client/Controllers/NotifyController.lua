@@ -94,6 +94,8 @@ NotifyController.Messages = {
 	-- Car damage (VehicleDamageService)
 	CarSmoking = "Car damaged: it's slower now!",
 	CarStalled = "Engine stalled! Limp mode until Spray & Go or a new car.",
+	Repaired = "Good as new! Repairs: -$250.",
+	RepairNoCash = "Repairs cost $250. Bank some cash first.",
 }
 
 local gui, holder
