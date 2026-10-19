@@ -7,6 +7,9 @@
 -- that turns with the player's camera (so "up" is where you're looking) and climbs when you drive
 -- fast (zoom out). A ViewportFrame clips cleanly on every device. Blips are 2D labels on top,
 -- placed with the same maths and pinned to the rim when they're off the map, like a compass.
+-- While you're wanted: blue blips for police within ~400 studs (player cops and AI cars, pinned to the
+-- rim) and your own search circle (server attributes SearchX/SearchZ/SearchR, HeatService). Roadblocks
+-- (Workspace.Roadblocks) show for everyone, pinned to the rim while you're wanted.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -41,6 +44,9 @@ local CYAN = Color3.fromRGB(34, 225, 255)
 local GOLD = Color3.fromRGB(255, 214, 10)
 local MINT = Color3.fromRGB(110, 242, 196)
 local DARK = Color3.fromRGB(18, 14, 30)
+local BLUE = Color3.fromRGB(60, 120, 255)
+local RED = Color3.fromRGB(255, 60, 60)
+local POLICE_RANGE = 400
 
 local gui, view, cam, overlay, ring, arrow, routeModel, mapModel
 local staticParts = {} -- { part, pos, r } for culling
@@ -48,6 +54,9 @@ local size = MAX_SIZE
 local radius = NEAR_RADIUS
 local blips = {} -- [key] = { frame, pos, edge }
 local routeStamp
+local searchModel, searchStamp
+local carKeys = setmetatable({}, { __mode = "k" }) -- [AI car] = number (stable blip keys)
+local nextCarKey = 0
 
 local function flatPart(parent, cf, sx, sz, y, color)
 	local p = Instance.new("Part")
@@ -151,6 +160,9 @@ local function build()
 	routeModel = Instance.new("Model")
 	routeModel.Name = "Route"
 	routeModel.Parent = view
+	searchModel = Instance.new("Model")
+	searchModel.Name = "Search"
+	searchModel.Parent = view
 
 	-- Blips, arrow and rim sit on top in a same-sized frame.
 	overlay = Instance.new("Frame")
@@ -223,7 +235,72 @@ local function blip(key, pos, text, color, px, edge)
 	b.seen = true
 end
 
-local function refreshBlips()
+-- Police near a wanted player, and roadblocks.
+local function policeBlips(me)
+	local wantedMe = player:GetAttribute("Side") == "Civilian" and (player:GetAttribute("Heat") or 0) > 0
+	if wantedMe then
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p:GetAttribute("Side") == "Cop" then
+				local r = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+				if r and r:IsA("BasePart") and (r.Position - me).Magnitude <= POLICE_RANGE then
+					local key = "cop_" .. p.UserId
+					blip(key, r.Position, "", BLUE, 11, true)
+					blips[key].track = r
+				end
+			end
+		end
+		local vehicles = Workspace:FindFirstChild("Vehicles")
+		for _, car in ipairs(vehicles and vehicles:GetChildren() or {}) do
+			local chassis = car:GetAttribute("AIPolice") == true and car:IsA("Model") and car.PrimaryPart
+			if chassis and (chassis.Position - me).Magnitude <= POLICE_RANGE then
+				if not carKeys[car] then
+					nextCarKey += 1
+					carKeys[car] = nextCarKey
+				end
+				local key = "ai_" .. carKeys[car]
+				blip(key, chassis.Position, "", BLUE, 11, true)
+				blips[key].track = chassis
+			end
+		end
+	end
+	local folder = Workspace:FindFirstChild("Roadblocks")
+	for i, rb in ipairs(folder and folder:GetChildren() or {}) do
+		local pos = rb:GetAttribute("Pos")
+		local part = rb:IsA("Model") and rb.PrimaryPart
+		pos = part and part.Position or pos
+		if typeof(pos) == "Vector3" then
+			blip("rb_" .. i, pos, "X", RED, 15, wantedMe)
+		end
+	end
+end
+
+-- Your search circle while the stars are hollow: a red ring on the map.
+local function refreshSearch()
+	local x, z, r = player:GetAttribute("SearchX"), player:GetAttribute("SearchZ"), player:GetAttribute("SearchR")
+	local stamp = "none"
+	if type(x) == "number" and type(z) == "number" and type(r) == "number" and r > 0 then
+		stamp = x .. "|" .. z .. "|" .. r
+	end
+	if stamp == searchStamp then
+		return
+	end
+	searchStamp = stamp
+	searchModel:ClearAllChildren()
+	if stamp ~= "none" then
+		local n = 32
+		local prev
+		for i = 0, n do
+			local a = i / n * math.pi * 2
+			local pt = Vector3.new(x + math.cos(a) * r, 0, z + math.sin(a) * r)
+			if prev then
+				segment(searchModel, prev, pt, 10, 1.6, RED)
+			end
+			prev = pt
+		end
+	end
+end
+
+local function refreshBlips(me)
 	for _, b in pairs(blips) do
 		b.seen = false
 	end
@@ -276,6 +353,9 @@ local function refreshBlips()
 				end
 			end
 		end
+	end
+	if me then
+		policeBlips(me)
 	end
 	for key, b in pairs(blips) do
 		if not b.seen then
@@ -367,8 +447,9 @@ function MinimapClient.Init()
 		end
 		if os.clock() - lastBlips > 1 then
 			lastBlips = os.clock()
-			refreshBlips()
+			refreshBlips(pos)
 			refreshRoute()
+			refreshSearch()
 			cull(pos)
 		end
 		-- Wanted: the rim flashes red and blue.

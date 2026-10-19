@@ -2,7 +2,10 @@
 -- Client side of the wanted system, police tools and prison:
 --   * Which prompts you see: Cuff (cops, on wanted players and wanted drivers), Vent (prisoners).
 --   * Cops: TASER (T) and SPIKES (G) buttons; markers for wanted players at their LastSeen spot:
---     a red beacon while spotted, a search circle (150 + 50 per star) while hollow.
+--     a red beacon while spotted, the search circle (server attributes SearchX/SearchZ/SearchR) while
+--     hollow.
+--   * While you're wanted the Roblox reset button is off (dying while wanted counts as an arrest
+--     anyway, ArrestService); it comes back at 0 heat.
 --   * Taser zap beams, stun flash, and the big stamps: CAUGHT! (with a mugshot headline),
 --     BOUNTY +$X, BREAKOUT!
 --   * Prisoners: release countdown and the breakout hint.
@@ -11,6 +14,7 @@
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
 local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
@@ -44,6 +48,7 @@ local HEADLINES = {
 local gui, taserButton, spikeButton, prisonLabel
 local markers = {} -- [player] = { beacon = Part, circle = Part }
 local markerFolder
+local resetAllowed -- what SetCore last accepted for the reset button (nil = not set yet)
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -261,10 +266,12 @@ local function updateMarkers()
 			m.label.Text = (spotted and "WANTED " or "LAST SEEN ") .. string.rep("★", heat)
 				.. (#clues > 0 and ("\n" .. table.concat(clues, " / ")) or "")
 			m.label.TextColor3 = spotted and RED or ORANGE
-			local radius = 150 + 50 * heat
+			local radius = tonumber(p:GetAttribute("SearchR")) or (150 + 50 * heat)
+			local cx = tonumber(p:GetAttribute("SearchX")) or lastSeen.X
+			local cz = tonumber(p:GetAttribute("SearchZ")) or lastSeen.Z
 			m.circle.Transparency = spotted and 1 or 0.85
 			m.circle.Size = Vector3.new(1, radius * 2, radius * 2)
-			m.circle.CFrame = CFrame.new(lastSeen.X, 0.3, lastSeen.Z) * CFrame.Angles(0, 0, math.rad(90))
+			m.circle.CFrame = CFrame.new(cx, 0.3, cz) * CFrame.Angles(0, 0, math.rad(90))
 		else
 			clearMarker(p)
 		end
@@ -304,10 +311,52 @@ local function updatePrompts()
 	setPrompt(vent and vent:FindFirstChild("VentPrompt"), side() == "Prisoner" and vent:GetAttribute("Open") ~= true)
 end
 
+-- No resetting your way out of a chase. SetCore fails until the core scripts are ready, so this
+-- simply retries on the next update until it sticks.
+local function updateReset()
+	local allow = (player:GetAttribute("Heat") or 0) <= 0
+	if resetAllowed ~= allow then
+		local ok = pcall(function()
+			StarterGui:SetCore("ResetButtonCallback", allow)
+		end)
+		if ok then
+			resetAllowed = allow
+		end
+	end
+end
+
+-- Cop tool buttons. On foot: a column under the minimap (MinimapClient: clamp(0.22H, 110, 170) px
+-- from y 60 at the right edge). Driving: SPIKES goes under DriveUI's EXIT/FLIP column (0.1H wide,
+-- right edge at W - 200, FLIP at 0.12H + 64), clear of the touch pedals, NITRO and SMOKE.
+local function placeTools(onFoot)
+	local size = gui.AbsoluteSize
+	local w, h = size.X, size.Y
+	local b = h * 0.11 -- button size (0.11H, anchored at its right edge, vertical centre)
+	local map = math.floor(math.clamp(h * 0.22, 110, 170))
+	local taserPos, spikePos
+	if onFoot then
+		local top = 60 + map + 8
+		taserPos = UDim2.fromOffset(w - 20, math.floor(top + b / 2))
+		spikePos = UDim2.fromOffset(w - 20, math.floor(top + b + 8 + b / 2))
+	else
+		taserPos = taserButton.Position
+		spikePos = UDim2.fromOffset(w - 200, math.floor(h * 0.12 + 64 + h * 0.1 + 8 + b / 2))
+	end
+	if taserButton.Position ~= taserPos then
+		taserButton.Position = taserPos
+	end
+	if spikeButton.Position ~= spikePos then
+		spikeButton.Position = spikePos
+	end
+end
+
 local function updateUI()
 	local amCop = side() == "Cop"
-	local root, hum = myRoot()
+	local _, hum = myRoot()
 	local onFoot = hum ~= nil and hum.SeatPart == nil
+	if amCop then
+		placeTools(onFoot)
+	end
 	taserButton.Visible = amCop and onFoot
 	spikeButton.Visible = amCop
 	spikeButton.Text = "SPIKES x" .. tostring(player:GetAttribute("SpikeCharges") or 0)
@@ -363,6 +412,7 @@ function LawClient.Init()
 				updatePrompts()
 				updateMarkers()
 				updateUI()
+				updateReset()
 			end)
 			if not ok then
 				warn("[LawClient] " .. tostring(err))

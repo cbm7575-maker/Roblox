@@ -81,6 +81,10 @@ NotifyController.Messages = {
 	PropNeedsRank_5 = "Reach citizen rank 5 to buy this place.",
 	PropNeedsRank_10 = "Reach citizen rank 10 to buy this place.",
 	PropHotNoBank = "Lose your heat before you stash cash at home.",
+	-- Police (HeatService, AIPoliceService)
+	RammedCop = "You rammed a police car! +1 star.",
+	EvadingArrest = "Evading arrest! +1 star.",
+	RoadblockAhead = "Roadblock ahead! Find another way, or thread the gap.",
 	-- Car damage (VehicleDamageService)
 	CarSmoking = "Car damaged: it's slower now!",
 	CarStalled = "Engine stalled! Limp mode until Spray & Go or a new car.",
