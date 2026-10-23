@@ -6,7 +6,12 @@ tells you in two minutes whether everything loaded.
 
 ## Load it into Studio
 
-1. Unzip over your project folder, then `python tools/manifest.py` (it should say 95 scripts).
+0. **Back up first.** In Studio, File > Save to File As... `NeonCoast-backup.rbxl`. The sync replaces
+   every script that differs from these files, so anything you changed in Studio since Sep 28 would
+   be overwritten. If you did change scripts, send me the backup and I'll merge your changes in.
+1. Unzip over your project folder, then run `python tools/manifest.py` (it should say 95 scripts).
+   **Don't skip this**: without a fresh manifest, DevSync skips scripts it thinks are up to date and
+   some of the fixes never reach Studio.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder.
 3. Studio command bar: `require(game.ServerStorage.Tools.DevSync).Run()`. Expect 10 NEW lines
    (CollectibleService, CollectibleClient, PropertyService, VehicleDamageService, ObjectiveClient,
