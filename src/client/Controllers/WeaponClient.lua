@@ -12,8 +12,9 @@
 --   * The gun store screen opens when the server says so (WeaponStore, from the counter prompt).
 --     Buying: BuyWeapon(id), tap twice to confirm.
 --   * Messages from the server: WeaponNotice(key, arg) (texts in NOTICES below).
--- Sounds: Config.Sounds PistolShot / SMGShot / ShotgunShot / RifleShot / GunReload / GunEmpty. While
--- one's Id is 0 the stand-in named by its Fallback plays instead (sped up, cut short).
+-- Sounds: Config.Sounds PistolShot / SMGShot / ShotgunShot / RifleShot / GunReload / GunEmpty (Speed,
+-- and Cut = seconds into the sound before a quick fade). In Studio they're preloaded at start and any
+-- that fail to load are named in Output.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -163,18 +164,19 @@ local function soundIn(key, parent)
 	if s then
 		return s
 	end
-	local src, speed, cut = def, 1, nil
+	local src = def
 	if def.Id == 0 then
 		src = def.Fallback and Sounds.Effects[def.Fallback]
-		speed, cut = def.Speed or 1, def.Cut
 	end
 	if not src or src.Id == 0 then
 		return nil
 	end
+	local speed, cut = def.Speed or 1, def.Cut
 	s = Instance.new("Sound")
 	s.Name = "NC_" .. key
 	s.SoundId = "rbxassetid://" .. src.Id
 	s.Volume = def.Volume or 0.5
+	s:SetAttribute("BaseVolume", s.Volume)
 	s.PlaybackSpeed = speed
 	s.RollOffMode = Enum.RollOffMode.InverseTapered
 	s.RollOffMinDistance = 20
@@ -189,20 +191,34 @@ local function soundIn(key, parent)
 	return s
 end
 
+local fades = setmetatable({}, { __mode = "k" }) -- [Sound] = the fade-out tween running on it
+
 local function play(key, parent)
 	local s = soundIn(key, parent)
 	if not s then
 		return
 	end
+	if fades[s] then
+		fades[s]:Cancel()
+		fades[s] = nil
+	end
+	s.Volume = s:GetAttribute("BaseVolume") or s.Volume
 	s.TimePosition = 0
 	s:Play()
 	local cut = s:GetAttribute("Cut")
 	if cut then
 		local token = os.clock()
 		s:SetAttribute("Token", token)
-		task.delay(cut, function()
+		task.delay(cut / s.PlaybackSpeed, function()
 			if s.Parent and s:GetAttribute("Token") == token then
-				s:Stop()
+				local fade = TweenService:Create(s, TweenInfo.new(0.08), { Volume = 0 })
+				fades[s] = fade
+				fade.Completed:Connect(function(state)
+					if state == Enum.PlaybackState.Completed and s:GetAttribute("Token") == token then
+						s:Stop()
+					end
+				end)
+				fade:Play()
 			end
 		end)
 	end
@@ -565,9 +581,13 @@ local function refreshButtons()
 	fireButton.Position = UDim2.new(1, -24 - copShift, 0, cy)
 	reloadButton.Size = UDim2.fromOffset(math.floor(b * 0.6), math.floor(b * 0.6))
 	reloadButton.Position = UDim2.new(1, -24 - copShift - b - 10, 0, cy + math.floor(b * 0.2))
-	ammoLabel.Position = touch and UDim2.new(1, -24 - copShift, 0, cy - math.floor(b / 2) - 34)
+	-- Ammo: on touch, left of RELOAD at FIRE's height (above FIRE it would run into the minimap on a
+	-- phone); otherwise the bottom-right corner.
+	local reloadW = math.floor(b * 0.6)
+	ammoLabel.Position = touch and UDim2.new(1, -24 - copShift - b - 10 - reloadW - 10, 0, cy)
 		or UDim2.new(1, -24, 1, -24)
-	ammoLabel.AnchorPoint = touch and Vector2.new(1, 0) or Vector2.new(1, 1)
+	ammoLabel.AnchorPoint = touch and Vector2.new(1, 0.5) or Vector2.new(1, 1)
+	ammoLabel.Size = touch and UDim2.fromOffset(170, 24) or UDim2.fromOffset(240, 28)
 	-- Health: above the backpack bar on foot, above DriveUI's speed gauge (0.13H tall, 18 px up) seated.
 	local seated = hum ~= nil and hum.SeatPart ~= nil
 	healthFrame.Position = seated and UDim2.new(0.5, 0, 1, -(26 + math.floor(h * 0.13))) or UDim2.new(0.5, 0, 1, -84)
@@ -691,6 +711,14 @@ local function build()
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			holding = true
 			fire()
+			-- Let go wherever the finger ends up (sliding off the button must still stop the SMG).
+			local conn
+			conn = input:GetPropertyChangedSignal("UserInputState"):Connect(function()
+				if input.UserInputState == Enum.UserInputState.End or input.UserInputState == Enum.UserInputState.Cancel then
+					holding = false
+					conn:Disconnect()
+				end
+			end)
 		end
 	end)
 	fireButton.InputEnded:Connect(function(input)
@@ -984,6 +1012,24 @@ local function onCharacter(char)
 				equipped = { tool = c, def = def }
 				updateAmmo()
 				refreshButtons()
+				if RunService:IsStudio() then
+					-- Self-check once the hold pose has settled: the barrel (Handle -Z) should point
+					-- roughly where the character faces. Anything else is worth a screenshot.
+					task.delay(1.2, function()
+						local handle = c:FindFirstChild("Handle")
+						local root = char:FindFirstChild("HumanoidRootPart")
+						if equipped and equipped.tool == c and handle and root and root:IsA("BasePart") then
+							local barrel, facing = handle.CFrame.LookVector, root.CFrame.LookVector
+							local up = handle.CFrame.UpVector.Y
+							if barrel:Dot(facing) < 0.7 or up < 0.5 then
+								warn(string.format("[WeaponClient] %s isn't held right (barrel . facing = %.2f, up = %.2f): send a screenshot",
+									def.Name, barrel:Dot(facing), up))
+							else
+								print(string.format("[WeaponClient] %s held right (barrel . facing = %.2f)", def.Name, barrel:Dot(facing)))
+							end
+						end
+					end)
+				end
 			end
 		end
 	end)
@@ -1038,6 +1084,31 @@ local function step()
 	end
 end
 
+-- Studio: load every gun sound once and say in Output which ones work (and how long they are).
+local GUN_SOUNDS = { "PistolShot", "SMGShot", "ShotgunShot", "RifleShot", "GunReload", "GunEmpty" }
+local function checkSounds()
+	local list, keyOf = {}, {}
+	for _, key in ipairs(GUN_SOUNDS) do
+		local def = Sounds.Effects[key]
+		if def and def.Id ~= 0 then
+			local s = Instance.new("Sound")
+			s.SoundId = "rbxassetid://" .. def.Id
+			table.insert(list, s)
+			keyOf[s] = key
+		end
+	end
+	game:GetService("ContentProvider"):PreloadAsync(list, function(id, status)
+		if status ~= Enum.AssetFetchStatus.Success then
+			warn("[WeaponClient] gun sound " .. id .. " didn't load (" .. status.Name .. "): pick another in Config.Sounds")
+		end
+	end)
+	local report = {}
+	for _, s in ipairs(list) do
+		table.insert(report, keyOf[s] .. string.format(" %.1fs", s.TimeLength))
+	end
+	print("[WeaponClient] gun sounds: " .. table.concat(report, ", ") .. " (0.0s = didn't load)")
+end
+
 function WeaponClient.Init()
 	-- The server makes these late in its start order: look them up in the background so the
 	-- controllers after this one never wait (every use checks they're here).
@@ -1049,8 +1120,16 @@ function WeaponClient.Init()
 	end)
 	build()
 	pcall(function()
-		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false) -- our own bar (left column)
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false) -- our own bar (bottom centre)
 	end)
+	if RunService:IsStudio() then
+		task.spawn(function()
+			local ok, err = pcall(checkSounds)
+			if not ok then
+				warn("[WeaponClient] sound check: " .. tostring(err))
+			end
+		end)
+	end
 
 	Remotes.OnClient("WeaponShot", onShot)
 	Remotes.OnClient("WeaponHit", onHit)

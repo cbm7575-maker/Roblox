@@ -29,16 +29,17 @@ Sounds.Effects = {
 	Countdown = { Id = 9114636546, Volume = 0.6, Looped = false }, -- Graphic Beeps 5 (ProSoundEffects, 0.6 s single digital beep; play once per 3-2-1 tick)
 	Checkpoint = { Id = 9126073001, Volume = 0.6, Looped = false }, -- Synth Sparkle Tone High Pitch Bell Tone Ding (ProSoundEffects, 1.2 s)
 
-	-- Weapons: PLACEHOLDERS. Id 0 = not picked yet (gun sounds couldn't be checked from here). Until an
-	-- Id is filled in, WeaponClient plays the stand-in named by Fallback, sped up by Speed and cut after
-	-- Cut seconds. To pick real ones: Studio > Toolbox > Audio, search e.g. "pistol shot", keep sounds by
-	-- Roblox or ProSoundEffects, paste the number here (see launch/6-PLAYTEST-THIS-UPDATE.md).
-	PistolShot = { Id = 0, Volume = 0.6, Looped = false, Fallback = "Crash", Speed = 2.6, Cut = 0.3 },
-	SMGShot = { Id = 0, Volume = 0.45, Looped = false, Fallback = "Crash", Speed = 3.2, Cut = 0.15 },
-	ShotgunShot = { Id = 0, Volume = 0.8, Looped = false, Fallback = "Stamp", Speed = 1.5, Cut = 0.45 },
-	RifleShot = { Id = 0, Volume = 0.8, Looped = false, Fallback = "Stamp", Speed = 2, Cut = 0.4 },
-	GunReload = { Id = 0, Volume = 0.5, Looped = false, Fallback = "Cuffs", Speed = 1.4, Cut = 0.9 },
-	GunEmpty = { Id = 0, Volume = 0.5, Looped = false, Fallback = "Click", Speed = 1.6, Cut = 0.3 },
+	-- Weapons (WeaponClient). Speed = PlaybackSpeed; Cut = seconds before a quick fade-out (trims long
+	-- tails so rapid fire doesn't pile up). Picked on 2026-10-25 from Creator Store listings credited to
+	-- @ProSoundEffects ("Courtesy of Pro Sound Effects", the same free library as the sounds above); they
+	-- couldn't be played from here, so the Cut points are estimates: tune them by ear in Studio.
+	-- Fallback = the stand-in played if an Id is ever set back to 0.
+	PistolShot = { Id = 9114692325, Volume = 0.6, Looped = false, Speed = 1, Cut = 0.7, Fallback = "Crash" }, -- Gun 9 Mm Beretta 102 (ProSoundEffects, 3.7 s 9mm pistol shot, reverberant tail: trimmed)
+	SMGShot = { Id = 9114729026, Volume = 0.45, Looped = false, Speed = 1.1, Cut = 0.25, Fallback = "Crash" }, -- Gun Single Shots 6 (ProSoundEffects, 1.5 s Mini Uzi single shot)
+	ShotgunShot = { Id = 9114726695, Volume = 0.85, Looped = false, Speed = 0.68, Cut = 0.9, Fallback = "Stamp" }, -- Gun Single Shots 5 (ProSoundEffects, AK-47 single shot) slowed into a deep boom: no clean single-shot shotgun was found (12 Gauge Shotgun 3, 9112910543, is several shots in a row)
+	RifleShot = { Id = 9114726695, Volume = 0.8, Looped = false, Speed = 0.92, Cut = 1.1, Fallback = "Stamp" }, -- Gun Single Shots 5 (ProSoundEffects, 1.6 s AK-47 single shot, shells hitting the ground)
+	GunReload = { Id = 9113104337, Volume = 0.5, Looped = false, Speed = 1.2, Fallback = "Cuffs" }, -- Ammo Magazine 3 (ProSoundEffects, 2.1 s pistol magazine eject and insert)
+	GunEmpty = { Id = 9119717523, Volume = 0.5, Looped = false, Speed = 1.6, Cut = 0.3 }, -- the Click above, sped up: a dry trigger
 
 	-- Weather / world ambience
 	Rain = { Id = 9112855439, Volume = 0.4, Looped = true }, -- Rain On Water 2 (ProSoundEffects, 36 s steady heavy rainfall, tagged "Loop")

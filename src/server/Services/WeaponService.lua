@@ -733,6 +733,28 @@ end
 
 ------------------------------------------------------------------ players
 
+-- How a gun sits in the hand: Roblox welds the Handle to the hand's RightGripAttachment (C0) and the
+-- Tool's Grip (C1). On standard R15 and R6 bodies that attachment is turned -90 degrees about X, so in
+-- the tool-holding pose (arm straight forward) the Handle's -Z (our barrels) points forward and +Y up.
+-- Some avatar bodies ship that attachment turned differently, which holds every tool backwards or
+-- sideways: put the standard turn back on spawn and on every equip (its position is kept).
+local STANDARD_GRIP = CFrame.Angles(math.rad(-90), 0, 0)
+local function normalizeGrip(char)
+	local hand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+	local att = hand and hand:FindFirstChild("RightGripAttachment")
+	if not att or not att:IsA("Attachment") then
+		return
+	end
+	local want = CFrame.new(att.Position) * STANDARD_GRIP
+	if att.CFrame ~= want then
+		att.CFrame = want
+	end
+	local weld = hand:FindFirstChild("RightGrip")
+	if weld and weld:IsA("JointInstance") and weld.C0 ~= want then
+		weld.C0 = want -- already holding a tool: fix it in place
+	end
+end
+
 local function onDied(victim)
 	local rec = lastHit[victim]
 	lastHit[victim] = nil
@@ -760,6 +782,12 @@ local function onCharacter(player, char)
 	local s = state(player)
 	s.lastHurt = -math.huge
 	local hum = char:WaitForChild("Humanoid", 10)
+	normalizeGrip(char)
+	char.ChildAdded:Connect(function(child)
+		if child:IsA("Tool") then
+			task.defer(normalizeGrip, char) -- after Roblox makes the RightGrip weld
+		end
+	end)
 	if hum and hum:IsA("Humanoid") then
 		hum.Died:Connect(function()
 			onDied(player)

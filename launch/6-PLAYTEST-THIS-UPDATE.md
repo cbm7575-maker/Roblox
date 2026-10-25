@@ -90,13 +90,20 @@ Then type `/console` in chat and check the client side for red errors too.
    - It lands in your backpack (bottom of the screen), and the tutorial gun step ticks.
    - The others show their rank locks.
 2. **Shooting, PC:** press 1 to take the gun out.
+   - Output says `[WeaponClient] Coral 9 held right`. If it says "isn't held right" instead, send me
+     that line and a screenshot.
+   - The gun points forward out of your right hand.
    - A crosshair follows your mouse, and your character turns to face where you aim.
-   - Click fires: a pink tracer, a flash and a sound.
+   - Click fires: a pink tracer, a flash and a gunshot.
    - The ammo counter (bottom right) counts down, R reloads, and an empty mag reloads by itself.
-3. **Shooting, phone:**
-   - FIRE and RELOAD buttons appear on the right, and you aim with the crosshair in the middle of the
-     screen.
-   - As police, FIRE moves left of TASER and SPIKES. Check nothing overlaps.
+3. **Shooting, phone** (Studio's device emulator works for layout; your real phone for feel):
+   - Tap the gun in the backpack bar at the bottom. FIRE and RELOAD appear on the right, with the ammo
+     count beside RELOAD, and you aim with the crosshair in the middle of the screen. Drag anywhere
+     else to turn the camera; your character turns with it.
+   - Hold FIRE on the Riptide SMG: it keeps firing. Slide your thumb off the button and lift: it
+     stops.
+   - As police, FIRE moves left of TASER and SPIKES.
+   - Nothing overlaps: I checked every button's position at 5 phone and tablet sizes.
 4. **Two players** (Clients and Servers, 2 players):
    - Player 1 shoots player 2: player 2's health bar (bottom centre) drops and the screen flashes
      red. Player 1 sees a ✕ hit marker and gets 1 star.
@@ -115,14 +122,16 @@ Then type `/console` in chat and check the client side for red errors too.
 8. **Cars:** shooting a police car gives a star and damages it, and enough shots make it smoke.
    Shooting a passive player's car does nothing.
 
-## E. Gun sounds (placeholders)
+## E. Gun sounds
 
-I couldn't check gun sound IDs from here, so the guns play sped-up stand-ins (the crash and stamp
-sounds). To use real ones:
-1. Studio > Toolbox > Audio. Search "pistol shot", "smg", "shotgun", "rifle shot" and "reload".
-2. Pick sounds made by Roblox or ProSoundEffects, right-click > Copy Asset ID.
-3. Paste each one into `src/shared/Config/Sounds.lua` (PistolShot, SMGShot, ShotgunShot, RifleShot,
-   GunReload, GunEmpty: replace the `0`), or send me the numbers.
+The guns use free ProSoundEffects sounds from the Creator Store: a 9mm pistol, a Mini Uzi, an AK-47
+single shot (also slowed down into the shotgun's boom) and a magazine reload.
+1. Press Play. Output prints `[WeaponClient] gun sounds: PistolShot 3.7s, SMGShot 1.5s, ...`.
+   - A `0.0s`, or a "didn't load" warning, means that sound is unavailable. Send me the line.
+2. Fire each gun and listen.
+   - Too long, or cut off too early: change that gun's `Cut` in `src/shared/Config/Sounds.lua`
+     (seconds before it fades out).
+   - Too high or too low: change its `Speed`.
 
 ## F. Phone performance
 
@@ -135,5 +144,5 @@ For anything that fails, send:
 - the step (e.g. C7 or D3),
 - what you saw,
 - any red Output or `/console` text,
-- a screenshot for anything visual: overlaps, heads through roofs, house interiors, the gun in your
-  hand (if it points the wrong way, tell me which way it points).
+- a screenshot for anything visual: overlaps, heads through roofs, house interiors, a gun that
+  doesn't sit right.
