@@ -51,15 +51,35 @@ local function hideoutSpots()
 	return hideouts
 end
 
+-- STASH pad positions (PropertyService's "HomeSpots": pads are in the garages, not at the door).
+local padsRaw, pads
+local function padSpots()
+	local raw = ReplicatedStorage:GetAttribute("HomeSpots") or "{}"
+	if raw ~= padsRaw then
+		padsRaw, pads = raw, {}
+		local ok, map = pcall(function()
+			return HttpService:JSONDecode(raw)
+		end)
+		for id, s in pairs(ok and type(map) == "table" and map or {}) do
+			if type(s) == "table" and type(s.p) == "table" and tonumber(s.p[1]) and tonumber(s.p[2]) then
+				pads[id] = Vector3.new(s.p[1], 0, s.p[2])
+			end
+		end
+	end
+	return pads
+end
+
 -- The nearest place to bank: the Hideout, or (with no heat: their pads need it) a home you own.
 local function bankSpot(wanted)
 	local spots = table.clone(hideoutSpots())
 	local P = not wanted and properties()
 	if P then
+		local padAt = padSpots()
 		for id in string.gmatch(player:GetAttribute("OwnedProps") or "", "[^,]+") do
 			local def = P.ById[id]
-			if def and typeof(def.Pos) == "Vector3" then
-				table.insert(spots, { name = tostring(def.Name), pos = def.Pos })
+			local pos = padAt[id] or (def and def.Pos)
+			if def and typeof(pos) == "Vector3" then
+				table.insert(spots, { name = tostring(def.Name), pos = pos })
 			end
 		end
 	end
