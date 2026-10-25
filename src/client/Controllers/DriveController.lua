@@ -8,6 +8,13 @@
 -- Crashes (a sudden loss of horizontal speed the brakes and tyres can't explain; landings only lose
 -- vertical speed) give a crash sound, a short camera shake and gamepad rumble. The damage itself is
 -- the server's (VehicleDamageService); Status.Health / Stalled / Limp mirror the car's state.
+-- Getting out: F, gamepad B or EXIT (DriveUI), the same for drivers and passengers. F has two routes on
+-- purpose: a ContextActionService action while you sit in any car seat, and a raw keyboard fallback
+-- that fires even if something else already handled the key (only a focused text box, i.e. typing in
+-- chat, stops it). Each press asks the server (RequestExitCar), once more after 0.8 s if you're still in
+-- the same seat; the server answers ExitedCar and this device lets go of the seat as well.
+-- Status.Riding = true while you sit as a passenger (DriveUI shows EXIT). A half-second check re-arms
+-- driving / riding if a seat change was ever missed (a slow-streaming car, a respawn mid-ride).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -33,10 +40,12 @@ DriveController.Input = {
 }
 DriveController.Status = {
 	Driving = false,
+	Riding = false, -- in a passenger seat (or a driver seat whose car hasn't fully arrived yet)
 	Speed = 0, -- studs/s, forward
 	MaxSpeed = 0,
 	NitroFuel = 1, -- 0..1
 	NitroActive = false,
+	NitroEmpty = false, -- nitro held but the tank has nothing to give
 	Flat = false,
 	Health = 100, -- the car's Health attribute (0-100)
 	Stalled = false,
@@ -56,6 +65,8 @@ local JUMP_STUDS = 5 -- moved this far off its predicted path: a teleport (flip,
 local state = nil
 local exitRemote = nil
 local rumbleToken = 0
+local ridingSeat = nil -- the seat while Status.Riding
+local exitAt, exitSeat = 0, nil -- the last exit request and the seat it was for
 
 local function setRumble(strength)
 	local pad = Enum.UserInputType.Gamepad1
@@ -142,6 +153,7 @@ local function physicsStep(dt)
 	status.MaxSpeed = s.Cfg.MaxSpeed
 	status.NitroFuel = phys.NitroFuel
 	status.NitroActive = phys.NitroOn
+	status.NitroEmpty = phys.NitroEmpty == true
 	status.Flat = phys.Flat
 	status.Health = phys.Health
 	status.Stalled = phys.Stalled
@@ -175,7 +187,17 @@ local function renderStep(dt)
 	local height = 5.2 + speedFrac * 1.2
 	local target = pos - dir * dist + Vector3.new(0, height, 0)
 	local lookAt = pos + flat * 8 + Vector3.new(0, 2.2, 0)
-	-- Keep the camera out of walls.
+	-- Keep the camera out of walls (never people: the ignore list picks up riders who sat down later).
+	if os.clock() - (s.CamListAt or 0) > 1 then
+		s.CamListAt = os.clock()
+		local ignore = { s.Car, Workspace:FindFirstChild("Vehicles"), Workspace:FindFirstChild("Smoke") }
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p.Character then
+				table.insert(ignore, p.Character)
+			end
+		end
+		s.CamParams.FilterDescendantsInstances = ignore
+	end
 	local toCam = target - lookAt
 	local hit = Workspace:Raycast(lookAt, toCam, s.CamParams)
 	if hit then
@@ -218,6 +240,13 @@ local function renderStep(dt)
 end
 
 local function onAction(name, inputState)
+	if name == "NC_Exit" then
+		-- Drivers and passengers alike.
+		if inputState == Enum.UserInputState.Begin then
+			DriveController.Exit()
+		end
+		return Enum.ContextActionResult.Sink
+	end
 	if not state then
 		return Enum.ContextActionResult.Pass
 	end
@@ -226,17 +255,60 @@ local function onAction(name, inputState)
 		DriveController.Input.Handbrake = held
 	elseif name == "NC_Nitro" then
 		DriveController.Input.Nitro = held
-	elseif name == "NC_Exit" and inputState == Enum.UserInputState.Begin then
-		DriveController.Exit()
 	elseif name == "NC_Flip" and inputState == Enum.UserInputState.Begin then
 		DriveController.Flip()
 	end
 	return Enum.ContextActionResult.Sink
 end
 
+-- Is this one of our cars' seats (driver or passenger)?
+local function carSeat(seat)
+	local car = seat and seat.Parent
+	return car ~= nil and car:GetAttribute("NCVehicle") == true and (seat:IsA("VehicleSeat") or seat:IsA("Seat"))
+end
+
+local function myHumanoid()
+	return player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+end
+
+-- Get out (F / B / EXIT). The server finds the seat, puts you beside the car and answers ExitedCar.
 function DriveController.Exit()
-	if exitRemote then
-		exitRemote:FireServer()
+	local hum = myHumanoid()
+	local seat = hum and hum.SeatPart
+	if not hum or not seat or not exitRemote then
+		return
+	end
+	local now = os.clock()
+	if now - exitAt < 0.25 then
+		return -- one press, two routes (CAS and the keyboard fallback)
+	end
+	exitAt, exitSeat = now, seat
+	exitRemote:FireServer()
+	task.delay(0.8, function()
+		if exitAt == now and hum.Parent and hum.SeatPart == seat then
+			if RunService:IsStudio() then
+				warn("[DriveController] still in " .. seat:GetFullName() .. " 0.8 s after asking to get out; asking again")
+			end
+			exitAt = os.clock()
+			exitRemote:FireServer() -- still in the same seat: ask once more
+		end
+	end)
+end
+
+local function startRiding(seat)
+	ridingSeat = seat
+	DriveController.Status.Riding = true
+	ContextActionService:BindActionAtPriority("NC_Exit", onAction, false, 3000, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
+end
+
+local function stopRiding()
+	if not ridingSeat then
+		return
+	end
+	ridingSeat = nil
+	DriveController.Status.Riding = false
+	if not state then
+		ContextActionService:UnbindAction("NC_Exit")
 	end
 end
 
@@ -262,9 +334,12 @@ end
 function DriveController.Start(seat)
 	local car = seat.Parent
 	if state or not car or not car:GetAttribute("NCVehicle") or not car.PrimaryPart then
-		return
+		return false
 	end
 	local chassis = car.PrimaryPart
+	if not chassis:FindFirstChild("WheelFL") or not chassis:FindFirstChild("DriveForce") then
+		return false -- not all here yet (streaming): refresh() tries again
+	end
 	local camParams = RaycastParams.new()
 	camParams.FilterType = Enum.RaycastFilterType.Exclude
 	local ignore = { car, player.Character, Workspace.Vehicles, Workspace:FindFirstChild("Smoke") }
@@ -319,6 +394,7 @@ function DriveController.Start(seat)
 	end
 	DriveController.Status.Driving = true
 	DriveController.Status.Car = car
+	return true
 end
 
 function DriveController.Stop()
@@ -339,6 +415,7 @@ function DriveController.Stop()
 	i.Handbrake, i.Nitro = false, false
 	local status = DriveController.Status
 	status.Driving, status.Car, status.Speed, status.NitroActive, status.Flat = false, nil, 0, false, false
+	status.NitroEmpty = false
 	status.Health, status.Stalled, status.Limp = 100, false, false
 	rumbleToken += 1
 	setRumble(0)
@@ -352,25 +429,109 @@ function DriveController.Stop()
 	end
 end
 
+-- Match driving / riding to the seat the character is in now. Always stop first, so switching straight
+-- from one seat to another (or a respawn) can't leave stale state.
+local function refresh()
+	local hum = myHumanoid()
+	local seat = hum and hum.Health > 0 and hum.SeatPart or nil
+	if state and seat == state.Seat then
+		return
+	end
+	if ridingSeat and seat == ridingSeat and not (seat:IsA("VehicleSeat") and seat.Name == "DriverSeat") then
+		return
+	end
+	DriveController.Stop()
+	stopRiding()
+	if seat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat" then
+		if DriveController.Start(seat) then
+			return
+		end
+		if RunService:IsStudio() then
+			warn("[DriveController] driver seat of " .. tostring(seat.Parent) .. " but the car isn't ready to drive yet; F / EXIT still work")
+		end
+	end
+	if seat and carSeat(seat) then
+		startRiding(seat) -- a passenger (or a driver whose car is still streaming in): F / EXIT still work
+	end
+end
+
+-- The server let go of us (any seat): make sure this device does too.
+local function onExited(spot)
+	local hum = myHumanoid()
+	if not hum then
+		return
+	end
+	local seat = hum.SeatPart
+	local asked = seat ~= nil and seat == exitSeat
+	if seat and not asked then
+		return -- already in another seat (put out of one car, straight into the next)
+	end
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if seat and root and root:IsA("BasePart") then
+		for _, j in ipairs(root:GetJoints()) do
+			if j:IsA("JointInstance") and j.Name == "SeatWeld" then
+				j:Destroy()
+			end
+		end
+	end
+	hum.Sit = false
+	if hum:GetState() == Enum.HumanoidStateType.Seated then
+		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+	if asked and root and root:IsA("BasePart") and typeof(spot) == "CFrame" and (root.Position - spot.Position).Magnitude > 4 then
+		root.CFrame = spot
+	end
+	exitSeat = nil
+	refresh()
+end
+
 local function watchCharacter(character)
 	local hum = character:WaitForChild("Humanoid")
-	hum:GetPropertyChangedSignal("SeatPart"):Connect(function()
-		-- Always stop first, so switching straight from one seat to another can't leave stale state.
+	hum:GetPropertyChangedSignal("SeatPart"):Connect(refresh)
+	hum.Died:Connect(function()
 		DriveController.Stop()
-		local seat = hum.SeatPart
-		if seat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat" then
-			DriveController.Start(seat)
-		end
+		stopRiding()
 	end)
-	hum.Died:Connect(DriveController.Stop)
+	refresh()
 end
 
 function DriveController.Init()
 	exitRemote = Remotes.Event("RequestExitCar")
+	Remotes.OnClient("ExitedCar", onExited)
 	if player.Character then
 		task.spawn(watchCharacter, player.Character)
 	end
 	player.CharacterAdded:Connect(watchCharacter)
+	-- Keyboard fallback for F: fires even when another binding or a prompt already took the key; not
+	-- while typing in a text box (chat).
+	UserInputService.InputBegan:Connect(function(input)
+		if input.KeyCode ~= Enum.KeyCode.F or UserInputService:GetFocusedTextBox() then
+			return
+		end
+		local hum = myHumanoid()
+		if hum and carSeat(hum.SeatPart) then
+			DriveController.Exit()
+		end
+	end)
+	-- Safety net: twice a second, re-arm driving / riding if a seat change was missed.
+	local nextCheck = 0
+	RunService.Heartbeat:Connect(function()
+		local now = os.clock()
+		if now < nextCheck then
+			return
+		end
+		nextCheck = now + 0.5
+		local hum = myHumanoid()
+		local seat = hum and hum.Health > 0 and hum.SeatPart or nil
+		local want = seat ~= nil and carSeat(seat)
+		local have = (state ~= nil and state.Seat == seat) or (ridingSeat ~= nil and ridingSeat == seat)
+		if want ~= have or (ridingSeat and seat == ridingSeat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat") then
+			local ok, err = pcall(refresh)
+			if not ok then
+				warn("[DriveController] " .. tostring(err))
+			end
+		end
+	end)
 end
 
 return DriveController

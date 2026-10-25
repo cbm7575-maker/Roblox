@@ -7,6 +7,12 @@ header comments in `src/server/Tools/CarBuilder.lua` and `src/server/Tools/BodyP
 Rebuilt on 2026-10-19 from the MeshId / TextureID values in NeonCoast.rbxl (Sep 28 save).
 The original version of this file was lost; anything else it held is not in the place file.
 
+**Boat hulls (2026-10-25):** the Splash and HarborPatrol bodies are stored turned sideways and
+squashed in the place file (their InitialSize). Config.Vehicles now has `Hull = { Turn, Size }` for
+both, so CarBuilder turns each hull about its pivot and refits it: Splash `Turn = 90`, size 5 x 5.4 x
+10; HarborPatrol `Turn = -90`, size 9.5 x 10.2 x 22. If a boat's bow faces backwards in Studio, flip
+the sign of its Turn.
+
 ## Flamingo
 
 | Part | MeshId | TextureID |

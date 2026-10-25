@@ -6,7 +6,9 @@
 --     than they can be heard are stopped.
 --   * Sirens: AI patrols that are chasing someone, and player cop cars with the siren on (H).
 --   * Horn: civilians press H; everyone nearby hears it (car attribute HonkAt, VehicleService).
---   * Your car: tyre squeal when sliding, nitro whoosh, door thunk, splash when it sinks (not boats).
+--   * Your car: tyre squeal when sliding, nitro whoosh, door thunk (any seat), splash when it sinks (not
+--     boats). The nitro whoosh starts with a boost and fades out over 0.35 s when the boost ends (tank
+--     empty or button released); holding nitro on an empty tank gives one short click, nothing more.
 --   * Heist alarms ring at a site while its AlarmUntil time runs.
 --   * Rain and thunder in storms; surf and gulls at the beach; a city hum downtown (mixed per district).
 --   * Event music: any part in Workspace.Events with a MusicId attribute (an Id from Config.Sounds.Radio,
@@ -184,6 +186,39 @@ end
 ------------------------------------------------------------------ your own car
 
 local skid, lastNitro, lastSeat, sankFor = nil, false, nil, 0
+local nitroSound, nitroFading, lastEmpty = nil, false, false
+local NITRO_FADE = 0.35
+
+-- The boost whoosh: one sound per car, restarted from the top for each new boost, faded out (never cut)
+-- when the boost ends, and stopped for good when you leave the car.
+local function nitroAudio(active, chassis, dt)
+	local def = effect("Nitro")
+	local full = def and def.Volume or 0.6
+	if nitroSound and (not nitroSound.Parent or nitroSound.Parent ~= chassis) then
+		nitroSound:Destroy()
+		nitroSound, nitroFading = nil, false
+	end
+	if active and not lastNitro and chassis then
+		nitroSound = nitroSound or newSound("Nitro", chassis)
+		if nitroSound then
+			nitroSound.Looped = false
+			nitroSound.Volume = full
+			nitroSound.TimePosition = 0
+			nitroSound:Play()
+		end
+		nitroFading = false
+	elseif not active and lastNitro then
+		nitroFading = true
+	end
+	lastNitro = active
+	if nitroFading and nitroSound then
+		nitroSound.Volume = math.max(0, nitroSound.Volume - full * dt / NITRO_FADE)
+		if nitroSound.Volume <= 0.001 then
+			nitroSound:Stop()
+			nitroFading = false
+		end
+	end
+end
 
 local function ownCarAudio(dt)
 	local DriveController = require(script.Parent.DriveController)
@@ -208,16 +243,22 @@ local function ownCarAudio(dt)
 		skid:Destroy()
 		skid = nil
 	end
-	-- Nitro whoosh on the rising edge.
-	if status.NitroActive and not lastNitro and chassis then
-		SoundClient.Play("Nitro", chassis)
+	-- Nitro whoosh while boosting; a single click when you press it on an empty tank.
+	nitroAudio(status.NitroActive == true and chassis ~= nil, chassis, dt)
+	local empty = status.NitroEmpty == true and chassis ~= nil
+	if empty and not lastEmpty then
+		SoundClient.Play("Click", nil, 0.8)
 	end
-	lastNitro = status.NitroActive
-	-- Door thunk getting in or out.
+	lastEmpty = empty
+	-- Door thunk getting in or out (driver or passenger seat).
 	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	local seat = hum and hum.SeatPart
-	if seat ~= lastSeat and (seat and seat.Name == "DriverSeat" or lastSeat and lastSeat.Name == "DriverSeat") then
-		SoundClient.Play("Door", (seat or lastSeat))
+	if seat ~= lastSeat then
+		local door = seat or lastSeat
+		local doorCar = door and door.Parent
+		if door and doorCar and doorCar:GetAttribute("NCVehicle") then
+			SoundClient.Play("Door", door)
+		end
 	end
 	lastSeat = seat
 	-- Splash when your car hits the water (boats sit in it all the time).

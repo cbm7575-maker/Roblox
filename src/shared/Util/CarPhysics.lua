@@ -10,11 +10,14 @@
 --   * Health 0: the engine stalls until StallUntil (server time; brakes and steering still work),
 --     then limp mode until repaired: 30 studs/s top speed, no nitro.
 -- Nitro fuel is kept per car (getting out and back in doesn't refill it; it recharges meanwhile).
+-- A press starts a boost only with at least MIN_BOOST seconds of fuel; the boost then burns until you let
+-- go or the tank is empty, and an empty tank stays off until nitro is released and pressed again (no
+-- on/off flicker while the button is held on an empty tank).
 --
 --   local phys = CarPhysics.New(car, { extra instances the rays should ignore })
 --   CarPhysics.Step(phys, dt, { Throttle = -1..1, Steer = -1..1, Handbrake = bool, Nitro = bool })
---   phys.FwdSpeed, phys.NitroOn, phys.NitroFuel (0..1), phys.Flat, phys.Hits, phys.Grounded,
---   phys.Health, phys.Stalled, phys.Limp
+--   phys.FwdSpeed, phys.NitroOn, phys.NitroFuel (0..1), phys.NitroEmpty (held, but nothing left to burn),
+--   phys.Flat, phys.Hits, phys.Grounded, phys.Health, phys.Stalled, phys.Limp
 --   CarPhysics.Zero(phys) when nobody drives it any more.
 -- Crash maths (pure functions, shared by DriveController's crash feedback and VehicleDamageService):
 --   CarPhysics.ImpactExcess, JoltExcess, BoxContact, PairImpact, CrashDamage.
@@ -29,6 +32,7 @@ CarPhysics.Wheels = WHEELS
 CarPhysics.SMOKE_HEALTH = 35 -- below this: smoke, x0.7 acceleration and top speed
 CarPhysics.LIMP_SPEED = 30 -- studs/s top speed at Health 0
 local DAMAGED_SCALE = 0.7
+local MIN_BOOST = 0.4 -- seconds of fuel a new boost needs to start
 
 -- Nitro left in each car when it was last driven (weak keys: forgotten when the car goes).
 local fuelLeft = setmetatable({}, { __mode = "k" }) -- [car] = seconds of boost
@@ -77,6 +81,8 @@ function CarPhysics.New(car, ignore)
 		Fuel = fuel, -- seconds of boost left
 		NitroFuel = fuel / tank,
 		NitroOn = false,
+		NitroEmpty = false,
+		NitroLock = false, -- the tank ran dry during this press: off until nitro is released
 		FwdSpeed = 0,
 		Steer = 0,
 		Flat = false,
@@ -123,15 +129,17 @@ function CarPhysics.Step(phys, dt, input)
 		throttle = 0 -- engine off: the brakes still work, the gas and reverse don't
 	end
 
-	-- Nitro fuel is in seconds of boost.
-	local nitroOn = input.Nitro == true and phys.Fuel > 0 and throttle > 0.1 and not wrecked
-	if nitroOn then
-		phys.Fuel = math.max(0, phys.Fuel - dt)
-	else
-		phys.Fuel = math.min(cfg.NitroSeconds, phys.Fuel + dt * cfg.NitroSeconds / cfg.NitroRecharge)
+	-- Nitro fuel is in seconds of boost. Keep burning once started; a fresh start needs MIN_BOOST.
+	local wantNitro = input.Nitro == true
+	if not wantNitro then
+		phys.NitroLock = false
 	end
-	fuelLeft[car] = phys.Fuel
-	fuelAt[car] = os.clock()
+	local canBoost = throttle > 0.1 and not wrecked
+	local nitroOn = wantNitro and canBoost and not phys.NitroLock and phys.Fuel > 0
+		and (phys.NitroOn or phys.Fuel >= math.min(MIN_BOOST, cfg.NitroSeconds))
+	if wantNitro and canBoost and not nitroOn then
+		phys.NitroLock = true -- pressed on a near-empty tank: stays off until the button is let go
+	end
 	local maxSpeed = cfg.MaxSpeed * (nitroOn and cfg.NitroSpeed or 1) * (input.SpeedScale or 1)
 	local accel = cfg.Accel * (nitroOn and cfg.NitroAccel or 1)
 	if health < CarPhysics.SMOKE_HEALTH then
@@ -260,6 +268,18 @@ function CarPhysics.Step(phys, dt, input)
 	end
 	phys.DriveForce.Force = drive
 
+	-- Burn or recharge the fuel (after the boat check: a beached boat gets no boost and burns none).
+	if nitroOn then
+		phys.Fuel = math.max(0, phys.Fuel - dt)
+		if phys.Fuel <= 0 then
+			phys.NitroLock = true -- ran dry: stays off until the button is let go
+		end
+	else
+		phys.Fuel = math.min(cfg.NitroSeconds, phys.Fuel + dt * cfg.NitroSeconds / cfg.NitroRecharge)
+	end
+	fuelLeft[car] = phys.Fuel
+	fuelAt[car] = os.clock()
+
 	-- Steering (yaw rate) and keeping upright
 	local W, H, L = phys.Size.X, phys.Size.Y, phys.Size.Z
 	local yawInertia = mass * (L * L + W * W) / 12
@@ -282,6 +302,7 @@ function CarPhysics.Step(phys, dt, input)
 
 	phys.FwdSpeed = fwdSpeed
 	phys.NitroOn = nitroOn
+	phys.NitroEmpty = wantNitro and canBoost and not nitroOn
 	phys.NitroFuel = phys.Fuel / cfg.NitroSeconds
 	phys.Steer = steer
 	phys.Flat = flat

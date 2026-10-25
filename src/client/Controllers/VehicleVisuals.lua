@@ -7,18 +7,17 @@
 --   * Police light bars flash while the siren is on (or while an AI patrol chases someone), also on
 --     the parked cars of police roadblocks (Workspace.Roadblocks).
 --   * Brake lights brighten while a car slows down hard.
---   * Prompts: "Drive" only on your own car (or the hot car you stole) while it's empty; "Ride" only
---     for the owner's crewmates while the passenger seat is free (both local-only toggles).
+--   * Prompts: "Drive" only on your own car (or the hot car you stole) while it's empty; "Ride" for the
+--     owner's crewmates and Roblox friends on the same side (never prisoners) while any passenger seat
+--     is free (both local-only toggles; VehicleService checks again). Friendship is looked up once per
+--     player in the background (Player:IsFriendsWith yields), never inside the prompt loop.
+--   Getting out (F / EXIT) is DriveController's, for drivers and passengers alike.
 -- Cheap on purpose: cars within 350 studs, at most 30 updates a second, each car's parts looked up
 -- once, one shared ray filter, prompts 10 times a second.
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-
-local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 
 local player = Players.LocalPlayer
 
@@ -42,6 +41,29 @@ local BLACK = Color3.new(0, 0, 0)
 -- [car] = cached parts and visual state. Records never reference the car itself (weak keys).
 local cache = setmetatable({}, { __mode = "k" })
 local accum, promptAccum = 0, 0
+
+-- [userId] = true / false once known (nil = not asked yet, false while the lookup runs).
+local friendOf = {}
+local function isFriend(userId)
+	local known = friendOf[userId]
+	if known == nil then
+		friendOf[userId] = false
+		task.spawn(function()
+			local ok, res = pcall(player.IsFriendsWith, player, userId)
+			if ok then
+				friendOf[userId] = res == true
+			else
+				task.delay(30, function()
+					if friendOf[userId] == false then
+						friendOf[userId] = nil -- the web call failed: ask again later
+					end
+				end)
+			end
+		end)
+		return false
+	end
+	return known
+end
 
 -- One shared filter for every wheel ray: cars and smoke clouds never hold a wheel up.
 local params = RaycastParams.new()
@@ -68,6 +90,12 @@ local function partsOf(car, now)
 	rec.seat, rec.pseat = seat, pseat
 	rec.prompt = seat and seat:FindFirstChild("DrivePrompt")
 	rec.ride = pseat and pseat:FindFirstChild("RidePrompt")
+	rec.pseats = {}
+	for _, d in ipairs(car:GetChildren()) do
+		if d:IsA("Seat") and (d:GetAttribute("Passenger") or d.Name == "PassengerSeat") then
+			table.insert(rec.pseats, d)
+		end
+	end
 	rec.rest = car:GetAttribute("RestLength") or 1.4
 	rec.radius = car:GetAttribute("WheelRadius") or 1.2
 	local complete = seat ~= nil
@@ -114,11 +142,24 @@ local function updatePrompts(car, rec)
 			prompt.Enabled = show
 		end
 	end
-	local ride, pseat = rec.ride, rec.pseat
+	local ride = rec.ride
 	if ride and ride.Parent then
 		local owner = Players:GetPlayerByUserId(car:GetAttribute("OwnerUserId") or 0)
-		local crew = player:GetAttribute("Crew")
-		local show = pseat.Occupant == nil and owner ~= nil and owner ~= player and crew ~= nil and owner:GetAttribute("Crew") == crew
+		local show = false
+		local me = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if owner and owner ~= player and me and me.SeatPart == nil then
+			local side = player:GetAttribute("Side")
+			local crew = player:GetAttribute("Crew")
+			if side ~= "Prisoner" and side == owner:GetAttribute("Side")
+				and ((crew ~= nil and owner:GetAttribute("Crew") == crew) or isFriend(owner.UserId)) then
+				for _, s in ipairs(rec.pseats) do
+					if s.Occupant == nil and not s:GetAttribute("NPCRider") then
+						show = true
+						break
+					end
+				end
+			end
+		end
 		if ride.Enabled ~= show then
 			ride.Enabled = show
 		end
@@ -308,15 +349,8 @@ local function visit(car, dt, camPos, now, doPrompts, myChar)
 end
 
 function VehicleVisuals.Init()
-	-- Passengers get out with F (drivers use DriveController's own binding); jumping works too.
-	UserInputService.InputBegan:Connect(function(input, processed)
-		if processed or input.KeyCode ~= Enum.KeyCode.F then
-			return
-		end
-		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if hum and hum.SeatPart and hum.SeatPart.Name == "PassengerSeat" then
-			Remotes.Event("RequestExitCar"):FireServer()
-		end
+	Players.PlayerRemoving:Connect(function(p)
+		friendOf[p.UserId] = nil
 	end)
 	refreshFilter()
 	Workspace.ChildAdded:Connect(function(child)

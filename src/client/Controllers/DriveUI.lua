@@ -4,6 +4,7 @@
 --     car is damaged (STALLED / LIMP written on it at zero).
 --   * Touch devices: big GAS and BRAKE pedals, NITRO and DRIFT buttons, EXIT, and FLIP when the car
 --     is upside down. Steering stays on Roblox's thumbstick (it feeds the seat's SteerFloat).
+--   * Riding as a passenger: only the EXIT button (every device; F works too).
 -- Pedals override the throttle so the thumbstick only steers. Icons first, very few words.
 -- Labels and bars are only rewritten when what they show changes.
 
@@ -277,12 +278,16 @@ end
 local wasDriving = false
 local shown: { [string]: any } = {} -- what each label/bar shows now; cleared whenever driving starts
 
+local wasRiding = false
+
 local function update()
 	local status = DriveController.Status
 	local driving = status.Driving
-	if driving ~= wasDriving then
-		wasDriving = driving
-		gui.Enabled = driving
+	local riding = status.Riding and not driving
+	if driving ~= wasDriving or riding ~= wasRiding then
+		wasDriving, wasRiding = driving, riding
+		gui.Enabled = driving or riding
+		gauge.Visible = driving
 		table.clear(shown)
 		if not driving then
 			held.Gas, held.Brake = false, false
@@ -290,6 +295,8 @@ local function update()
 				r()
 			end
 			DriveController.Input.Throttle = nil
+			touchFrame.Visible = false
+			flipButton.Visible = false
 		end
 	end
 	if not driving then

@@ -4,7 +4,12 @@
 --   * Crewmates see each other's name tags through walls and on the minimap (CrewClient).
 --   * Crew bonus: +20% heist cash when a crewmate is within 150 studs (HeistService asks CrewBonus).
 --   * Friend bonus: +10% heist cash while any Roblox friend is in the server (attribute FriendBonus).
---   * Crewmates can ride in each other's cars (VehicleService passenger seat checks SameCrew).
+--   * Crewmates and Roblox friends can ride in each other's cars (VehicleService asks MayRide).
+--   CrewService.AreFriends(a, b): cached Roblox friendship (never yields; false until looked up).
+--   CrewService.FriendsAsync(a, b): the same, looking it up on a miss (Player:IsFriendsWith yields).
+--   CrewService.MayRide(rider, owner): same crew or friends (may yield on a first lookup).
+--   Every pair of players in the server is looked up once when the later one joins (cache cleared on
+--   leave), so a Ride press almost never waits.
 -- State: player attribute "Crew" = crew id (string), ReplicatedStorage attribute "Crews" = JSON
 -- { [crewId] = { userIds } } so every client can draw tags.
 -- Remotes: RequestCrew(action, targetUserId) with action "Invite" | "Accept" | "Decline" | "Leave";
@@ -28,6 +33,7 @@ CrewService.CrewBonus = 0.2
 CrewService.FriendBonus = 0.1
 
 local crews = {} -- [crewId] = { members = { player, ... } }
+local friends = {} -- [lowUserId][highUserId] = bool (Player:IsFriendsWith answers, both ways)
 local invites = {} -- [targetPlayer] = { from = player, crewId = id or nil, at = os.clock() }
 local nextId = 0
 local notify, inviteEvent
@@ -52,6 +58,43 @@ end
 function CrewService.SameCrew(a, b)
 	local id = a:GetAttribute("Crew")
 	return id ~= nil and id == b:GetAttribute("Crew")
+end
+
+local function pairKey(a, b)
+	local x, y = a.UserId, b.UserId
+	if x > y then
+		x, y = y, x
+	end
+	return x, y
+end
+
+function CrewService.AreFriends(a, b)
+	local x, y = pairKey(a, b)
+	return friends[x] ~= nil and friends[x][y] == true
+end
+
+function CrewService.FriendsAsync(a, b)
+	if a == b then
+		return false
+	end
+	local x, y = pairKey(a, b)
+	local known = friends[x] and friends[x][y]
+	if known ~= nil then
+		return known
+	end
+	local ok, res = pcall(a.IsFriendsWith, a, b.UserId)
+	if not ok then
+		return false -- web hiccup: don't cache, ask again next time
+	end
+	if a.Parent == Players and b.Parent == Players then
+		friends[x] = friends[x] or {}
+		friends[x][y] = res == true
+	end
+	return res == true
+end
+
+function CrewService.MayRide(rider, owner)
+	return CrewService.SameCrew(rider, owner) or CrewService.FriendsAsync(rider, owner)
 end
 
 local function leave(player)
@@ -174,12 +217,11 @@ local function onRequest(player, action, targetUserId)
 	end
 end
 
--- Friend bonus: any Roblox friend in the same server.
+-- Friend bonus: any Roblox friend in the same server. Fills the friend cache for every new pair.
 local function checkFriends(player)
 	for _, other in ipairs(Players:GetPlayers()) do
-		if other ~= player then
-			local ok, isFriend = pcall(player.IsFriendsWith, player, other.UserId)
-			if ok and isFriend then
+		if other ~= player and player.Parent == Players then
+			if CrewService.FriendsAsync(player, other) then
 				player:SetAttribute("FriendBonus", true)
 				other:SetAttribute("FriendBonus", true)
 			end
@@ -187,16 +229,14 @@ local function checkFriends(player)
 	end
 end
 
+-- After someone leaves: who still has a friend here (cached answers only, no web calls).
 local function recheckFriendBonus()
 	for _, p in ipairs(Players:GetPlayers()) do
 		local any = false
 		for _, other in ipairs(Players:GetPlayers()) do
-			if other ~= p then
-				local ok, isFriend = pcall(p.IsFriendsWith, p, other.UserId)
-				if ok and isFriend then
-					any = true
-					break
-				end
+			if other ~= p and CrewService.AreFriends(p, other) then
+				any = true
+				break
 			end
 		end
 		p:SetAttribute("FriendBonus", any or nil)
@@ -210,9 +250,16 @@ function CrewService.Init()
 	Players.PlayerAdded:Connect(function(p)
 		task.spawn(checkFriends, p)
 	end)
+	for _, p in ipairs(Players:GetPlayers()) do
+		task.spawn(checkFriends, p) -- players already here when the service started
+	end
 	Players.PlayerRemoving:Connect(function(p)
 		leave(p)
 		invites[p] = nil
+		friends[p.UserId] = nil
+		for _, row in pairs(friends) do
+			row[p.UserId] = nil
+		end
 		for target, inv in pairs(invites) do
 			if inv.from == p then
 				invites[target] = nil

@@ -2,7 +2,10 @@
 -- Honest work for citizens: the taxi shift (delivery jobs reuse the same flow later).
 --   * Drive your own car onto the Taxi Stand (Workspace.Activities.TaxiStand) and press E.
 --   * A passenger waits beside a road 250-800 studs away. Stop next to them (within 18 studs, under
---     6 studs/s) and they hop in.
+--     6 studs/s) and they hop in: they ride visibly in a free passenger seat (VehicleService.SeatNPC, a
+--     pedestrian look from PedService), and get out and walk off, fading, at their stop. With every seat
+--     taken by real players they just vanish into the car as before. A fare whose car goes away, whose
+--     shift ends or whose driver leaves is removed with it.
 --   * Drive them to their stop (500-1400 studs away) and stop there: paid Base + PerStud x route length,
 --     plus a Tip if you beat the estimate (Config.Activities.Jobs; about $500 a minute). The next fare
 --     comes automatically.
@@ -14,6 +17,8 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local ServerStorage = game:GetService("ServerStorage")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local Activities = require(ReplicatedStorage.Shared.Config.Activities)
@@ -21,6 +26,8 @@ local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
+local VehicleService = require(ServerScriptService.Services.VehicleService)
+local CarBuilder = require(ServerStorage.Tools.CarBuilder)
 
 local JobService = {}
 
@@ -34,7 +41,7 @@ local SHOPS = { "Sunny Side Donuts", "Palmetto Pets", "Taco Wave", "Coco's Cocon
 	"Glow-Up Nails", "Deke's Bait & Tackle", "Frozen Flamingo", "Seashell Suds", "Barnacle Bob's" }
 local DEPOT_POS = Vector3.new(560, 0, 640)
 
-local shifts = {} -- [player] = { stage, passenger, pickup, drop, pickedAt, est, name, outOfCarSince }
+local shifts = {} -- [player] = { stage, passenger, riderSeat, riderCar, riderConn, pickup, drop, pickedAt, est, name, outOfCarSince }
 local jobEvent
 local rng = Random.new()
 
@@ -78,16 +85,38 @@ local function roadsideSpot(from, minD, maxD)
 end
 
 local function spawnPassenger(pos, name)
-	local ok, model = pcall(function()
-		local desc = Instance.new("HumanoidDescription")
-		local skin = { Color3.fromRGB(255, 220, 185), Color3.fromRGB(205, 160, 120), Color3.fromRGB(140, 95, 65), Color3.fromRGB(90, 60, 45) }
-		local c = skin[rng:NextInteger(1, #skin)]
-		desc.HeadColor, desc.LeftArmColor, desc.RightArmColor = c, c, c
-		desc.LeftLegColor, desc.RightLegColor, desc.TorsoColor = c, c, c
-		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
-	end)
+	-- A pedestrian look (PedService's templates), else a plain rig.
+	local looks = ReplicatedStorage:FindFirstChild("PedTemplates")
+	local list = looks and looks:GetChildren() or {}
+	local ok, model = false, nil
+	if #list > 0 then
+		ok, model = pcall(function()
+			return list[rng:NextInteger(1, #list)]:Clone()
+		end)
+	end
 	if not ok or not model then
+		ok, model = pcall(function()
+			local desc = Instance.new("HumanoidDescription")
+			local skin = { Color3.fromRGB(255, 220, 185), Color3.fromRGB(205, 160, 120), Color3.fromRGB(140, 95, 65), Color3.fromRGB(90, 60, 45) }
+			local c = skin[rng:NextInteger(1, #skin)]
+			desc.HeadColor, desc.LeftArmColor, desc.RightArmColor = c, c, c
+			desc.LeftLegColor, desc.RightLegColor, desc.TorsoColor = c, c, c
+			return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+		end)
+	end
+	if not ok or not model or not model:FindFirstChild("HumanoidRootPart") or not model:FindFirstChildOfClass("Humanoid") then
+		if ok and model then
+			model:Destroy()
+		end
 		return nil
+	end
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("BaseScript") then
+			d:Destroy()
+		elseif d:IsA("BasePart") then
+			d.CanCollide = false
+			d.CanTouch = false
+		end
 	end
 	model.Name = "Passenger"
 	local root = model:FindFirstChild("HumanoidRootPart")
@@ -96,11 +125,116 @@ local function spawnPassenger(pos, name)
 	local hum = model:FindFirstChildOfClass("Humanoid")
 	hum.DisplayName = name
 	hum.NameDisplayDistance = 200
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer
+	model:SetAttribute("HipHeight", hum.HipHeight)
 	local folder = Workspace:FindFirstChild("NPCs") or Instance.new("Folder")
 	folder.Name = "NPCs"
 	folder.Parent = Workspace
 	model.Parent = folder
 	return model
+end
+
+-- A fare stepping out at the kerb: out of the seat, a few steps away from the car while fading, gone.
+-- Anchored the whole time (never pushed, never knocked over). No room to stand: they just fade.
+local walkParams = RaycastParams.new()
+walkParams.FilterType = Enum.RaycastFilterType.Exclude
+local function walkOff(model, car, seat)
+	local root = model:FindFirstChild("HumanoidRootPart")
+	local chassis = car and car.PrimaryPart
+	VehicleService.ReleaseNPC(model, seat)
+	if not root or not root:IsA("BasePart") or not chassis or not seat then
+		model:Destroy()
+		return
+	end
+	local rel = chassis.CFrame:PointToObjectSpace(seat.Position)
+	local side = rel.X >= 0 and 1 or -1
+	local away = chassis.CFrame.RightVector * Vector3.new(1, 0, 1) * side
+	away = away.Magnitude > 0.1 and away.Unit or Vector3.new(1, 0, 0)
+	local door = chassis.CFrame * Vector3.new(side * (chassis.Size.X / 2 + 2.2), 0, rel.Z)
+	local ignore = { car, model }
+	local npcs = Workspace:FindFirstChild("NPCs")
+	if npcs then
+		table.insert(ignore, npcs)
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then
+			table.insert(ignore, p.Character)
+		end
+	end
+	walkParams.FilterDescendantsInstances = ignore
+	local ground = Workspace:Raycast(door + Vector3.new(0, 5, 0), Vector3.new(0, -16, 0), walkParams)
+	local lift = (model:GetAttribute("HipHeight") or 2) + root.Size.Y / 2
+	root.Anchored = true
+	local fadeAfter, fadeFor = 0, 0.8
+	if ground and ground.Material ~= Enum.Material.Water then
+		local stand = ground.Position + Vector3.new(0, lift, 0)
+		model:PivotTo(CFrame.lookAt(stand, stand + away))
+		-- Walk on only if nothing is in the way.
+		if not Workspace:Raycast(stand, away * 8, walkParams) then
+			local animator = model:FindFirstChildWhichIsA("Animator", true)
+			if animator and animator:IsA("Animator") then
+				for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+					track:Stop(0.2)
+				end
+			end
+			CarBuilder.PlayPose(model, "walk")
+			local to = stand + away * 8
+			TweenService:Create(root, TweenInfo.new(2.6, Enum.EasingStyle.Linear), { CFrame = CFrame.lookAt(to, to + away) }):Play()
+			fadeAfter, fadeFor = 1.4, 1.2
+		end
+	end
+	for _, d in ipairs(model:GetDescendants()) do
+		if (d:IsA("BasePart") and d ~= root) or d:IsA("Decal") then
+			TweenService:Create(d, TweenInfo.new(fadeFor, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, fadeAfter), { Transparency = 1 }):Play()
+		end
+	end
+	task.delay(fadeAfter + fadeFor + 0.1, function()
+		model:Destroy()
+	end)
+end
+
+-- The shift's passenger goes: walks off if they're in a car that's still here, else just vanishes.
+local function removePassenger(s, gently)
+	local model, seat, car = s.passenger, s.riderSeat, s.riderCar
+	s.passenger, s.riderSeat, s.riderCar = nil, nil, nil
+	if s.riderConn then
+		s.riderConn:Disconnect()
+		s.riderConn = nil
+	end
+	if not model then
+		return
+	end
+	if gently and seat and car and car.Parent and model.Parent then
+		local ok, err = pcall(walkOff, model, car, seat)
+		if not ok then
+			warn("[JobService] walk off: " .. tostring(err))
+			model:Destroy()
+		end
+	else
+		if seat then
+			VehicleService.ReleaseNPC(model, seat)
+		end
+		model:Destroy()
+	end
+end
+
+-- Pick-up: the fare takes a free passenger seat (visible to everyone); no free seat, they vanish inside.
+local function boardPassenger(s, car)
+	local model = s.passenger
+	if not model then
+		return
+	end
+	local seat = model.Parent and VehicleService.SeatNPC(car, model)
+	if not seat then
+		removePassenger(s, false)
+		return
+	end
+	s.riderSeat, s.riderCar = seat, car
+	s.riderConn = car.Destroying:Connect(function()
+		if s.passenger == model then
+			removePassenger(s, false)
+		end
+	end)
 end
 
 local function endShift(player, reason)
@@ -109,9 +243,7 @@ local function endShift(player, reason)
 		return
 	end
 	shifts[player] = nil
-	if s.passenger and s.passenger.Parent then
-		s.passenger:Destroy()
-	end
+	removePassenger(s, true)
 	player:SetAttribute("JobKind", nil)
 	jobEvent:FireClient(player, "Ended", { Reason = reason, Fares = s.fares or 0, Earned = s.earned or 0 })
 end
@@ -156,9 +288,7 @@ local function tick()
 	for player, s in pairs(shifts) do
 		if player.Parent ~= Players then
 			shifts[player] = nil
-			if s.passenger then
-				s.passenger:Destroy()
-			end
+			removePassenger(s, false)
 		elseif player:GetAttribute("Side") ~= "Civilian" then
 			endShift(player, "Side") -- switched to cop (the 10 s out-of-car grace must not carry a shift over)
 		elseif (player:GetAttribute("Heat") or 0) > 0 then
@@ -176,10 +306,7 @@ local function tick()
 				local speed = chassis.AssemblyLinearVelocity.Magnitude
 				if s.stage == "pickup" then
 					if (flat(chassis.Position) - flat(s.pickup)).Magnitude < STOP_RADIUS and speed < STOP_SPEED then
-						if s.passenger then
-							s.passenger:Destroy()
-							s.passenger = nil
-						end
+						boardPassenger(s, car)
 						local drop = roadsideSpot(chassis.Position, DROP_MIN, DROP_MAX)
 						if not drop then
 							return endShift(player, "NoFares")
@@ -213,6 +340,7 @@ local function tick()
 						s.earned += pay
 						player:SetAttribute("Fares", (player:GetAttribute("Fares") or 0) + 1)
 						jobEvent:FireClient(player, "Paid", { Pay = pay, Tip = tip, Name = s.name, Took = took, Kind = s.kind })
+						removePassenger(s, true) -- out at the kerb, a few steps, gone
 						s.stage = "waiting"
 						task.delay(2, function()
 							if shifts[player] == s then
@@ -302,10 +430,10 @@ function JobService.Init()
 	end)
 	Players.PlayerRemoving:Connect(function(p)
 		local s = shifts[p]
-		if s and s.passenger then
-			s.passenger:Destroy()
-		end
 		shifts[p] = nil
+		if s then
+			removePassenger(s, false)
+		end
 	end)
 end
 
