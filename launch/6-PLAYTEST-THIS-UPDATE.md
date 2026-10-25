@@ -102,7 +102,7 @@ Then type `/console` in chat and check the client side for red errors too.
      red. Player 1 sees a ✕ hit marker and gets 1 star.
    - Keep shooting: player 2 falls apart, respawns at home or the spawn after about 5 s, and the feed
      says "took down".
-5. **PASSIVE:** tap PASSIVE (next to CAR).
+5. **PASSIVE:** tap PASSIVE (next to PHONE).
    - Nobody can hurt you, you can't shoot, and others see a 🛡 over your head.
    - It can't be turned on with stars or within 15 s of a fight. Getting a star turns it off.
 6. **Police:** go on duty: you carry a Duty Pistol only.

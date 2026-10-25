@@ -8,7 +8,7 @@
 --     it with WeaponFire; tracers, muzzle flashes and sounds play here at once. Other players' shots
 --     arrive as WeaponShot; WeaponHit(downed) flashes the hit marker.
 --   * HUD: ammo, a health bar (bottom centre, while hurt or holding a gun), a red flash when hurt, the PASSIVE
---     button next to CAR (citizens on foot), and a small shield over passive players' heads.
+--     button next to PHONE (citizens on foot), and a small shield over passive players' heads.
 --   * The gun store screen opens when the server says so (WeaponStore, from the counter prompt).
 --     Buying: BuyWeapon(id), tap twice to confirm.
 --   * Messages from the server: WeaponNotice(key, arg) (texts in NOTICES below).
@@ -49,7 +49,7 @@ local NOTICES = {
 	PassiveOn = { "PASSIVE on: nobody can shoot you, and you can't shoot.", MINT },
 	PassiveOff = { "PASSIVE off: you can shoot and be shot. Hitting players brings the police.", PINK },
 	PassiveLost = { "You're wanted, so PASSIVE is off.", RED },
-	ShotTip = { "Being shot? Tap PASSIVE (next to CAR) and nobody can hurt you.", CYAN },
+	ShotTip = { "Don't want to fight? 15 s after the shooting stops, tap PASSIVE (next to PHONE) and nobody can hurt you.", CYAN },
 	StoreCitizens = { "Go off duty to buy guns (PHONE > JOBS).", CYAN },
 	StoreTooFar = { "Walk up to the counter to buy.", GOLD },
 	StoreOwned = { "You already own the %s.", GOLD },
@@ -382,7 +382,7 @@ local function startReload()
 		return
 	end
 	local tool, def = e.tool, e.def
-	if reloading[tool] or (mags[tool] or def.Mag) >= def.Mag then
+	if reloading[tool] or (mags[tool] or def.Mag) >= def.Mag or not reloadEvent then
 		return
 	end
 	local done = os.clock() + def.Reload
@@ -400,6 +400,10 @@ local function startReload()
 	end)
 end
 
+local function stunned(hum)
+	return hum.PlatformStand or (player:GetAttribute("StunnedUntil") or 0) > Workspace:GetServerTimeNow()
+end
+
 local function fire()
 	local e = equipped
 	if not e or phoneOpen() then
@@ -407,13 +411,13 @@ local function fire()
 	end
 	local tool, def = e.tool, e.def
 	local _, hum, root, head = myParts()
-	if not hum or hum.SeatPart then
+	if not hum or hum.SeatPart or stunned(hum) then
 		return
 	end
 	if player:GetAttribute("Passive") == true then
 		if os.clock() - lastPassiveTip > 3 then
 			lastPassiveTip = os.clock()
-			NotifyController.Show("PASSIVE is on: tap PASSIVE (next to CAR) to fight.", MINT)
+			NotifyController.Show("PASSIVE is on: tap PASSIVE (next to PHONE) to fight.", MINT)
 		end
 		return
 	end
@@ -445,7 +449,9 @@ local function fire()
 		table.insert(shots, { e = hitAt, p = r and r.Instance or nil })
 		table.insert(ends, hitAt)
 	end
-	fireEvent:FireServer(def.Id, origin, shots)
+	if fireEvent then
+		fireEvent:FireServer(def.Id, origin, shots)
+	end
 	shotEffects(def, tool, origin, ends)
 	if mags[tool] <= 0 then
 		startReload()
@@ -548,14 +554,18 @@ local function refreshButtons()
 	if not show then
 		holding = false
 	end
-	local h = gui.AbsoluteSize.Y
+	local w, h = gui.AbsoluteSize.X, gui.AbsoluteSize.Y
 	local b = math.floor(math.clamp(h * 0.17, 64, 120))
 	local copShift = player:GetAttribute("Side") == "Cop" and math.floor(h * 0.11) + 12 or 0
+	-- Roblox's touch jump button: 120 px with its top at H - 210 when the short side is over 500 px,
+	-- else 70 px with its top at H - 90. FIRE's centre sits at 0.6H, or higher to stay clear of it.
+	local jumpTop = math.min(w, h) > 500 and h - 210 or h - 90
+	local cy = math.floor(math.min(h * 0.6, jumpTop - b / 2 - 8))
 	fireButton.Size = UDim2.fromOffset(b, b)
-	fireButton.Position = UDim2.new(1, -24 - copShift, 0.6, 0)
+	fireButton.Position = UDim2.new(1, -24 - copShift, 0, cy)
 	reloadButton.Size = UDim2.fromOffset(math.floor(b * 0.6), math.floor(b * 0.6))
-	reloadButton.Position = UDim2.new(1, -24 - copShift - b - 10, 0.6, math.floor(b * 0.2))
-	ammoLabel.Position = touch and UDim2.new(1, -24 - copShift, 0.6, -math.floor(b / 2) - 34)
+	reloadButton.Position = UDim2.new(1, -24 - copShift - b - 10, 0, cy + math.floor(b * 0.2))
+	ammoLabel.Position = touch and UDim2.new(1, -24 - copShift, 0, cy - math.floor(b / 2) - 34)
 		or UDim2.new(1, -24, 1, -24)
 	ammoLabel.AnchorPoint = touch and Vector2.new(1, 0) or Vector2.new(1, 1)
 	-- Health: above the backpack bar on foot, above DriveUI's speed gauge (0.13H tall, 18 px up) seated.
@@ -633,7 +643,7 @@ local function build()
 
 	passiveButton = Instance.new("TextButton")
 	passiveButton.Name = "PassiveButton"
-	passiveButton.Position = UDim2.fromOffset(108, 188) -- next to CAR (HUDController: 16..100, y 188)
+	passiveButton.Position = UDim2.fromOffset(200, 188) -- the CAR row: CAR 16..100 (HUD), PHONE 108..192 (PhoneUI)
 	passiveButton.Size = UDim2.fromOffset(96, 40)
 	passiveButton.BackgroundColor3 = DARK
 	passiveButton.BackgroundTransparency = 0.15
@@ -649,7 +659,9 @@ local function build()
 	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
 	pad.Parent = passiveButton
 	passiveButton.Activated:Connect(function()
-		passiveEvent:FireServer(player:GetAttribute("Passive") ~= true)
+		if passiveEvent then
+			passiveEvent:FireServer(player:GetAttribute("Passive") ~= true)
+		end
 	end)
 
 	local function round(name, text, color)
@@ -868,7 +880,9 @@ refreshStore = function()
 				end
 				if storeArmed[def.Id] and os.clock() - storeArmed[def.Id] < 3 then
 					storeArmed[def.Id] = nil
-					buyEvent:FireServer(def.Id)
+					if buyEvent then
+						buyEvent:FireServer(def.Id)
+					end
 				else
 					storeArmed[def.Id] = os.clock()
 					task.delay(3.1, refreshStore)
@@ -997,8 +1011,12 @@ local function step()
 	end
 	local p = screenAimPoint()
 	crosshair.Position = UDim2.fromOffset(p.X, p.Y)
-	if phoneOpen() then
+	if phoneOpen() or stunned(hum) then
 		holding = false
+		if rotated then -- let the taser knock them down
+			hum.AutoRotate = true
+			rotated = false
+		end
 		return
 	end
 	-- Face where you aim (only turning, never moving).
@@ -1021,10 +1039,14 @@ local function step()
 end
 
 function WeaponClient.Init()
-	fireEvent = Remotes.Event("WeaponFire")
-	reloadEvent = Remotes.Event("WeaponReload")
-	buyEvent = Remotes.Event("BuyWeapon")
-	passiveEvent = Remotes.Event("SetPassive")
+	-- The server makes these late in its start order: look them up in the background so the
+	-- controllers after this one never wait (every use checks they're here).
+	task.spawn(function()
+		fireEvent = Remotes.Event("WeaponFire")
+		reloadEvent = Remotes.Event("WeaponReload")
+		buyEvent = Remotes.Event("BuyWeapon")
+		passiveEvent = Remotes.Event("SetPassive")
+	end)
 	build()
 	pcall(function()
 		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false) -- our own bar (left column)

@@ -59,6 +59,7 @@ local function state(player)
 		s = {
 			mags = {}, -- [id] = shots left
 			reloadUntil = {}, -- [id] = os.clock() the reload finishes
+			lastShotAt = {}, -- [id] = os.clock() of the last accepted shot
 			lastFire = -math.huge,
 			lastHurt = -math.huge,
 			lastHeat = -math.huge,
@@ -495,8 +496,14 @@ local function onFire(player, id, origin, shots)
 	if side == "Prisoner" or (def.CopOnly and side ~= "Cop") or (not def.CopOnly and side ~= "Civilian") then
 		return
 	end
+	if (player:GetAttribute("StunnedUntil") or 0) > now() then
+		return -- tased
+	end
 	local s = state(player)
 	local t = os.clock()
+	if t - (s.lastShotAt[id] or -math.huge) < 0.5 / def.Rate then
+		return -- two shots at once (the rate bucket alone would allow a burst of 2)
+	end
 	local reloadEnd = s.reloadUntil[id]
 	if reloadEnd then
 		if reloadEnd > t + 0.15 then
@@ -512,12 +519,13 @@ local function onFire(player, id, origin, shots)
 		return
 	end
 	s.mags[id] -= 1
+	s.lastShotAt[id] = t
 	s.lastFire = t
 	if player:GetAttribute("SpawnShield") then
 		player:SetAttribute("SpawnShield", nil)
 	end
-	if (origin - head.Position).Magnitude > Weapons.MaxOriginOffset then
-		origin = head.Position
+	if (origin - head.Position).Magnitude > Weapons.MaxOriginOffset or not clearLine(head.Position, origin) then
+		origin = head.Position -- never start a shot on the far side of a wall
 	end
 
 	local ends = {}
@@ -536,7 +544,8 @@ local function onFire(player, id, origin, shots)
 			table.insert(ends, e)
 			local part = shot.p
 			if dist > 0.1 and typeof(part) == "Instance" and part:IsA("BasePart") and part:IsDescendantOf(Workspace)
-				and (part.Position - e).Magnitude <= part.Size.Magnitude / 2 + Weapons.HitSlack and clearLine(origin, e) then
+				and (part.Position - e).Magnitude <= part.Size.Magnitude / 2 + Weapons.HitSlack and clearLine(origin, e)
+				and clearLine(e, part.Position) then -- the hit point must be on the target, not on a wall in front
 				local victim = playerOf(part)
 				if victim and victim ~= player then
 					local mult = part.Name == "Head" and def.HeadMult or 1
@@ -692,7 +701,7 @@ local function buildStore()
 			k:Box(x - 1.6, 9.7 - i % 2 * 3, Z1 - 0.95, x + 1.6, 10.3 - i % 2 * 3, Z1 - 0.75, rgb(20, 20, 26), M.SmoothPlastic, { n = "Display" })
 		end
 	end
-	k:Banner(0, 13, Z1 - 0.9, 180, 20, 1.6, "PASSIVE players can't be shot. Switch it by the CAR button.", CYAN, { back = trim })
+	k:Banner(0, 13, Z1 - 0.9, 180, 20, 1.6, "PASSIVE players can't be shot. Switch it next to PHONE.", CYAN, { back = trim })
 	k:Light(-7, H - 0.3, -2, C.Warm, 22, 1.2)
 	k:Light(7, H - 0.3, -2, C.Warm, 22, 1.2)
 	k:Light(0, H - 0.3, 8, PINK, 20, 1)
