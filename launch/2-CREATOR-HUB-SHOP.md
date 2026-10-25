@@ -50,7 +50,12 @@ Cash4=
 Cash5=
 ```
 
-Until an ID is filled in, its shop button says "Coming soon", so nothing breaks in the meantime.
+Until an ID is filled in, the shop shows the price from the table above and its button says
+"Coming soon" for players, so nothing breaks in the meantime. Once an ID is in, the shop shows the
+live price from Roblox.
 
-**Test purchases in Studio, not in the live game.** In Studio, purchase prompts are test purchases
-and cost nothing. In the live game, even the owner pays real Robux.
+**Free for you.** In Studio every pass and cash pack has a FREE (Studio) button: no Roblox prompt,
+granted instantly. In a live server the game's owner (you, or the owner of the group that owns the
+game) gets every pass automatically on join, and each cash pack has a FREE (owner) button. So you
+never see the real purchase prompt yourself: to test a real purchase, ask a friend (or use a second
+account) once the IDs are in. Everyone else pays real Robux.

@@ -12,18 +12,21 @@ in the group chat right away using the template at the bottom, with a screenshot
 
 | Time | What | Who | Watch for |
 |---|---|---|---|
-| 0:00-0:20 | Join, do the tutorial (phone, car, rob, bank) | Everyone fresh | Anyone stuck or confused? Got the $500 bonus? |
-| 0:20-1:00 | Robbers vs cops: rob Glow Mart / Fuel Stop / ATMs, cops chase with taser (T), spikes (G), cuffs | 1-2 cops, rest robbers; swap every 15 min | Heat stars, alarms, AI police at high heat, arrests, prison timer, vent breakout |
+| 0:00-0:20 | Join, do the tutorial (car, rob, escape, bank, buy your first gun, phone) | Everyone fresh | Anyone stuck or confused? Got the $500 bonus? Nobody sees a role picker |
+| 0:20-0:50 | Crime and police: rob Glow Mart / Fuel Stop / ATMs; 1-2 people go on duty (PHONE > JOBS) and chase with taser (T), spikes (G), cuffs and the duty pistol | Swap who's on duty every 15 min | Heat stars, alarms, AI police at high heat, arrests, prison timer, vent breakout |
+| 0:50-1:00 | Guns and PASSIVE: shoot each other with PASSIVE off, then turn PASSIVE on and try again; ride in each other's cars (friends can ride without a crew) | Everyone | Hits, health, takedowns, respawning, the 🛡 over passive players, stars for shooting |
 | 1:00-1:40 | Crew heists: Sea Dream yacht (2+ people, disable the alarm panel first), Coastal Bank (2+ people, rank 3+, cut the fuse box, opens every 15 min) | Robbers in a crew (PHONE > CREW) | Crew cash split, multi-step heists, cops getting alerts |
 | 1:40-2:20 | Everything else: 3 street races + Surf Sprint (boats), 8 stunt jumps, drift zone on Lighthouse Key, taxi and courier jobs, 5 phone missions, car meet, jet skis | Free roam | Race countdowns with several players, checkpoints, payouts |
-| 2:20-2:40 | Garage: buy a car, paint, rims, underglow; Spray & Go and the hideout wardrobe while wanted | Everyone | Money taken once, car looks right for everyone |
+| 2:20-2:40 | Garage and homes: buy a car, paint, rims, underglow (each colour is paid once per car); buy a home, park in its garage, stash a bag on its pad; Spray & Go and the hideout wardrobe while wanted | Everyone | Money taken once, car looks right for everyone, home doors only open for owners |
 | 2:40-3:00 | Stress: everyone in one spot, pile-ups, traffic rams, 4 cars at once | Everyone | Lag, cars flung, players stuck |
 
-**Save check (last 5 minutes):** everyone writes down their cash and car list, leaves, rejoins
-(ideally a different server), and checks nothing was lost. Leaving while carrying a bag loses the
-bag on purpose; banked cash must stay.
+**Save check (last 5 minutes):** everyone writes down their cash, cars, paints, guns and homes,
+leaves, rejoins (ideally a different server), and checks nothing was lost. Home owners should spawn
+inside their home. Leaving while carrying a bag loses the bag on purpose; banked cash must stay.
 
-Don't buy passes or cash packs in this test: it costs real Robux. Purchases get tested in Studio.
+**Purchases:** you, as the owner, get every pass and cash pack free, so you can't test a real purchase
+yourself. Once the IDs are in (launch/2), ask one friend to buy the cheapest cash pack (49 Robux) to
+prove real purchases work end to end. Nobody else needs to buy anything.
 
 ## Bug report template
 

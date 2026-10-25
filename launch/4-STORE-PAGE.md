@@ -8,15 +8,16 @@ thumbnails or ad keywords, and no real car brands.
 
 **Neon Coast**
 
-## Description (paste as is; about 900 characters, under Roblox's 1,000 limit)
+## Description (paste as is; 960 characters, under Roblox's 1,000 limit)
 
 ```
-Welcome to Port Solana, a neon beach city on the coast. 🌴
+Welcome to Port Solana, a neon beach city. 🌴
 
-Drive, race, pull stunts and work jobs, or rob a store if you dare. Commit a crime and you're Wanted: players on the police job and AI patrol cars come after you. Lose them, bank your bag at the Hideout, and spend it on faster cars and more neon.
+Free roam: drive, race, work jobs and buy a home (up to a $1.2M mansion), or rob a store if you dare. Commit a crime and you're Wanted: players on the police job and AI patrol cars come after you. Lose them, bank your bag and spend it on cars, homes and neon. Everything you earn is saved.
 
 🚨 Heists: Glow Mart, Fuel Stop, ATMs, Sparkle & Co., Club Nova, the Sea Dream yacht and the Coastal Bank vault
-🚓 Police: tasers, spike strips and cuffs. No guns, just chases
+🔫 Gun store, plus PASSIVE mode so nobody can shoot you
+🚓 Police job: tasers, spike strips, cuffs and a duty pistol
 🏎️ 12 cars and 3 boats to drive, paint and light up with underglow
 🏁 Street races, a boat race, 8 stunt jumps, a drift zone, taxi and courier jobs, phone missions and a car meet
 👥 Crews of up to 4 for bigger payouts

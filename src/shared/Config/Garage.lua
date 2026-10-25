@@ -1,6 +1,12 @@
 -- Garage (ModuleScript, ReplicatedStorage.Shared.Config.Garage)
 -- Car ownership and customising prices (Game Design Spec). Cars are bought from the phone's
 -- "AutoNeon" app and delivered to your garage; the phone's Garage app spawns and customises them.
+-- Paint and rims are owned per car: a colour costs PaintPrice (a rim style RimPrice) once for that
+-- car, then switching back to it is free. A car's stock paint (index 0) and stock rims (StockRim)
+-- are always owned; pass and unlock entries cost nothing once allowed. Underglow is installed once
+-- per car (UnderglowPrice), then every allowed glow colour is free. GarageService charges by
+-- Garage.StyleCost on the server; the phone shows the same numbers.
+-- Saved customisations store indices into Paints / Glows / Rims: these lists are append-only.
 
 local Garage = {}
 
@@ -24,6 +30,38 @@ Garage.StarterCars = { "Palmetto", "SunrayPatrol", "Splash", "HarborPatrol" } --
 Garage.PaintPrice = 500
 Garage.UnderglowPrice = 3000
 Garage.RimPrice = 1500
+Garage.StockRim = 1 -- Chrome: the rims every car is built with (CarBuilder), always owned
+
+-- Short "what unlocks this" words for a locked swatch on the phone (pass key or unlock key).
+Garage.NeedText = {
+	VIP = "VIP", NeonGarage = "NEON",
+	Streak7 = "7 DAYS", CivRank10 = "RANK 10", CopRank10 = "COP 10", GusHunter = "ALL GUS", Rank20 = "RANK 20",
+}
+
+function Garage.Needs(entry)
+	local key = entry.Pass or entry.Unlock
+	return key and (Garage.NeedText[key] or "LOCKED") or nil
+end
+
+-- What picking entry `index` of Garage[kind] ("Paints" or "Rims") costs on a car whose owned set is
+-- `owned` ({ ["3"] = true }; string keys so DataStores save it as a dictionary). 0 = free, nil = no
+-- such entry. Pass / unlock gating is separate (Garage.Allowed).
+function Garage.StyleCost(kind, index, owned)
+	if kind ~= "Paints" and kind ~= "Rims" then
+		return nil
+	end
+	if (kind == "Paints" and index == 0) or (kind == "Rims" and index == Garage.StockRim) then
+		return 0
+	end
+	local entry = Garage[kind][index]
+	if not entry then
+		return nil
+	end
+	if entry.Pass or entry.Unlock or (owned and owned[tostring(index)]) then
+		return 0
+	end
+	return kind == "Paints" and Garage.PaintPrice or Garage.RimPrice
+end
 
 Garage.Paints = {
 	{ Name = "Flamingo", Color = Color3.fromRGB(255, 120, 190) },

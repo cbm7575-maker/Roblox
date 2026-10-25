@@ -1,16 +1,22 @@
 -- PhoneUI (ModuleScript, StarterPlayerScripts.Controllers.PhoneUI)
--- The in-game phone (PHONE button, P, or D-pad down on a gamepad). Apps:
---   GARAGE    your cars for your current role: DELIVER (spawn), paint $500, rims $800,
---             underglow $3,000 once per car (then free colour swaps; not on boats)
+-- The in-game phone (PHONE button, P, or D-pad down on a gamepad; tap anywhere around it to put it
+-- away). Apps:
+--   GARAGE    your cars for your current role (bought, starter, pass and cop-rank cars): DELIVER
+--             (spawn) and STYLE. Paint and rims are owned per car: a new colour $500 / rim style
+--             $1,500 once, then switching back is free; stock paint and chrome rims always owned.
+--             Underglow $3,000 once per car, then free colour swaps (boats: paint only). Every swatch
+--             shows its price, OWNED, ON or what unlocks it; buying takes a second tap.
 --   AUTONEON  the car dealer: stats, prices, BUY (tap twice to confirm)
 --   GPS       races, stunts, jobs, services and heist sites (open ones marked): sets a road route
---   JOBS      switch between citizen and police; phone missions for your side
---   HOMES     safehouses (Config.Properties): price or OWNED / HOME, rent waiting, rank needed,
+--   JOBS      police duty (GO ON DUTY / GO OFF DUTY via RequestTeam), jobs, phone missions for your side
+--   HOMES     homes (Config.Properties): features, price or OWNED / HOME, rent waiting, rank needed,
 --             SHOW ME and SET HOME (RequestProperty "SetHome"). Buying and rent happen at the door.
 --   GOALS     ranks, Gus figurines found, today's challenges
 --   FEED      every Coast Feed post (FeedController.History); the tile shows how many are new
---   SHOP      game passes and cash packs (prices read live from the Creator Hub)
--- The server decides everything (GarageService, VehicleService, PropertyService); this only asks.
+--   SHOP      every game pass and cash pack with its price (live from Roblox once the Id is real,
+--             else Config.Shop's). FREE buttons in Studio and for the game's owner ("ShopFree").
+-- The server decides everything (GarageService, VehicleService, PropertyService, ShopService,
+-- TeamService); this only asks and shows what the server mirrors into attributes.
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -27,6 +33,7 @@ local Shop = require(ReplicatedStorage.Shared.Config.Shop)
 local Progression = require(ReplicatedStorage.Shared.Config.Progression)
 local Missions = require(ReplicatedStorage.Shared.Config.Missions)
 local Garage = require(ReplicatedStorage.Shared.Config.Garage)
+local TeamsConfig = require(ReplicatedStorage.Shared.Config.Teams)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 local GPSClient = require(script.Parent:WaitForChild("GPSClient"))
@@ -50,12 +57,15 @@ local WHITE = Color3.new(1, 1, 1)
 local FONT = Enum.Font.FredokaOne
 local DESIGN_W = 360
 
-local gui, phone, screen, titleLabel, backButton, clockLabel, cashLabel, openButton, fit, homeBar
-local page -- current page name
+local gui, phone, screen, titleLabel, backButton, clockLabel, cashLabel, openButton, fit, homeBar, backdrop
+local current = "Home" -- page on screen (a PAGES key)
 local back -- function to go back, or nil on the home screen
 local detailId -- car shown on the Garage detail page
 local gpsTab = "Activity"
 local confirmBuy = { id = nil, at = 0 }
+local pendingBuy = { key = nil, at = 0 } -- the swatch armed by a first tap (customPage)
+local dutyAskedAt = -math.huge -- when JOBS last asked to go on / off duty
+local phoneTouchAt = -math.huge -- last tap that began on the phone itself (never closes it)
 
 local money = HUDController.Money
 
@@ -160,6 +170,13 @@ local function owned()
 	for id in string.gmatch(player:GetAttribute("OwnedCars") or "", "[^,]+") do
 		set[id] = true
 	end
+	-- Pass cars and cop-rank cars are yours while the pass / rank holds (GarageService.Owns).
+	local copRank = player:GetAttribute("CopRank") or 0
+	for _, def in ipairs(Vehicles.List) do
+		if (def.Pass and player:GetAttribute("Pass_" .. def.Pass)) or (def.UnlockCopRank and copRank >= def.UnlockCopRank) then
+			set[def.Id] = true
+		end
+	end
 	return set
 end
 
@@ -170,6 +187,23 @@ local function customOf(id)
 	end
 	local a, b, c = string.match(s, "(%d+),(%d+),?(%d*)")
 	return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
+end
+
+-- Paints and rims bought for this car (GarageService mirrors "Style_<id>" = "3,5;2"), as sets with
+-- string keys, the same shape Garage.StyleCost takes.
+local function styleOf(id)
+	local s = player:GetAttribute("Style_" .. id)
+	local paints, rims = {}, {}
+	if type(s) == "string" then
+		local p, r = string.match(s, "^([%d,]*);([%d,]*)$")
+		for n in string.gmatch(p or "", "%d+") do
+			paints[n] = true
+		end
+		for n in string.gmatch(r or "", "%d+") do
+			rims[n] = true
+		end
+	end
+	return paints, rims
 end
 
 -- Player-facing role names (the Side values stay "Civilian" / "Cop" / "Prisoner").
@@ -196,7 +230,6 @@ local show -- forward declaration
 
 local function setHeader(title, backTo)
 	titleLabel.Text = title
-	page = title
 	back = backTo
 	backButton.Visible = backTo ~= nil
 end
@@ -305,60 +338,170 @@ local function garagePage()
 	end
 end
 
-local function swatchRow(parent, title, price, items, current, order, onPick)
-	local lines = math.ceil(#items / 8)
-	local r = row(parent, 40 + lines * 34, order)
+-- Tap twice to buy a swatch (like the dealer's BUY): the first tap on a swatch that costs money arms
+-- it for CONFIRM_TIME seconds ("TAP AGAIN: $500"), a second tap on the same swatch buys it.
+local CONFIRM_TIME = 4
+local SWATCH_W, SWATCH_H, CHIP, PER_LINE = 55, 66, 40, 5 -- 5 x 55 + 4 x 4 fits the 294 px grid
+
+local function armed(key)
+	return key ~= nil and pendingBuy.key == key and os.clock() - pendingBuy.at < CONFIRM_TIME
+end
+
+-- One customising section: a title, a status line (the price rule, or "TAP AGAIN: $500 (Sunset)")
+-- and a grid of swatches with a caption under each: its price, OWNED / STOCK / FREE, ON (on the car
+-- now) or what unlocks it (with a lock). cells[i] = { Color, Name, Caption, CaptionColor, Current,
+-- Locked, Price, Key, Pick }.
+local function swatchRow(parent, title, note, cells, order)
+	local lines = math.ceil(#cells / PER_LINE)
+	local gridH = lines * SWATCH_H + math.max(0, lines - 1) * 6
+	local r = row(parent, 56 + gridH + 10, order)
 	r.Name = title
-	label(r, title, UDim2.new(0.6, 0, 0, 24), UDim2.fromOffset(10, 6))
-	label(r, price, UDim2.new(0.34, 0, 0, 22), UDim2.new(0.64, -8, 0, 7), GOLD, Enum.TextXAlignment.Right)
+	label(r, string.upper(title), UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6))
+	local status = label(r, note, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 32), LAVENDER)
+	status.Name = "Status"
 	local holder = Instance.new("Frame")
-	holder.Size = UDim2.new(1, -20, 0, lines * 34)
-	holder.Position = UDim2.fromOffset(10, 34)
+	holder.Size = UDim2.new(1, -20, 0, gridH)
+	holder.Position = UDim2.fromOffset(10, 56)
 	holder.BackgroundTransparency = 1
 	holder.Parent = r
 	local grid = Instance.new("UIGridLayout")
-	grid.CellSize = UDim2.fromOffset(28, 28)
-	grid.CellPadding = UDim2.fromOffset(6, 6)
+	grid.CellSize = UDim2.fromOffset(SWATCH_W, SWATCH_H)
+	grid.CellPadding = UDim2.fromOffset(4, 6)
 	grid.SortOrder = Enum.SortOrder.LayoutOrder
 	grid.Parent = holder
-	for i, item in ipairs(items) do
+	for i, cell in ipairs(cells) do
 		local b = Instance.new("TextButton")
 		b.Name = "Swatch" .. i
-		b.Text = Garage.Allowed(player, item) and "" or "🔒"
-		b.TextScaled = true
-		b.BackgroundColor3 = item.Color
+		b.Text = ""
+		b.AutoButtonColor = false
+		b.BackgroundTransparency = 1
 		b.LayoutOrder = i
 		b.Parent = holder
-		corner(b, UDim.new(0.5, 0))
-		stroke(b, i == current and WHITE or DARK, i == current and 3 or 1)
+		local chip = Instance.new("Frame")
+		chip.Name = "Chip"
+		chip.Size = UDim2.fromOffset(CHIP, CHIP)
+		chip.Position = UDim2.fromOffset((SWATCH_W - CHIP) / 2, 2)
+		chip.BackgroundColor3 = cell.Color
+		chip.Parent = b
+		corner(chip, UDim.new(0.5, 0))
+		local ring = stroke(chip, cell.Current and WHITE or DARK, cell.Current and 4 or 1)
+		if cell.Locked then
+			label(chip, "🔒", UDim2.fromScale(0.6, 0.6), UDim2.fromScale(0.2, 0.2), WHITE, Enum.TextXAlignment.Center)
+		end
+		local cap = label(b, cell.Caption, UDim2.new(1, 0, 0, 18), UDim2.fromOffset(0, CHIP + 6), cell.CaptionColor,
+			Enum.TextXAlignment.Center)
+		cap.Name = "Caption"
+		local function arm()
+			ring.Color, ring.Thickness = GOLD, 4
+			cap.Text, cap.TextColor3 = "AGAIN", GOLD
+			status.Text = "TAP AGAIN: " .. money(cell.Price) .. " (" .. tostring(cell.Name) .. ")"
+			status.TextColor3 = GOLD
+		end
+		if cell.Price and armed(cell.Key) then
+			arm()
+		end
 		b.Activated:Connect(function()
-			onPick(i, item)
+			require(script.Parent:WaitForChild("SoundClient")).Play("Click")
+			if cell.Current then
+				return -- already on the car
+			end
+			if cell.Locked or not cell.Price then
+				cell.Pick() -- free (or locked: the server says what unlocks it)
+				return
+			end
+			if armed(cell.Key) then
+				pendingBuy.key = nil
+				cell.Pick()
+				return
+			end
+			local other = armed(pendingBuy.key)
+			local key, at = cell.Key, os.clock()
+			pendingBuy.key, pendingBuy.at = key, at
+			if other then
+				show("Custom") -- disarm the other swatch (this one is drawn armed)
+			else
+				arm()
+			end
+			task.delay(CONFIRM_TIME, function()
+				if pendingBuy.key == key and pendingBuy.at == at then
+					pendingBuy.key = nil
+					if phone.Visible and current == "Custom" then
+						show("Custom")
+					end
+				end
+			end)
 		end)
 	end
+	return r
+end
+
+-- A paint or rim swatch: what it costs on this car (Garage.StyleCost, the server's own rule), and
+-- whether it's on the car, locked, owned or for sale.
+local function styleCell(kind, def, index, entry, wearing, ownedSet, remote)
+	local cell = { Color = entry.Color, Name = entry.Name, Key = kind .. ":" .. def.Id .. ":" .. index }
+	local cost = Garage.StyleCost(kind, index, ownedSet) or 0
+	local stock = (kind == "Paints" and index == 0) or (kind == "Rims" and index == Garage.StockRim)
+	if index == wearing then
+		cell.Current, cell.Caption, cell.CaptionColor = true, "ON", WHITE
+	elseif not Garage.Allowed(player, entry) then
+		cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", ORANGE
+	elseif cost > 0 then
+		cell.Price, cell.Caption, cell.CaptionColor = cost, money(cost), GOLD
+	else
+		cell.Caption, cell.CaptionColor = stock and "STOCK" or "OWNED", MINT
+	end
+	cell.Pick = function()
+		Remotes.Event(remote):FireServer(def.Id, index)
+	end
+	return cell
 end
 
 local function customPage()
 	local def = Vehicles.ById[detailId]
 	if not def then
-		return show("Garage")
+		show("Garage")
+		return
 	end
 	setHeader(string.upper(def.DisplayName or def.Id), "Garage")
 	local paint, glow, rim = customOf(def.Id)
+	local paints, rims = styleOf(def.Id)
 	local s = list(0.02)
-	swatchRow(s, "Paint", money(Garage.PaintPrice), Garage.Paints, paint, 1, function(i)
-		Remotes.Event("RequestPaint"):FireServer(def.Id, i)
-	end)
-	swatchRow(s, "Rims", money(Garage.RimPrice), Garage.Rims, rim, 2, function(i)
-		Remotes.Event("RequestRims"):FireServer(def.Id, i)
-	end)
-	if not def.Boat then -- no underglow on boats (the server refuses it too)
-		local glowPrice = glow > 0 and "FREE SWAP" or money(Garage.UnderglowPrice)
-		swatchRow(s, "Underglow", glowPrice, Garage.Glows, glow, 3, function(i)
-			Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
-		end)
+	-- Paint: the car's own colour first (always owned), then every Garage paint.
+	local stockColor = typeof(def.Color) == "Color3" and def.Color or Color3.fromRGB(200, 200, 210)
+	local cells = { styleCell("Paints", def, 0, { Name = "Stock", Color = stockColor }, paint, paints, "RequestPaint") }
+	for i, entry in ipairs(Garage.Paints) do
+		table.insert(cells, styleCell("Paints", def, i, entry, paint, paints, "RequestPaint"))
+	end
+	swatchRow(s, "Paint", "New colour " .. money(Garage.PaintPrice) .. " once · switch back free", cells, 1)
+	if not def.Boat then -- boats have no wheels and no underglow (the server refuses both too)
+		cells = {}
+		for i, entry in ipairs(Garage.Rims) do
+			table.insert(cells, styleCell("Rims", def, i, entry, rim > 0 and rim or Garage.StockRim, rims, "RequestRims"))
+		end
+		swatchRow(s, "Rims", "New rims " .. money(Garage.RimPrice) .. " once · switch back free", cells, 2)
+		local installed = glow > 0
+		cells = {}
+		for i, entry in ipairs(Garage.Glows) do
+			local cell = { Color = entry.Color, Name = entry.Name, Key = "Glows:" .. def.Id .. ":" .. i }
+			if installed and i == glow then
+				cell.Current, cell.Caption, cell.CaptionColor = true, "ON", WHITE
+			elseif not Garage.Allowed(player, entry) then
+				cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", ORANGE
+			elseif not installed then
+				cell.Price, cell.Caption, cell.CaptionColor = Garage.UnderglowPrice, "INSTALL", GOLD
+			else
+				cell.Caption, cell.CaptionColor = "FREE", MINT
+			end
+			cell.Pick = function()
+				Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
+			end
+			table.insert(cells, cell)
+		end
+		swatchRow(s, "Underglow", installed and "Installed ✓ · colour swaps are free"
+			or ("Install once " .. money(Garage.UnderglowPrice) .. " · then every colour free"), cells, 3)
 	end
 	local hint = label(s, "Changes show on this car next time it's delivered (or right away if it's out).",
-		UDim2.new(1, 0, 0, 36), nil, Color3.fromRGB(200, 190, 230), Enum.TextXAlignment.Center)
+		UDim2.new(1, 0, 0, 36), nil, LAVENDER, Enum.TextXAlignment.Center)
 	hint.LayoutOrder = 4
 	hint.TextWrapped = true
 end
@@ -496,16 +639,29 @@ local function jobsPage()
 	setHeader("JOBS", "Home")
 	local s = list(0.02)
 	local side = player:GetAttribute("Side") or "Civilian"
-	local r = row(s, 90, 1)
-	label(r, "You are: " .. (ROLE[side] or ROLE.Civilian), UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 8),
-		side == "Cop" and CYAN or PINK)
-	button(r, "SWITCH ROLE", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 44), PURPLE, function()
-		PhoneUI.Close()
-		local TeamUI = require(script.Parent:WaitForChild("TeamUI"))
-		if TeamUI.Open then
-			TeamUI.Open()
+	-- Police duty: an optional job. TeamService checks heat, the cooldown and the cop cap, and says
+	-- why in a toast; a switch respawns you at your side's spawn with its starter car.
+	local cop = side == "Cop"
+	local cops = 0
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p:GetAttribute("Side") == "Cop" then
+			cops += 1
 		end
-	end)
+	end
+	local r = row(s, 132, 1)
+	r.Name = "Duty"
+	label(r, cop and "🚓 ON DUTY: POLICE" or "🚓 POLICE (OPTIONAL JOB)", UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), CYAN)
+	local blurb = label(r, cop and "Chase wanted players for bounties. Off duty, you roam as a citizen again."
+		or "Chase wanted players and earn bounties. You'll start at the station with a patrol car.",
+		UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 32), LAVENDER)
+	blurb.TextWrapped = true
+	label(r, "Cops on duty: " .. cops .. " / " .. TeamsConfig.MaxCops(#Players:GetPlayers()), UDim2.new(1, -20, 0, 16),
+		UDim2.fromOffset(10, 68), cop and CYAN or LAVENDER)
+	button(r, cop and "GO OFF DUTY" or "GO ON DUTY (POLICE)", UDim2.new(1, -20, 0, 34), UDim2.new(0, 10, 1, -42),
+		cop and PINK or CYAN, function()
+			dutyAskedAt = os.clock()
+			Remotes.Event("RequestTeam"):FireServer(cop and "Civilian" or "Cop")
+		end).Name = "Duty"
 	local jobs = {
 		{ "Taxi driver", "Pick up passengers, drop them off fast for tips.", "Taxi Stand" },
 		{ "Street racer", "Beat par on 3 routes. Set a best time!", "Ocean Drive Sprint" },
@@ -563,72 +719,113 @@ end
 
 ------------------------------------------------------------------ shop
 
-local priceCache = {} -- [id] = "R$ 499" (read live: prices are never hard-coded)
-local function priceText(id, infoType)
-	if id == 0 then
-		return "SOON"
+local GREY = Color3.fromRGB(70, 60, 100)
+local priceCache = {} -- [id] = Robux price read live from Roblox
+
+local function robux(n)
+	return "R$ " .. string.sub(money(n), 2)
+end
+
+-- The price to show: live from Roblox once the item exists (Managed Pricing, price changes), else the
+-- starting price in Config.Shop. Yields (web call): run it in its own thread.
+local function livePrice(item, infoType)
+	if item.Id == 0 then
+		return item.Price
 	end
-	if priceCache[id] then
-		return priceCache[id]
+	if priceCache[item.Id] == nil then
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, item.Id, infoType)
+		if ok and type(info) == "table" and type(info.PriceInRobux) == "number" then
+			priceCache[item.Id] = info.PriceInRobux
+		end
 	end
-	local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, id, infoType)
-	if ok and info and info.PriceInRobux then
-		priceCache[id] = "R$ " .. info.PriceInRobux
-		return priceCache[id]
+	return priceCache[item.Id] or item.Price
+end
+
+-- The price label: the config price right away, the live one when it arrives.
+local function priceLabel(parent, item, infoType, size, pos, align)
+	local l = label(parent, item.Price and robux(item.Price) or "", size, pos, MINT, align)
+	l.Name = "Price"
+	if item.Id ~= 0 then
+		task.spawn(function()
+			local price = livePrice(item, infoType)
+			if l.Parent and type(price) == "number" then
+				l.Text = robux(price)
+			end
+		end)
 	end
-	return "BUY"
+	return l
+end
+
+-- BUY / FREE / OWNED / COMING SOON. kind = "Pass" | "Product" (ShopService's RequestShopFree kinds).
+local function shopButton(parent, size, pos, kind, item, owns, soonText)
+	local free = player:GetAttribute("ShopFree") -- "Studio" | "Owner" | nil, set by ShopService
+	local text, color, click
+	if owns then
+		text, color = "OWNED ✓", GREY
+	elseif free == "Studio" or free == "Owner" then
+		text, color = free == "Studio" and "FREE (Studio)" or "FREE (owner)", MINT
+		click = function()
+			Remotes.Event("RequestShopFree"):FireServer(kind, item.Key)
+		end
+	elseif item.Id ~= 0 then
+		text, color = "BUY", kind == "Pass" and PURPLE or PINK
+		click = function()
+			if kind == "Pass" then
+				MarketplaceService:PromptGamePassPurchase(player, item.Id)
+			else
+				MarketplaceService:PromptProductPurchase(player, item.Id)
+			end
+		end
+	else
+		text, color = "COMING SOON", GREY
+		click = function()
+			NotifyController.Show(soonText, PURPLE)
+		end
+	end
+	local b = button(parent, text, size, pos, color, click)
+	b.Name = "Buy"
+	return b
 end
 
 local function shopPage()
 	setHeader("SHOP", "Home")
 	local s = list(0.02)
+	local free = player:GetAttribute("ShopFree")
+	if free == "Studio" or free == "Owner" then
+		local banner = label(s, free == "Studio" and "🧪 STUDIO TEST: everything here is free and instant."
+			or "👑 Your game: every pass is on, and cash packs are free for you.", UDim2.new(1, 0, 0, 36), nil, GOLD,
+			Enum.TextXAlignment.Center)
+		banner.TextWrapped = true
+		banner.LayoutOrder = 0
+	end
+	local head = label(s, "GAME PASSES", UDim2.new(1, 0, 0, 24), nil, PURPLE:Lerp(WHITE, 0.35), Enum.TextXAlignment.Center)
+	head.LayoutOrder = 1
 	for i, pass in ipairs(Shop.Passes) do
-		local r = row(s, 96, i)
+		local r = row(s, 116, 1 + i)
 		r.Name = pass.Key
 		label(r, pass.Icon, UDim2.fromOffset(40, 40), UDim2.fromOffset(8, 10), WHITE, Enum.TextXAlignment.Center)
-		label(r, pass.Name, UDim2.new(0.6, 0, 0, 24), UDim2.fromOffset(54, 8), GOLD)
-		local perk = label(r, pass.Perk, UDim2.new(1, -64, 0, 30), UDim2.fromOffset(54, 34), Color3.fromRGB(200, 190, 230))
+		label(r, pass.Name, UDim2.new(0.7, -64, 0, 24), UDim2.fromOffset(54, 8), GOLD)
+		priceLabel(r, pass, Enum.InfoType.GamePass, UDim2.new(0.3, 0, 0, 22), UDim2.new(0.7, -10, 0, 9), Enum.TextXAlignment.Right)
+		local perk = label(r, pass.Perk, UDim2.new(1, -64, 0, 36), UDim2.fromOffset(54, 34), LAVENDER)
 		perk.TextWrapped = true
-		local owned = player:GetAttribute("Pass_" .. pass.Key) == true
-		local b = button(r, owned and "OWNED" or "…", UDim2.new(0.4, 0, 0, 24), UDim2.new(0.6, -10, 1, -30),
-			owned and Color3.fromRGB(70, 60, 100) or PURPLE, function()
-				if not owned and pass.Id ~= 0 then
-					MarketplaceService:PromptGamePassPurchase(player, pass.Id)
-				elseif pass.Id == 0 then
-					NotifyController.Show(pass.Name .. " is coming soon!", PURPLE)
-				end
-			end)
-		b.Name = "Buy"
-		if not owned then
-			task.spawn(function()
-				local text = priceText(pass.Id, Enum.InfoType.GamePass)
-				if b.Parent then
-					b.Text = text
-				end
-			end)
-		end
+		shopButton(r, UDim2.new(0.5, 0, 0, 32), UDim2.new(0.5, -10, 1, -40), "Pass", pass,
+			player:GetAttribute("Pass_" .. pass.Key) == true, pass.Name .. " is coming soon!")
 	end
-	local head = label(s, "CASH PACKS", UDim2.new(1, 0, 0, 26), nil, MINT, Enum.TextXAlignment.Center)
-	head.LayoutOrder = 50
+	local head2 = label(s, "CASH PACKS", UDim2.new(1, 0, 0, 24), nil, MINT, Enum.TextXAlignment.Center)
+	head2.LayoutOrder = 50
 	for i, product in ipairs(Shop.Products) do
-		local r = row(s, 48, 50 + i)
+		local r = row(s, 56, 50 + i)
 		r.Name = product.Key
-		label(r, "💵 " .. money(product.Cash), UDim2.new(0.55, 0, 0, 26), UDim2.fromOffset(10, 11), MINT)
-		local b = button(r, "…", UDim2.new(0.36, 0, 0, 30), UDim2.new(0.62, -6, 0, 9), PINK, function()
-			if product.Id ~= 0 then
-				MarketplaceService:PromptProductPurchase(player, product.Id)
-			else
-				NotifyController.Show("Cash packs are coming soon!", PINK)
-			end
-		end)
-		b.Name = "Buy"
-		task.spawn(function()
-			local text = priceText(product.Id, Enum.InfoType.Product)
-			if b.Parent then
-				b.Text = text
-			end
-		end)
+		label(r, "💵 " .. money(product.Cash), UDim2.new(0.6, -14, 0, 26), UDim2.fromOffset(10, 5), MINT)
+		local price = priceLabel(r, product, Enum.InfoType.Product, UDim2.new(0.6, -46, 0, 16), UDim2.fromOffset(42, 33),
+			Enum.TextXAlignment.Left)
+		price.TextColor3 = WHITE
+		shopButton(r, UDim2.new(0.36, 0, 0, 36), UDim2.new(0.64, -10, 0, 10), "Product", product, false,
+			"Cash packs are coming soon!")
 	end
+	local foot = label(s, "Prices in Robux. Cash goes straight to your bank.", UDim2.new(1, 0, 0, 18), nil,
+		Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
+	foot.LayoutOrder = 100
 end
 
 ------------------------------------------------------------------ goals: ranks + daily challenges
@@ -831,6 +1028,25 @@ end
 
 ------------------------------------------------------------------ homes: safehouses (PropertyService)
 
+-- One short line about a house. Config.Properties may give Features ("2 floors · pool · 4-car garage")
+-- or the raw fields (Floors, Pool, Garage = bays); any of them may be missing.
+local function houseFeatures(def)
+	if type(def.Features) == "string" and def.Features ~= "" then
+		return def.Features
+	end
+	local bits = {}
+	if type(def.Floors) == "number" and def.Floors >= 2 then
+		table.insert(bits, math.floor(def.Floors) .. " floors")
+	end
+	if def.Pool == true then
+		table.insert(bits, "pool")
+	end
+	if type(def.Garage) == "number" and def.Garage >= 1 then
+		table.insert(bits, math.floor(def.Garage) .. "-car garage")
+	end
+	return #bits > 0 and table.concat(bits, " · ") or nil
+end
+
 local function homesPage()
 	setHeader("HOMES", "Home")
 	local s = list(0.02)
@@ -845,44 +1061,66 @@ local function homesPage()
 	end
 	local home = player:GetAttribute("HomeId")
 	local rank = player:GetAttribute("CivRank") or 1
-	local intro = label(s, "Your own safehouse: respawn there, bank your bag on its pad, earn rent.",
+	local intro = label(s, "Your own home: respawn there, bank your bag on its pad, earn rent.",
 		UDim2.new(1, 0, 0, 36), nil, LAVENDER, Enum.TextXAlignment.Center)
 	intro.TextWrapped = true
 	intro.LayoutOrder = 0
 	for i, def in ipairs(Properties.List) do
+		if type(def) ~= "table" or def.Id == nil then
+			continue
+		end
 		local owned = mine[def.Id] == true
-		local r = row(s, 116, i)
+		local features = houseFeatures(def)
+		local extra = features and 22 or 0
+		local r = row(s, 116 + extra, i)
 		r.Name = tostring(def.Id)
-		label(r, tostring(def.Name), UDim2.new(0.62, 0, 0, 24), UDim2.fromOffset(10, 6))
-		label(r, tostring(def.District or ""), UDim2.new(0.62, 0, 0, 16), UDim2.fromOffset(10, 32), LAVENDER)
+		-- (name and district stop short of the price on the right: "$1,200,000" fills its box)
+		label(r, tostring(def.Name or def.Id), UDim2.new(0.6, -10, 0, 24), UDim2.fromOffset(10, 6))
+		label(r, tostring(def.District or ""), UDim2.new(0.6, -10, 0, 16), UDim2.fromOffset(10, 32), LAVENDER)
+		if features then
+			local fl = label(r, "🏡 " .. features, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52), WHITE)
+			fl.Name = "Features"
+			fl.TextTruncate = Enum.TextTruncate.AtEnd
+		end
 		local status, statusColor
 		if home == def.Id then
 			status, statusColor = "🏠 HOME", PINK
 		elseif owned then
 			status, statusColor = "OWNED", MINT
 		else
-			status, statusColor = money(def.Price or 0), GOLD
+			status, statusColor = money(type(def.Price) == "number" and def.Price or 0), GOLD
 		end
 		label(r, status, UDim2.new(0.36, 0, 0, 22), UDim2.new(0.64, -10, 0, 8), statusColor, Enum.TextXAlignment.Right)
-		local rent = "Rent " .. money(def.Rent or 0) .. "/h"
+		local rent = "Rent " .. money(type(def.Rent) == "number" and def.Rent or 0) .. "/h"
 		local info, infoColor = rent, LAVENDER
 		if owned then
 			info = rent .. "  ·  waiting " .. money(player:GetAttribute("Rent_" .. def.Id) or 0) .. " (collect at the door)"
 			infoColor = MINT
 		else
-			local need = def.MinRank or 1
+			local need = type(def.MinRank) == "number" and def.MinRank or 1
 			if need > 1 then
 				info = rent .. "  ·  rank " .. need .. (rank >= need and " ✓" or " needed")
 				infoColor = rank >= need and LAVENDER or ORANGE
 			end
 		end
-		local il = label(r, info, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52), infoColor)
+		local il = label(r, info, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52 + extra), infoColor)
 		il.TextTruncate = Enum.TextTruncate.AtEnd
 		local canSetHome = owned and home ~= def.Id
 		button(r, "SHOW ME", UDim2.new(canSetHome and 0.46 or 1, canSetHome and -12 or -20, 0, 32),
 			UDim2.new(0, 10, 1, -40), MINT, function()
-				if typeof(def.Pos) == "Vector3" then
-					GPSClient.SetTarget(tostring(def.Name), def.Pos)
+				-- Owners go to the door; buyers to the FOR SALE sign (some doors are behind owner-only gates).
+				local target = def.Pos
+				if not owned then
+					local ok, spots = pcall(function()
+						return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("HomeSpots") or "{}")
+					end)
+					local s = ok and type(spots) == "table" and spots[def.Id]
+					if type(s) == "table" and type(s.s) == "table" and tonumber(s.s[1]) and tonumber(s.s[2]) then
+						target = Vector3.new(s.s[1], 0, s.s[2])
+					end
+				end
+				if typeof(target) == "Vector3" then
+					GPSClient.SetTarget(tostring(def.Name), target)
 					PhoneUI.Close()
 				end
 			end).Name = "ShowMe"
@@ -951,7 +1189,6 @@ local PAGES = {
 	GPS = gpsPage,
 	Jobs = jobsPage,
 }
-local current = "Home"
 
 show = function(name)
 	-- Re-showing the same page (after a purchase, say) keeps the scroll position.
@@ -977,6 +1214,26 @@ local function build()
 	gui.IgnoreGuiInset = true
 	gui.DisplayOrder = 5
 	gui.Parent = player:WaitForChild("PlayerGui")
+
+	-- Tap or click anywhere around the open phone to put it away. It's only visible while the phone
+	-- is open, so it never blocks the HUD. It sits under everything else in this gui (ZIndex 0); the
+	-- phone body is Active, so taps on the phone (even on its labels) never reach it.
+	backdrop = Instance.new("TextButton")
+	backdrop.Name = "Backdrop"
+	backdrop.Size = UDim2.fromScale(1, 1)
+	backdrop.BackgroundTransparency = 1
+	backdrop.Text = ""
+	backdrop.AutoButtonColor = false
+	backdrop.Selectable = false
+	backdrop.Modal = true -- frees a locked mouse (shift lock, first person) while the phone is open
+	backdrop.ZIndex = 0
+	backdrop.Visible = false
+	backdrop.Parent = gui
+	backdrop.Activated:Connect(function()
+		if phone.Visible and os.clock() - phoneTouchAt > 0.3 then
+			PhoneUI.Close()
+		end
+	end)
 
 	openButton = Instance.new("TextButton")
 	openButton.Name = "PhoneButton"
@@ -1007,8 +1264,15 @@ local function build()
 	phone.Position = UDim2.new(1, -16, 0.5, 0)
 	phone.Size = UDim2.fromOffset(DESIGN_W, 690)
 	phone.BackgroundColor3 = DARK
+	phone.Active = true -- sinks taps on the phone itself, so they never fall through to the backdrop
 	phone.Visible = false
 	phone.Parent = gui
+	phone.InputBegan:Connect(function(input)
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+			phoneTouchAt = os.clock()
+		end
+	end)
 	corner(phone, UDim.new(0, 28))
 	stroke(phone, PINK, 3)
 	fit = Instance.new("UIScale")
@@ -1077,6 +1341,7 @@ function PhoneUI.Open(pageName)
 	end
 	fitToScreen()
 	phone.Visible = true
+	backdrop.Visible = true
 	refreshStatus()
 	show(pageName or "Home")
 	-- Slide up from below, like pulling a phone out of a pocket.
@@ -1087,6 +1352,7 @@ end
 
 function PhoneUI.Close()
 	phone.Visible = false
+	backdrop.Visible = false
 end
 
 function PhoneUI.Toggle()
@@ -1110,14 +1376,24 @@ function PhoneUI.Init()
 		end
 	end)
 	-- Keep open pages fresh when the server changes what we own or how our cars look.
+	-- One rebuild per batch of changes (a purchase changes Custom_ and Style_ together).
+	local refreshQueued = false
 	local function maybeRefresh()
-		if phone.Visible and (current == "Garage" or current == "Custom" or current == "Dealer" or current == "Shop"
-			or current == "Goals" or current == "Crew" or current == "Jobs" or current == "Homes") then
-			show(current)
+		if refreshQueued then
+			return
 		end
+		refreshQueued = true
+		task.defer(function()
+			refreshQueued = false
+			if phone.Visible and (current == "Garage" or current == "Custom" or current == "Dealer" or current == "Shop"
+				or current == "Goals" or current == "Crew" or current == "Jobs" or current == "Homes") then
+				show(current)
+			end
+		end)
 	end
 	player.AttributeChanged:Connect(function(name)
-		if name == "OwnedCars" or string.sub(name, 1, 7) == "Custom_" or string.sub(name, 1, 5) == "Pass_"
+		if name == "OwnedCars" or string.sub(name, 1, 7) == "Custom_" or string.sub(name, 1, 6) == "Style_"
+			or string.sub(name, 1, 5) == "Pass_" or name == "ShopFree" or name == "CopRank"
 			or string.sub(name, 1, 7) == "Unlock_" or name == "Challenges" or name == "CivXP" or name == "CopXP"
 			or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" or name == "GusFound"
 			or name == "GusTotal" or name == "OwnedProps" or name == "HomeId" or string.sub(name, 1, 5) == "Rent_"
@@ -1126,9 +1402,16 @@ function PhoneUI.Init()
 		elseif name == "Cash" and phone.Visible then
 			refreshStatus()
 		elseif name == "Side" then
-			openButton.Visible = player:GetAttribute("Side") ~= "Prisoner"
-			if player:GetAttribute("Side") == "Prisoner" then
+			local side = player:GetAttribute("Side")
+			openButton.Visible = side ~= "Prisoner"
+			if side == "Prisoner" then
 				PhoneUI.Close()
+			elseif os.clock() - dutyAskedAt < 10 then
+				-- JOBS asked for this switch: the server is respawning you at your side's spawn.
+				dutyAskedAt = -math.huge
+				PhoneUI.Close()
+				NotifyController.Show(side == "Cop" and "On duty! Your patrol car is waiting on the pad."
+					or "Off duty. Port Solana is yours to roam.", side == "Cop" and CYAN or PINK)
 			else
 				maybeRefresh()
 			end
@@ -1192,11 +1475,16 @@ function PhoneUI.Init()
 		if result.Kind == "Bought" then
 			HUDController.Stamp("NEW RIDE!", name .. " is in your Garage", PINK)
 		elseif result.Kind == "Painted" then
-			NotifyController.Show("Fresh paint on your " .. name .. "!", PINK)
+			local what = tostring(result.Name or "New")
+			NotifyController.Show(result.Bought and (what .. " paint is yours on the " .. name .. "! Switch back free any time.")
+				or (what .. " paint on your " .. name .. "."), PINK)
 		elseif result.Kind == "Rims" then
-			NotifyController.Show("New rims on your " .. name .. "!", CYAN)
+			local what = tostring(result.Name or "New")
+			NotifyController.Show(result.Bought and (what .. " rims are yours on the " .. name .. "! Switch back free any time.")
+				or (what .. " rims on your " .. name .. "."), CYAN)
 		elseif result.Kind == "Glow" then
-			NotifyController.Show("Underglow set on your " .. name .. "!", PURPLE)
+			NotifyController.Show(result.Bought and ("Underglow installed on your " .. name .. "! Colour swaps are free now.")
+				or (tostring(result.Name or "New") .. " underglow on your " .. name .. "."), PURPLE)
 		end
 	end)
 	task.spawn(function()

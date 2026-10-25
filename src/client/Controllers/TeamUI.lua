@@ -1,6 +1,8 @@
 -- TeamUI (ModuleScript, StarterPlayerScripts.Controllers.TeamUI)
--- Role picker: two big cards (CITIZEN / POLICE) shown on first join, and a small role badge in the
--- top-left corner that reopens it. The server decides; this only asks (RequestTeam).
+-- Role badge in the top-left corner (CITIZEN / POLICE / PRISONER). Tapping it opens the phone's
+-- JOBS app, where police duty is an optional job. The old two-card picker (TeamUI.Open) is no longer
+-- shown at join (free roam: everyone starts as a citizen). The server decides; this only asks
+-- (RequestTeam).
 -- Player-facing names live in LABEL here (the Side values stay "Civilian" / "Cop" / "Prisoner"):
 -- one word per role everywhere: CITIZEN, POLICE, PRISONER.
 
@@ -180,8 +182,11 @@ local function build()
 		if player:GetAttribute("Side") == "Prisoner" then
 			return
 		end
-		refresh()
-		overlay.Visible = true
+		-- PhoneUI starts after TeamUI, so look it up on tap.
+		local ok, phone = pcall(require, script.Parent:FindFirstChild("PhoneUI"))
+		if ok and phone and phone.Open then
+			phone.Open("Jobs")
+		end
 	end)
 end
 
@@ -197,7 +202,7 @@ end
 function TeamUI.Init()
 	requestTeam = Remotes.Event("RequestTeam")
 	build()
-	overlay.Visible = player:GetAttribute("HasPicked") ~= true
+	overlay.Visible = false -- free roam: no picker at join
 	refresh()
 	player:GetAttributeChangedSignal("Side"):Connect(refresh)
 	player:GetAttributeChangedSignal("HasPicked"):Connect(function()

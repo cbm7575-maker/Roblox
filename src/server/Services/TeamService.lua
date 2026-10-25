@@ -1,8 +1,10 @@
 -- TeamService (ModuleScript, ServerScriptService.Services.TeamService)
--- Civilians (default, free roam), Cops (a job) and Prisoners. The role picker shows on first join.
+-- Civilians (default, free roam), Cops (an optional job) and Prisoners. Everyone joins as a citizen:
+-- there's no role picker at join (HasPicked is set on join; TutorialService, DailyService and the
+-- objective bar still read it). Police duty is a card in the phone's JOBS app.
 -- Switching (RequestTeam) is allowed when: not a prisoner, no heat, not on cooldown, and for cops,
 -- the cop cap (about 1 cop per 2 robbers) has room. Switching respawns you at your side's spawn
--- with that side's starter car waiting on a pad.
+-- with that side's starter car waiting on a pad (citizens who own a house spawn inside it).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -102,7 +104,7 @@ function TeamService.Init()
 
 	local function onPlayer(player)
 		player:SetAttribute("Side", "Civilian")
-		player:SetAttribute("HasPicked", false)
+		player:SetAttribute("HasPicked", true) -- free roam: no picker, everyone starts as a citizen
 		player.Team = teamBySide.Civilian
 	end
 	Players.PlayerAdded:Connect(onPlayer)
