@@ -262,6 +262,15 @@ local function applyDamage(car, rec, damage, serverNow, why)
 	end
 end
 
+-- Damage that isn't a crash (bullets: WeaponService). Fractions add up (shotgun pellets).
+function VehicleDamageService.Damage(car, amount, why)
+	local rec = car and records[car]
+	if not rec or type(amount) ~= "number" or amount <= 0 or (car:GetAttribute("Health") or 100) <= 0 then
+		return
+	end
+	applyDamage(car, rec, amount, Workspace:GetServerTimeNow(), why or "shot")
+end
+
 local function resolve(i, now, serverNow)
 	local rec, car = activeRecs[i], activeCars[i]
 	if rec.skip or (not rec.carOther and rec.solo <= 0) then

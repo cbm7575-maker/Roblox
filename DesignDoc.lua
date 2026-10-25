@@ -5,13 +5,15 @@
 
 return {
 	Title = "Neon Coast (working title)",
-	Pitch = "Open-world cops-and-robbers driving game in Port Solana, a neon Florida-style beach city. "
-		.. "Robbers pull heists and race away; cops chase, spike and cuff them. Money buys cars, neon and homes.",
+	Pitch = "Open-world free-roam driving game in Port Solana, a neon Florida-style beach city. "
+		.. "Everyone starts as a citizen: drive, race, work jobs, buy homes and guns, or pull heists and race "
+		.. "away from AI police and players on the optional police job. Everything you earn is saved.",
 
 	Pillars = {
 		"The chase is the heart: cars must feel great on a phone before anything else is built",
 		"Neon Miami look nobody else on Roblox has (pastel art deco by day, neon by night)",
-		"Fair fun: no guns (tasers, cuffs, spikes), rotating heists so cops can't camp, server-authoritative money",
+		"Fair fun: guns with PASSIVE mode (opt out of being shot), police guns only hurt wanted players, "
+			.. "pedestrians are never hurt, no blood, rotating heists, server-authoritative money",
 		"Original IP only: never GTA, Grand Theft Auto, Vice City, Leonida, Rockstar or real car brands",
 	},
 
@@ -113,5 +115,8 @@ return {
 		{ Date = "2026-10-19", Notes = "Full review + GTA-feel pass (not yet run in Studio; type-checked, logic-tested, five code reviews; test list in launch/6-PLAYTEST-THIS-UPDATE.md). Audit of every system by five reviewers found ~30 bugs, all fixed: reset-to-escape arrest dodge, nitro refill on re-entry, spikes missing fast cars and wanted passengers, idle cops switching the AI off, AI not braking for corners and arresting through walls, pedestrians knocked flying and walking in lanes, traffic popping in and driving through ramps/parked cars, a tutorial players could get stuck in, unreadable tutorial text, button overlaps on phones, economy exploits (race/drift/stunt/car meet/patrol farms)." },
 		{ Date = "2026-10-19", Notes = "Police: Config.Police; units by stars (1,1,2,3,4) minus engaged cops; street patrols that answer crimes; AI chases only while it sees you, else last-seen + search circle (escape faster outside it); roadblocks with spikes at 4+ stars; new crimes: ramming a cop, evading (+1 star/min, max 4); dying while wanted = arrest; gentle tutorial chaser. Vehicles: VehicleDamageService (crashes, cops ram robbers into smoke/stall/limp; innocents never damaged by other players), Spray & Go repairs ($250 no heat, $500 respray), crash sound/shake, health bar, flashing light bars, brake lights." },
 		{ Date = "2026-10-19", Notes = "World: pedestrians dodge (never fall), panic from wanted players/sirens, talk (Config.PedLines), hang out at benches/bus stops; traffic sees everything, pulls over for sirens, honks; 4 new Florida moments (performer, beach party, flamingo, lost tourist); district title banners. Money: crime pays ~2x safe grinding (daily full-pay caps on drift/races/stunts), 4 safehouses (PropertyService: respawn, bank at zero heat, rent), Escape/Fragile missions + 4 cop missions, 40 hidden Gus figurines (CollectibleService, Gator Green paint for all 40). UI: tutorial v2 (car, rob, escape, bank, phone), two-line top bar, objective line, escape bar, HOMES and FEED apps." },
+		{ Date = "2026-10-25", Notes = "Playtest fixes (not yet run in Studio; type-checked, four code reviews, houses and gun store built offline in a mock and rendered). Free roam: no role picker, everyone joins as a citizen (spawns inside their home if they own one), police is an optional job in PHONE > JOBS. Paint and rims are bought once per car and stay owned (price shown on every swatch, tap twice to buy). Shop filled with the 5 passes and 5 cash packs (FREE buttons in Studio and for the game's owner). Jet ski prompt reach (60 studs), nitro sound (one whoosh, one click when empty), F exit hardened (ContextActionService + raw fallback + retry), tap outside the phone to close it, seats refit so heads clear every roof, taxi fares sit visibly in the car, friends and crew can ride in each other's cars (rear seats on 4-seaters)." },
+		{ Date = "2026-10-25", Notes = "Houses: 8 distinct builds (HouseBuilder kit + Houses/<Style>): stilt cabin, brick loft, bungalow, townhouse, family home with pool, villa, beach house, $1.2M mansion (rank 15, 6-car garage, gated motor court, pool). Owner-only doors (HouseClient), garage showroom with Drive prompts, STASH pad in the garage, spawn in the living room. No hiding at home while wanted (moved out to the sale sign). Daily streak now waits for the client (DailyReady) so its stamp shows." },
+		{ Date = "2026-10-25", Notes = "Guns (owner's call: full guns + PASSIVE): Shoreline Arms gun store by the downtown spawn; Coral 9 pistol $750, Riptide SMG $6,500 (rank 3), Breaker shotgun $9,500 (rank 5), Longshore rifle $16,000 (rank 8); police on duty carry a Duty Pistol that only hurts wanted citizens. Owned guns saved; infinite ammo with magazines and reloads; client-side hits checked by the server (rate, range, line of sight, who may hurt whom); hitting players = +1 star, a takedown +1 more; PASSIVE toggle next to CAR (saved; not while wanted or within 15 s of a fight); 6 s spawn shield; health regen; kill feed; tutorial step 'Buy your first gun'. Gun sounds are placeholders until IDs are picked." },
 	},
 }

@@ -10,8 +10,10 @@
 --          skip over a strip. ArrestService.PlaceSpike(cf, width, owner, lifetime) lays one for
 --          other services (roadblocks: no owner).
 --   Arrest: robber loses the bag; cop earns $500 per star + 25% of the bag; robber goes to prison.
---   Dying while wanted (reset, falling off the map) counts as an arrest: the bounty goes to the nearest
---          cop who saw them in the last 20 s and is within 300 studs (if any).
+--   Dying while wanted (reset, falling off the map, shot down) counts as an arrest: the bounty goes to
+--          the cop whose Duty Pistol hit them in the last Config.Weapons.TakedownMemory seconds
+--          (WeaponService calls CreditTakedown), else the nearest cop who saw them in the last 20 s and
+--          is within 300 studs (if any).
 --   Patrol pay: $80 per minute to cops who moved 150+ studs that minute or were near a wanted player.
 
 local Players = game:GetService("Players")
@@ -22,6 +24,7 @@ local Workspace = game:GetService("Workspace")
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Shop = require(ReplicatedStorage.Shared.Config.Shop)
 local Police = require(ReplicatedStorage.Shared.Config.Police)
+local Weapons = require(ReplicatedStorage.Shared.Config.Weapons)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local HeatService = require(ServerScriptService.Services.HeatService)
@@ -109,9 +112,21 @@ end
 -- resetting would shake the cops and keep the bag. The bounty goes to the nearest cop who saw them
 -- in the last 20 s and is within 300 studs.
 local leaving = setmetatable({}, { __mode = "k" }) -- [player] = true once they're leaving the game
+local takedowns = setmetatable({}, { __mode = "k" }) -- [suspect] = { cop = Player, at = os.clock() }
+
+-- WeaponService: a cop's shot hit this wanted suspect (if they go down soon, that cop gets the bounty).
+function ArrestService.CreditTakedown(suspect, cop)
+	takedowns[suspect] = { cop = cop, at = os.clock() }
+end
 
 local function caughtDown(player, where)
+	local shot = takedowns[player]
+	takedowns[player] = nil
 	if leaving[player] or player.Parent ~= Players or not isWanted(player) then
+		return
+	end
+	if shot and os.clock() - shot.at <= Weapons.TakedownMemory and shot.cop.Parent == Players and isCop(shot.cop) then
+		jail(player, shot.cop)
 		return
 	end
 	where = where or player:GetAttribute("LastSeen")

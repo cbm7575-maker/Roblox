@@ -72,7 +72,7 @@ NotifyController.Messages = {
 	MissionWrongSide = "That mission is for the other side. Switch roles in JOBS.",
 	MissionTooClose = "You're already at the first stop. Head somewhere else and start it from there.",
 	-- Safehouses (PropertyService)
-	PropBought = "Welcome home! You'll respawn here, and you can stash your bag on the pad.",
+	PropBought = "Welcome home! You'll spawn inside, and you can stash your bag on the garage pad.",
 	PropHomeSet = "Home set! You'll respawn here.",
 	PropRentCollected = "Rent collected!",
 	PropNoRent = "No rent yet. It builds up every hour (up to 12 hours).",
@@ -81,6 +81,8 @@ NotifyController.Messages = {
 	PropCiviliansOnly = "Only citizens can buy property.",
 	PropNeedsRank_5 = "Reach citizen rank 5 to buy this place.",
 	PropNeedsRank_10 = "Reach citizen rank 10 to buy this place.",
+	PropNeedsRank_15 = "Reach citizen rank 15 to buy this place.",
+	PropNoHiding = "No hiding at home while you're wanted! Lose the cops first.",
 	PropHotNoBank = "Lose your heat before you stash cash at home.",
 	-- Florida moments (EventService)
 	PerformerTip = "Great show! The drummer flipped you a lucky coin. +$100",

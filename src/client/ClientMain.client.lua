@@ -1,5 +1,6 @@
 -- ClientMain (LocalScript, StarterPlayerScripts.ClientMain): starts every client controller.
--- In Studio only, number keys spawn test cars: 1-9, 0, -, = map to the 12 vehicles in Config order.
+-- In Studio only, Shift + number keys spawn test cars: 1-9, 0, -, = map to the 12 vehicles in Config
+-- order (plain number keys are Roblox's backpack: they pick your guns).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,6 +26,8 @@ local ORDER = {
 	"SkyClient",
 	"GPSClient",
 	"PhoneUI",
+	"HouseClient",
+	"WeaponClient",
 	"TrafficClient",
 	"TutorialClient",
 	"ShopClient",
@@ -67,12 +70,15 @@ if RunService:IsStudio() then
 		if processed then
 			return
 		end
+		if not UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and not UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+			return
+		end
 		for i, key in ipairs(keys) do
 			if input.KeyCode == key and Vehicles.List[i] then
 				spawnCar:FireServer(Vehicles.List[i].Id)
 			end
 		end
 	end)
-	print("[ClientMain] Studio test keys: 1-9, 0, -, = spawn cars; E enters, F exits, Space drifts, Shift nitro, R flips")
+	print("[ClientMain] Studio test keys: Shift + 1-9, 0, -, = spawn cars; E enters, F exits, Space drifts, Shift nitro, R flips")
 end
 print("[ClientMain] client ready for " .. Players.LocalPlayer.Name)

@@ -29,6 +29,17 @@ Sounds.Effects = {
 	Countdown = { Id = 9114636546, Volume = 0.6, Looped = false }, -- Graphic Beeps 5 (ProSoundEffects, 0.6 s single digital beep; play once per 3-2-1 tick)
 	Checkpoint = { Id = 9126073001, Volume = 0.6, Looped = false }, -- Synth Sparkle Tone High Pitch Bell Tone Ding (ProSoundEffects, 1.2 s)
 
+	-- Weapons: PLACEHOLDERS. Id 0 = not picked yet (gun sounds couldn't be checked from here). Until an
+	-- Id is filled in, WeaponClient plays the stand-in named by Fallback, sped up by Speed and cut after
+	-- Cut seconds. To pick real ones: Studio > Toolbox > Audio, search e.g. "pistol shot", keep sounds by
+	-- Roblox or ProSoundEffects, paste the number here (see launch/6-PLAYTEST-THIS-UPDATE.md).
+	PistolShot = { Id = 0, Volume = 0.6, Looped = false, Fallback = "Crash", Speed = 2.6, Cut = 0.3 },
+	SMGShot = { Id = 0, Volume = 0.45, Looped = false, Fallback = "Crash", Speed = 3.2, Cut = 0.15 },
+	ShotgunShot = { Id = 0, Volume = 0.8, Looped = false, Fallback = "Stamp", Speed = 1.5, Cut = 0.45 },
+	RifleShot = { Id = 0, Volume = 0.8, Looped = false, Fallback = "Stamp", Speed = 2, Cut = 0.4 },
+	GunReload = { Id = 0, Volume = 0.5, Looped = false, Fallback = "Cuffs", Speed = 1.4, Cut = 0.9 },
+	GunEmpty = { Id = 0, Volume = 0.5, Looped = false, Fallback = "Click", Speed = 1.6, Cut = 0.3 },
+
 	-- Weather / world ambience
 	Rain = { Id = 9112855439, Volume = 0.4, Looped = true }, -- Rain On Water 2 (ProSoundEffects, 36 s steady heavy rainfall, tagged "Loop")
 	Thunder = { Id = 9120021818, Volume = 0.6, Looped = false }, -- Thunder Sharp Striking Rumbling Crackling 1 (ProSoundEffects, 6.4 s strike + long rumble)

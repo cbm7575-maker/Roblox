@@ -29,6 +29,8 @@ Tutorial.Steps = {
 	{ Id = "escape", ServerOnly = true,
 		Text = "Lose the cops: hide! Hollow stars = they're searching" },
 	{ Id = "bank", Show = "Hideout", ServerOnly = true, Text = "Bank your {bag} at the Hideout" },
+	-- WeaponService completes it when any gun is bought (Config.Weapons: the Coral 9 is $750).
+	{ Id = "gun", Show = "Shoreline Arms", ServerOnly = true, Text = "Buy your first gun at Shoreline Arms" },
 	{ Id = "phone", Text = {
 		Touch = "On foot, tap PHONE to open your phone",
 		Keyboard = "Press P to open your phone",

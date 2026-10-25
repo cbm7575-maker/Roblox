@@ -24,6 +24,7 @@ local CYAN = Color3.fromRGB(34, 225, 255)
 local ORANGE = Color3.fromRGB(255, 138, 61)
 local GOLD = Color3.fromRGB(255, 214, 10)
 local MINT = Color3.fromRGB(110, 242, 196)
+local RED = Color3.fromRGB(255, 70, 70)
 
 local NEAR = 600 -- studs: closer posts pop up as toasts
 local KEEP = 40 -- posts kept for the FEED app
@@ -113,6 +114,11 @@ local HANDLERS = {
 	end,
 	Escaped = function(d)
 		post("@CoastFeed: " .. tostring(d.Name) .. " gave the cops the slip!", PINK, relevant(d))
+	end,
+	Takedown = function(d) -- WeaponService: a player went down after being shot (not wanted ones)
+		local mine = d.ByUserId == player.UserId
+		post("@CoastFeed: " .. tostring(d.By) .. " took down " .. tostring(d.Name) .. ".", RED,
+			not mine and relevant(d))
 	end,
 	TrackerPing = function(d)
 		if isCop() then

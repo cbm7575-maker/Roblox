@@ -35,6 +35,7 @@ local ORDER = {
 	"StuntService",
 	"DriftService",
 	"JobService",
+	"WeaponService", -- guns, PASSIVE, the gun store (before MapService: it builds the store MapService lists)
 	"CarMeetService", -- before MapService: it builds the lot MapService lists
 	"MapService",
 	"CollectibleService", -- after every service that builds props, so placement sees them

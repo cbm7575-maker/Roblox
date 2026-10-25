@@ -1,6 +1,6 @@
 # Neon Coast
 
-Open-world cops-and-robbers driving game set in Port Solana. Plan, build steps and changelog:
+Open-world free-roam driving game set in Port Solana (heists, police chases, homes, guns). Plan, build steps and changelog:
 `DesignDoc.lua` (also `ServerStorage.DesignDoc` in the place).
 
 ## Layout

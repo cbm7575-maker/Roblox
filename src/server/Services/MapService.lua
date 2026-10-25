@@ -3,7 +3,7 @@
 -- aren't streamed in yet.
 --   ReplicatedStorage attribute "Places": JSON list of { n = name, k = kind label, c = category, x, z, id }.
 --     Categories: "Activity" (races, stunts, drift, taxi), "Service" (hideout, chop shop, spray, fence,
---     police), "Heist" (every heist site; id = the site's name in Workspace.Heists).
+--     police, the gun store), "Heist" (every heist site; id = the site's name in Workspace.Heists).
 --     Heist entries also carry (from Config.Heists): HeistId (type key), Tier (1-3), MinRank (civilian
 --     rank needed, 1 = anyone) and NeedsPrep (true when a prep job must be done first), so the
 --     tutorial can pick a beginner heist.
@@ -26,6 +26,7 @@ local Workspace = game:GetService("Workspace")
 
 local Activities = require(ReplicatedStorage.Shared.Config.Activities)
 local Heists = require(ReplicatedStorage.Shared.Config.Heists)
+local Weapons = require(ReplicatedStorage.Shared.Config.Weapons)
 
 local MapService = {}
 
@@ -75,6 +76,14 @@ local function collect()
 		add("Taxi Stand", "Taxi job", "Activity", acts:FindFirstChild("TaxiStand") and pos(acts.TaxiStand))
 		add("Car Meet", "Show your ride · every 8 min", "Activity", acts:FindFirstChild("CarMeet") and pos(acts.CarMeet))
 		add("Courier Depot", "Delivery job", "Activity", acts:FindFirstChild("CourierDepot") and pos(acts.CourierDepot))
+	end
+	-- The gun store (WeaponService builds it): the GPS point is just outside its door.
+	local city = Workspace:FindFirstChild("City")
+	local landmarks = city and city:FindFirstChild("Landmarks")
+	if landmarks and landmarks:FindFirstChild("ShorelineArms") then
+		local store = Weapons.Store
+		local door = CFrame.new(store.Position) * CFrame.Angles(0, math.rad(store.Yaw or 0), 0) * CFrame.new(0, 0, -16)
+		add(store.Name, store.Kind, "Service", door.Position)
 	end
 	local spawns = Workspace:FindFirstChild("Spawns")
 	if spawns then
@@ -138,6 +147,13 @@ local function shapes()
 				end
 			end
 		end
+	end
+	local landmarks = city and city:FindFirstChild("Landmarks")
+	if landmarks and landmarks:FindFirstChild("ShorelineArms") then
+		-- The gun store's walls (WeaponService draws them 30 x 22 around this point of its lot).
+		local store = Weapons.Store
+		local lot = CFrame.new(store.Position) * CFrame.Angles(0, math.rad(store.Yaw or 0), 0)
+		rect(buildings, lot * CFrame.new(0, 0, 1), 30, 22, "building")
 	end
 	return { t = tiles, b = buildings }
 end
