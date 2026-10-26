@@ -3,18 +3,20 @@
 -- a SHOW ME button and a small cash reward (JourneyService on the server, TutorialClient draws it).
 -- Only players who first join after this shipped get them (a brand-new save). Civ runs in free roam
 -- once the tutorial is done (or skipped); Cop runs on the police side from the first shift.
--- Tuning, for the $10,000 Gatorback 12-15 minutes in: the tutorial's store (about $1,200) and $500
--- bonus, day 1's $1,000 login reward, the four goals before the Gatorback ($1,500, of which $500 pays
--- back the paint), a Chop Shop sale (about $350) and one bigger store (about $5,000) come to about
--- $9,000 at the 12-minute mark; one more store (or a daily challenge's $2,000) makes it, and until
--- then the buy goals' button reads EARN and points at the nearest store (Earn below). All the
--- free-roam rewards add up to $5,800, the police ones to $2,250.
+-- Tuning, for the $10,000 Gatorback about 15 minutes in (12-15 before the gun goal): the tutorial's
+-- store (about $1,200) and $500 bonus, day 1's $1,000 login reward, the jack, chop and paint goals
+-- ($1,100, of which $500 pays back the paint) and a Chop Shop sale (about $350) leave about $3,650 when
+-- the gun goal comes up, enough for the $2,500 pistol (Config.Combat; its $1,000 reward pays part of
+-- it back). The bigger store (about $5,000, +$400) then makes about $7,500; one more store (or a daily
+-- challenge's $2,000) gets the Gatorback, and until then the buy goals' button reads EARN and points at
+-- the nearest store (Earn below). All the free-roam rewards add up to $6,800, the police ones to $2,250.
 --
--- ONLY EVER ADD NEW GOALS AT THE END OF A LIST. Saves keep how many goals are done (JourneyService),
--- and free-roam funnel steps are 6 + the goal's position, so an insert or a reorder would shift every
--- saved player onto a different goal. JourneyService also saves the next goal's Id and follows it if it
--- moved, so nobody skips or repeats the goal they're on, but goals already done aren't tracked by Id:
--- one moved from before a player's goal to after it would come round (and pay) again.
+-- NEVER REORDER, RENAME OR REMOVE GOALS. A new goal may go anywhere in a list: saves keep how many goals
+-- are done and the next goal's Id (JourneyService), and the count follows that Id, so a player already
+-- past the new goal skips it (unpaid) and one before it meets it on the way; a chain finished before the
+-- new goal existed stays finished. (Free-roam funnel steps are 6 + the goal's position, so the goals
+-- after an insert log under new step numbers.) Moving a goal is what breaks: goals already done aren't
+-- tracked by Id, so one moved from before a player's goal to after it would come round (and pay) again.
 --
 -- Fields of a goal:
 --   Id      saved (the next goal's Id) and in analytics ("Journey_<Id>" in the onboarding funnel,
@@ -31,7 +33,9 @@
 --           instead ("OpenHeist": the nearest open store a player can rob alone, no prep jobs)
 --   Kind    the ProgressService event that counts ("Carjack", "ChopSale", "Paint", "BuyCar", "BuyHome",
 --           "Heist", "Stunt", "RaceFinish", "Drift", "TaxiFare", "PatrolMinute", "TaserHit", "SpikeHit",
---           "Arrest"), or "CivRank" / "CopRank": reach that rank. Paint, BuyCar and BuyHome also count
+--           "Arrest"), "CivRank" / "CopRank": reach that rank, or "BuyGun": own a gun (no event: the save
+--           shows it, data.gear.guns, checked when the "Guns" attribute changes after a purchase at
+--           Coast Arms). Paint, BuyCar and BuyHome also count
 --           as done when the save already shows one (a painted car, a bought car, a home), a Heist goal
 --           when the player has a big heist (BigHeists: robbed, or helped their crew rob, the Coastal
 --           Bank or Sea Dream), and TaserHit / SpikeHit / Arrest when they happened before the goal
@@ -52,6 +56,10 @@ Journey.Civ = {
 		Kind = "ChopSale", Goal = 1, Reward = 400 },
 	{ Id = "paint", Text = "Paint your ride: PHONE > GARAGE > STYLE (we pay it back)", Show = "Garage",
 		Kind = "Paint", Goal = 1, Reward = 500 }, -- = Garage.PaintPrice
+	-- Before the bigger store: guns are bought once at Coast Arms (CombatService), the pistol is the
+	-- cheapest. Cash = Config.Combat's Pistol price: EARN points at a store until it's saved up.
+	{ Id = "gun", Text = "Gear up: buy your first gun at Coast Arms", Show = "Coast Arms",
+		Earn = "OpenHeist", Kind = "BuyGun", Goal = 1, Cash = 2500, Reward = 1000 },
 	{ Id = "bigstore", Text = "Rob a bigger store: Sparkle & Co. or Club Nova", Show = "OpenHeist",
 		ShowTier = 2, ShowMaxTier = 2, Kind = "Heist", Min = 2, Goal = 1, Reward = 400 },
 	{ Id = "gatorback", Text = "Save up and buy the Gatorback at AutoNeon Motors", Show = "AutoNeon Motors",

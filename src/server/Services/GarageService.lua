@@ -2,17 +2,27 @@
 -- Owning, customising and tuning cars. Saved in the player's profile (DataService):
 --   data.owned[carId] = true
 --   data.custom[carId] = { paint = Garage.Paints index, glow = Garage.Glows index, rim = Garage.Rims index,
+--                          paints = { ["3"] = true, ... }, rims = { ["2"] = true, ... } (bought for THIS car;
+--                          string keys so DataStores keep them as dictionaries), glowUnlocked = true
+--                          once underglow is installed,
 --                          tune = { Engine = 0-3, Turbo = 0-3, Brakes = 0-2, Tyres = 0-2, Nitro = 0-2 },
 --                          exhaust = fitted exhaust key (nil = Stock), exhausts = { [key] = true } bought }
---   (data.custom already defaults to {} in DataService; the tune fields appear with the first purchase.)
+--   (data.custom already defaults to {} in DataService; the other fields appear with the first purchase.)
+--   Saves from before the owned sets: the paint and rims a car wears when its save loads count as owned
+--   (mirror writes them into paints / rims).
 -- Remotes (all validated here):
 --   RequestBuyCar(id)                   -> costs Config.Vehicles price, only next to the car at a dealership
 --                                          (DealershipService.IsNear); pass cars need their game pass;
 --                                          heist-locked cars (UnlockHeists) need that many big heists
 --                                          first (player attribute "BigHeists", HeistService)
---   RequestPaint(id, paintIndex)        -> $500
+--   RequestPaint(id, paintIndex)        -> Garage.PaintPrice ($500) the first time that colour goes on this
+--                                          car, then free to switch back to; 0 = the car's stock colour
+--                                          (always owned); pass / unlock paints are free once allowed
 --   RequestUnderglow(id, glowIndex)     -> $3,000 the first time on a car, then colour changes are free
---   RequestRims(id, rimIndex)           -> $1,500
+--   RequestRims(id, rimIndex)           -> Garage.RimPrice ($1,500) once per rim style per car, same rules;
+--                                          Garage.StockRim (Chrome) is always owned
+--   Every price is Garage.StyleCost, the same function the phone labels its swatches with. The phone
+--   only sends a paid pick after a second tap on the swatch (PhoneUI), so one tap never spends money.
 --   RequestTune(id, trackKey, stage?)   -> buys that track's next stage (Config.Garage.Tune: the price
 --                                          scales with the car's tier). stage: the stage the phone's
 --                                          button showed; if that isn't the next one any more, nothing
@@ -37,15 +47,19 @@
 -- Pass cars count as owned while the player has attribute "Pass_<PassName>" (set by the shop, step 4.5);
 -- cop-rank cars while "CopRank" >= UnlockCopRank.
 -- The saved owned list is mirrored to the player attribute "OwnedCars" (comma list) for the phone UI, and
--- customisations to "Custom_<id>" attributes ("paint,glow,rim", 0 = default). Pass and cop-rank cars are
+-- customisations to "Custom_<id>" attributes ("paint,glow,rim", 0 = default) and "Style_<id>" (the paints
+-- and rims bought for that car: "3,5;2"). Pass and cop-rank cars are
 -- not in OwnedCars: the phone and the dealer card add them from the Pass_ / CopRank attributes.
 -- A car's tune is mirrored to "Tune_<id>" ("E2,T1,B0,G1,N2|Muscle|Sport,Muscle": Config.Garage explains
 -- it and has the parser), only for cars that have one.
--- Answers go back on GarageResult: { Kind = "Bought" | "Painted" | "Rims" | "Glow", Id }, and for tuning
+-- Answers go back on GarageResult: { Kind = "Bought" | "Painted" | "Rims" | "Glow", Id, Name = the paint /
+--   rim / glow's name, Bought = true when that pick cost money }, and for tuning
 --   { Kind = "Tuned", Id, Track, Stage, Price }, { Kind = "Exhaust", Id, Key, Bought = bool, Price },
 --   { Kind = "AutoTuned", Id, Total, Count, Text = "Engine 2, Turbo 1", Tracks = { [trackKey] = stage } }.
--- GarageService.ApplyCustom(car, player) dresses a freshly spawned car (VehicleService calls it): paint,
--- rims, underglow, and the tune. Tuned numbers go onto the car's attributes MaxSpeed, Accel, Brake, Grip,
+-- GarageService.ApplyCustom(car, player, restore?) dresses a freshly spawned car (VehicleService and
+-- HousingService call it with two arguments): paint, rims, underglow, and the tune. restore = "Paints" /
+-- "Rims" only when that was just changed on a car that's already out: back to stock then puts the stock
+-- colour back on (a fresh car already has it). Tuned numbers go onto the car's attributes MaxSpeed, Accel, Brake, Grip,
 -- TireFriction and NitroSeconds, always worked out from Config.Vehicles' stock values (so they never pile
 -- up) and only for tracks with a stage bought (a stock car keeps exactly what its template has).
 -- Tunable cars also get "Exhaust" (the fitted key, "Stock" by default; SoundClient turns it into sound)
@@ -58,10 +72,10 @@
 -- fully tuned and on nitro. Config.Garage.MaxGain("MaxSpeed") is the tune's share of that (its header
 -- has the sum: 297 studs/s today, where the fastest stock car on nitro does 258).
 -- GarageService.TuneOf(player, id) -> the saved tune as a Config.Garage tune table.
--- Goal events (ProgressService.Event): "BuyCar" after a car or boat is bought, "Paint" after a paint job,
--- "Tune" after any tune purchase (amount = stages bought: 1, or more for AUTO TUNE; 1 for an exhaust).
+-- Goal events (ProgressService.Event): "BuyCar" after a car or boat is bought, "Paint" after a colour (not
+-- stock) goes on a car, "Tune" after any tune purchase (amount = stages bought: 1, or more for AUTO TUNE;
+-- 1 for an exhaust).
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -119,6 +133,35 @@ local function tuneOf(c)
 	return tune
 end
 
+-- The owned set c[field] ("paints" / "rims"). `current` (the index the car wears now) always counts as
+-- owned: that is the migration for saves from before the sets existed, and it keeps a colour on the car
+-- free to come back to whatever happens. Stock entries are never stored (they're always owned). The set
+-- is only created when it has something in it.
+local function ownedSet(c, field, current, kind)
+	local set = type(c[field]) == "table" and c[field] or nil
+	if type(current) == "number" and current > 0 and not Garage.IsStock(kind, current) then
+		set = set or {}
+		set[tostring(current)] = true
+	end
+	if set then
+		c[field] = set
+	end
+	return set or {}
+end
+
+-- "3,5" for { ["3"] = true, ["5"] = true }.
+local function setText(set)
+	local list = {}
+	for k, on in pairs(set) do
+		local n = tonumber(k)
+		if on == true and n then
+			table.insert(list, n)
+		end
+	end
+	table.sort(list)
+	return table.concat(list, ",")
+end
+
 local function mirror(player)
 	local data = profile(player)
 	if not data then
@@ -131,7 +174,12 @@ local function mirror(player)
 	table.sort(list)
 	player:SetAttribute("OwnedCars", table.concat(list, ","))
 	for id, c in pairs(data.custom) do
+		if type(c) ~= "table" then
+			continue
+		end
+		local paints, rims = ownedSet(c, "paints", c.paint, "Paints"), ownedSet(c, "rims", c.rim, "Rims")
 		player:SetAttribute("Custom_" .. id, string.format("%d,%d,%d", c.paint or 0, c.glow or 0, c.rim or 0))
+		player:SetAttribute("Style_" .. id, setText(paints) .. ";" .. setText(rims))
 		if c.tune or c.exhaust or c.exhausts then
 			player:SetAttribute("Tune_" .. id, Garage.FormatTune(tuneOf(c)))
 		end
@@ -185,19 +233,24 @@ end
 
 -- Dress a spawned car with its owner's customisation: paint, rims, underglow and tune (called by
 -- VehicleService, and by HousingService for the cars parked in a home's garage).
-function GarageService.ApplyCustom(car, player)
+function GarageService.ApplyCustom(car, player, restore)
 	local id = car:GetAttribute("VehicleId")
 	local def = Vehicles.ById[id]
 	local c = GarageService.CustomOf(player, id)
 	local paint = c and c.paint and Garage.Paints[c.paint]
 	local rim = c and c.rim and Garage.Rims[c.rim]
+	-- Back to stock on a car that's out (restore): its own colour / chrome. Otherwise a car without a
+	-- paint keeps what it has (a fresh car's stock colour, or a Spray & Go respray, DisguiseService).
+	local stockColor = def and typeof(def.Color) == "Color3" and def.Color or nil
+	local paintColor = paint and paint.Color or (restore == "Paints" and stockColor) or nil
+	local rimColor = rim and rim.Color or (restore == "Rims" and Garage.Rims[Garage.StockRim].Color) or nil
 	for _, d in ipairs(car:GetDescendants()) do
 		if d:IsA("BasePart") then
 			-- Body panels: the chassis, the roof and any part a car body marks with attribute BodyPaint.
-			if paint and (d == car.PrimaryPart or d.Name == "Roof" or d:GetAttribute("BodyPaint")) then
-				d.Color = paint.Color
-			elseif rim and d.Name == "Rim" then
-				d.Color = rim.Color
+			if paintColor and (d == car.PrimaryPart or d.Name == "Roof" or d:GetAttribute("BodyPaint")) then
+				d.Color = paintColor
+			elseif rimColor and d.Name == "Rim" then
+				d.Color = rimColor
 			end
 		end
 	end
@@ -245,36 +298,75 @@ local function canStyle(player, id)
 	return GarageService.Owns(player, id) and not Vehicles.ById[id].Boat -- Owns already checked the def exists
 end
 
-local function onRims(player, id, index)
-	if not RateLimit.Allow(player, "Rims", 2, 3) or type(id) ~= "string" or type(index) ~= "number" then
-		return
-	end
-	local data = profile(player)
-	index = math.floor(index)
-	if not data or not canStyle(player, id) or not Garage.Rims[index] then
-		return
-	end
-	local entry = Garage.Rims[index]
-	if not Garage.Allowed(player, entry) then
-		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
-		return
-	end
-	local cur = data.custom[id]
-	if cur and cur.rim == index then
-		return -- already this colour: don't charge twice for a double tap
-	end
-	if not EconomyService.Spend(player, Garage.RimPrice, "rims:" .. id) then
-		notify:FireClient(player, "NotEnoughCash")
-		return
-	end
-	data.custom[id] = data.custom[id] or {}
-	data.custom[id].rim = index
+-- After a style change: the phone's mirror, the car if it's out, and the answer for the phone's toast.
+-- restore: the style that changed ("Paints" / "Rims"), see ApplyCustom.
+local function styled(player, id, kind, name, bought, restore)
 	mirror(player)
 	local car = carById(player, id)
 	if car then
-		GarageService.ApplyCustom(car, player)
+		GarageService.ApplyCustom(car, player, restore)
 	end
-	Remotes.Event("GarageResult"):FireClient(player, { Kind = "Rims", Id = id })
+	Remotes.Event("GarageResult"):FireClient(player, { Kind = kind, Id = id, Name = name, Bought = bought })
+end
+
+local function needs(player, entry)
+	notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
+end
+
+-- Paint and rims share their rules (Config.Garage's STYLE notes); kind = "Paints" or "Rims".
+local STYLE = {
+	Paints = { field = "paint", owned = "paints", reason = "paint:", result = "Painted", stock = 0 },
+	Rims = { field = "rim", owned = "rims", reason = "rims:", result = "Rims", stock = Garage.StockRim },
+}
+
+local function onStyle(kind, player, id, index)
+	local style = STYLE[kind]
+	local data = profile(player)
+	index = math.floor(index)
+	if not data or not canStyle(player, id) then
+		return
+	end
+	local entry = Garage[kind][index]
+	if not entry and kind == "Paints" and index == 0 then
+		entry = { Name = "Stock" } -- the car's own colour (Config.Vehicles Color)
+	end
+	if not entry then
+		return
+	end
+	if not Garage.Allowed(player, entry) then
+		needs(player, entry)
+		return
+	end
+	local c = type(data.custom[id]) == "table" and data.custom[id] or {}
+	if (c[style.field] or style.stock) == index then
+		return -- already on the car: nothing to buy (a double tap, or a second try after a slow answer)
+	end
+	local owned = ownedSet(c, style.owned, c[style.field], kind)
+	local cost = Garage.StyleCost(kind, index, owned)
+	if not cost then
+		return
+	end
+	if cost > 0 then
+		if not EconomyService.Spend(player, cost, style.reason .. id) then
+			notify:FireClient(player, "NotEnoughCash")
+			return
+		end
+		owned[tostring(index)] = true -- this car keeps it for good
+		c[style.owned] = owned
+	end
+	c[style.field] = index ~= style.stock and index or nil
+	data.custom[id] = c
+	styled(player, id, style.result, entry.Name, cost > 0, kind)
+	if kind == "Paints" and index > 0 then
+		goalEvent(player, "Paint")
+	end
+end
+
+local function onRims(player, id, index)
+	if not RateLimit.Allow(player, "Rims", 2, 3) or type(id) ~= "string" or type(index) ~= "number" or index ~= index then
+		return
+	end
+	onStyle("Rims", player, id, index)
 end
 
 local function onBuy(player, id)
@@ -317,36 +409,10 @@ local function onBuy(player, id)
 end
 
 local function onPaint(player, id, index)
-	if not RateLimit.Allow(player, "Paint", 2, 3) or type(id) ~= "string" or type(index) ~= "number" then
+	if not RateLimit.Allow(player, "Paint", 2, 3) or type(id) ~= "string" or type(index) ~= "number" or index ~= index then
 		return
 	end
-	local data = profile(player)
-	index = math.floor(index)
-	if not data or not canStyle(player, id) or not Garage.Paints[index] then
-		return
-	end
-	local entry = Garage.Paints[index]
-	if not Garage.Allowed(player, entry) then
-		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
-		return
-	end
-	local cur = data.custom[id]
-	if cur and cur.paint == index then
-		return -- already this colour: don't charge twice for a double tap
-	end
-	if not EconomyService.Spend(player, Garage.PaintPrice, "paint:" .. id) then
-		notify:FireClient(player, "NotEnoughCash")
-		return
-	end
-	data.custom[id] = data.custom[id] or {}
-	data.custom[id].paint = index
-	mirror(player)
-	local car = carById(player, id)
-	if car then
-		GarageService.ApplyCustom(car, player)
-	end
-	Remotes.Event("GarageResult"):FireClient(player, { Kind = "Painted", Id = id })
-	goalEvent(player, "Paint")
+	onStyle("Paints", player, id, index)
 end
 
 local function onGlow(player, id, index)
@@ -360,12 +426,15 @@ local function onGlow(player, id, index)
 	end
 	local entry = Garage.Glows[index]
 	if not Garage.Allowed(player, entry) then
-		notify:FireClient(player, entry.Pass and ("NeedsPass_" .. entry.Pass) or ("NeedsUnlock_" .. entry.Unlock))
+		needs(player, entry)
 		return
 	end
-	data.custom[id] = data.custom[id] or {}
-	local c = data.custom[id]
-	if not c.glowUnlocked then
+	local c = type(data.custom[id]) == "table" and data.custom[id] or {}
+	if c.glowUnlocked and c.glow == index then
+		return -- already this colour
+	end
+	local installing = not c.glowUnlocked
+	if installing then
 		if not EconomyService.Spend(player, Garage.UnderglowPrice, "underglow:" .. id) then
 			notify:FireClient(player, "NotEnoughCash")
 			return
@@ -373,12 +442,8 @@ local function onGlow(player, id, index)
 		c.glowUnlocked = true
 	end
 	c.glow = index
-	mirror(player)
-	local car = carById(player, id)
-	if car then
-		GarageService.ApplyCustom(car, player)
-	end
-	Remotes.Event("GarageResult"):FireClient(player, { Kind = "Glow", Id = id })
+	data.custom[id] = c
+	styled(player, id, "Glow", entry.Name, installing)
 end
 
 ------------------------------------------------------------------ tuning

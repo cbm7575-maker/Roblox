@@ -3,6 +3,17 @@
 -- (boats at Marina Boat Sales, DealershipService); the phone's AUTONEON app only browses and routes you
 -- there. The phone's Garage app spawns, customises and tunes the cars you own.
 --
+-- STYLE (paint, rims, underglow; land cars only, boats keep their factory hulls): paint and rims are
+-- owned per car. A new colour costs PaintPrice (a rim style RimPrice) once for THAT car, then switching
+-- back to it is free. A car's stock paint (index 0: its Config.Vehicles Color) and stock rims (StockRim,
+-- Chrome) are always owned; pass and unlock entries cost nothing once allowed (Garage.Allowed: you paid
+-- for the pass, or earned the unlock). Underglow is installed once per car (UnderglowPrice), then every
+-- allowed glow colour is free. GarageService charges by Garage.StyleCost; the phone's swatches show the
+-- same numbers. Saved per car in data.custom[carId]: paint / rim / glow = the index on the car now,
+-- paints / rims = { ["3"] = true, ... } the ones bought for it (string keys: DataStores keep them as a
+-- dictionary), glowUnlocked = true once underglow is in. The Paints / Glows / Rims lists below are
+-- append-only: saves store list positions.
+--
 -- TUNING (Garage.Tune, Garage.Exhausts): upgrades for land cars you own (never boats, police cars or
 -- street cars: Garage.CanTune). GarageService sells them, PhoneUI's TUNE page shows them, and both use
 -- the helpers at the end of this file so prices and numbers can't drift apart.
@@ -51,6 +62,44 @@ Garage.StarterCars = { "Palmetto", "SunrayPatrol", "Splash", "HarborPatrol" } --
 Garage.PaintPrice = 500
 Garage.UnderglowPrice = 3000
 Garage.RimPrice = 1500
+Garage.StockRim = 1 -- Chrome: the rims every car is built with (CarBuilder), always owned
+
+-- The few words a locked swatch shows under it on the phone (pass key or unlock key).
+Garage.NeedText = {
+	VIP = "VIP", NeonGarage = "NEON",
+	Streak7 = "7 DAYS", CivRank10 = "RANK 10", CopRank10 = "COP 10", Squad = "SQUAD", Rank20 = "RANK 20",
+}
+
+-- What unlocks an entry, in those words ("VIP", "RANK 10"), or nil for an entry anyone may use.
+function Garage.Needs(entry)
+	local key = entry.Pass or entry.Unlock
+	return key and (Garage.NeedText[key] or "LOCKED") or nil
+end
+
+-- Is entry `index` of Garage[kind] the stock one (paint 0 = the car's own colour, rims = StockRim)?
+function Garage.IsStock(kind, index)
+	return (kind == "Paints" and index == 0) or (kind == "Rims" and index == Garage.StockRim)
+end
+
+-- What putting entry `index` of Garage[kind] ("Paints" or "Rims") on a car costs, given the set bought
+-- for that car (`owned`: { ["3"] = true }, or nil). 0 = free (stock, already bought, or a pass / unlock
+-- entry), nil = no such entry. Whether the player may use it at all is Garage.Allowed's question.
+function Garage.StyleCost(kind, index, owned)
+	if kind ~= "Paints" and kind ~= "Rims" then
+		return nil
+	end
+	if Garage.IsStock(kind, index) then
+		return 0
+	end
+	local entry = Garage[kind][index]
+	if not entry then
+		return nil
+	end
+	if entry.Pass or entry.Unlock or (type(owned) == "table" and owned[tostring(index)]) then
+		return 0
+	end
+	return kind == "Paints" and Garage.PaintPrice or Garage.RimPrice
+end
 
 Garage.Paints = {
 	{ Name = "Flamingo", Color = Color3.fromRGB(255, 120, 190) },

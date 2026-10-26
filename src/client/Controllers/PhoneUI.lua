@@ -1,5 +1,6 @@
 -- PhoneUI (ModuleScript, StarterPlayerScripts.Controllers.PhoneUI)
--- The in-game phone (the PHONE tile or P), drawn as a modern smartphone in the flat "street" look
+-- The in-game phone (the PHONE tile or P; a tap or click anywhere around it puts it away), drawn as a
+-- modern smartphone in the flat "street" look
 -- (Shared.Util.Theme): a slim dark body with a thin bezel and small corners, a status bar (the game's
 -- clock from Lighting.ClockTime, your cash in a small island, signal bars and a battery drawn from
 -- frames), a home screen (a dark wallpaper, a big clock when the screen is tall enough, and a grid of
@@ -19,11 +20,21 @@
 -- two instead of fixed numbers, and rows with sentences in them size themselves to their words. A new
 -- screen size draws the open page again.
 -- Its right edge stays left of the HUD's Buttons zone (bodyRight), so the PHONE / CAR tiles stay usable.
+-- Putting it away by tapping around it: nothing is laid over the screen for that, so every HUD button
+-- works as before whether the phone is up or not. A quick tap or click (K.TapTime, K.TapSlop) that no
+-- GUI took (the street, the sky, a plain label) and that lands outside the phone's body closes it; taps
+-- on the phone itself (S.phoneTouchAt), drags (thumbstick, camera) and long presses never do.
 -- Apps:
 --   GARAGE    your cars for your current role (bought, starter, game-pass and cop-rank cars): DELIVER
---             (spawn), STYLE (paint $500, rims $1,500, underglow $3,000 once per car, then free colour
---             swaps; thumb-sized swatches, a white ring on the one fitted, a padlock on locked ones);
---             boats have no STYLE (their hulls keep the factory colours).
+--             (spawn), STYLE: paint and rims are owned per car (a new colour $500 / rim style $1,500
+--             once on that car, then switching back is free; the car's stock paint and chrome rims are
+--             always owned; pass and unlock ones are free once you have them), underglow $3,000 once
+--             per car, then free colour swaps (Config.Garage's STYLE notes; GarageService charges by the
+--             same Garage.StyleCost). Thumb-sized swatches with a caption under each: its price, OWNED,
+--             STOCK, FREE, ON (the one fitted: white ring) or what unlocks it (padlock). A swatch that
+--             costs money takes two taps: the first arms it (green ring, AGAIN, "TAP AGAIN TO BUY"
+--             above the grid, for K.StyleArmTime seconds), only the second sends the request, so one
+--             tap never spends anything. Boats have no STYLE (their hulls keep the factory colours).
 --             TUNE (a strip on every land car that isn't a police car, so the page is two taps from
 --             the home screen; it reads SPEED + SOUND on a stock car): AUTO TUNE on top (shows its
 --             total and what it buys, second tap confirms), bars for top speed / acceleration /
@@ -59,8 +70,13 @@
 --             person, so each row's button routes you to AutoNeon Motors (cars) or Marina Boat Sales
 --   HOME      homes for sale (HouseClient): price, garage size, distance, GPS to the door, GO HOME
 --   GPS       races, stunts, jobs, services and heist sites (open ones marked): sets a road route
---   JOBS      switch between free roam and police, the three street jobs, and the phone missions
---   SHOP      game passes and cash packs (prices read live from the Creator Hub); cash packs add cash
+--   JOBS      police duty, an optional job (GO ON DUTY / GO OFF DUTY: RequestTeam; TeamService checks
+--             heat, the cooldown and the cop cap and says why in a toast; the phone goes away when the
+--             switch lands), the three street jobs, and the phone missions. Everyone joins free roam.
+--   SHOP      every game pass and cash pack with its Robux price (Config.Shop's until the item has a
+--             real Id, then read live from Roblox): OWNED, BUY (Roblox's prompt), SOON ("Coming soon"
+--             while the Id is 0) or FREE in Studio and for the game's owner (player attribute
+--             "ShopFree", ShopService: RequestShopFree, checked on the server); cash packs add cash
 --             only (they can't skip heist locks, cop ranks or passes)
 --   GOALS     both ranks with their XP bars and next unlock, and today's challenges
 --   CREW      INVITE FRIENDS (Roblox's own invite pop-up, hidden when Roblox says this player can't send
@@ -93,8 +109,9 @@
 -- HUD tile, HUDController.ZoneButton) and "Body" (OfferClient, MinimapClient, AmbienceClient,
 -- DealerClient and TutorialClient watch its Visible) > "Fit", "Back", "HomeBar" and "Screen" > the page.
 -- Home screen: "Apps".<page key>, "Guide", "GuideHint". Pages: "List".<row>.<button>: Garage
--- List.<carId>.Deliver / Style / Tune; STYLE List.Paint / Rims / Underglow > Frame.Swatch<n>; TUNE
--- List.AutoTune, List.Stats, List.ExhaustHead.BuyExhaust, List.Exhausts.<key>, List.<track>; AUTONEON
+-- List.<carId>.Deliver / Style / Tune; STYLE List.Paint / Rims / Underglow > Frame.Swatch<n> and Status
+-- (Paint's Swatch1 is the car's stock colour, so paint i is Swatch<i + 1>; Rims and Underglow start at 1);
+-- JOBS List.Duty.Duty; TUNE List.AutoTune, List.Stats, List.ExhaustHead.BuyExhaust, List.Exhausts.<key>, List.<track>; AUTONEON
 -- and SHOP List.<id>.Buy; HOME List.MyHome.GoHome, List.<homeId>.Go; GPS "Tabs".<Activity|Heist|Service>,
 -- List.<place>.Go; JOBS List.<missionId>.Start; CREW List.InviteFriends, List.BigScore.Start / Quit, List.<UserId>.Invite,
 -- List.Friend<UserId>.Join, List.Leave, List.PlayTogether; SETTINGS List.Music.Music<1-5>,
@@ -125,6 +142,7 @@ local Heists = require(ReplicatedStorage.Shared.Config.Heists)
 local Housing = require(ReplicatedStorage.Shared.Config.Housing)
 local Combat = require(ReplicatedStorage.Shared.Config.Combat)
 local Activities = require(ReplicatedStorage.Shared.Config.Activities)
+local Teams = require(ReplicatedStorage.Shared.Config.Teams)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
@@ -165,6 +183,10 @@ local K = {
 	Ink = Color3.fromRGB(12, 14, 18), -- dark words on a white or gold button
 
 	StudsToMph = 0.626, -- same as the speed gauge (DriveUI)
+	StyleArmTime = 4, -- seconds a STYLE swatch that costs money waits for its second tap
+	TapTime = 0.4, -- a tap around the phone that puts it away: released within this many seconds...
+	TapSlop = 16, -- ...having moved at most this many pixels (more is a drag: thumbstick, camera)
+	DutyWait = 10, -- seconds after GO ON / OFF DUTY in which a side change puts the phone away
 
 	-- CREW page
 	FriendsFresh = 30, -- seconds a friends list is reused (Roblox caches it about that long too)
@@ -212,6 +234,10 @@ local S = {
 	guideResume = nil, -- { Pos, At = os.clock() }: where the guide was when the phone was put away on it
 	guideHinted = false, -- the HOW TO PLAY button has had its once-a-session pulse
 	posed = false, -- the character is holding its phone (PoseClient)
+	styleArm = nil, -- { key = "Paints:<carId>:<index>", at = os.clock() }: the STYLE swatch waiting for its second tap
+	dutyAskedAt = -math.huge, -- when JOBS last asked to go on / off duty
+	phoneTouchAt = -math.huge, -- the last tap or click that began on the phone itself (never puts it away)
+	taps = {}, -- [touch InputObject or "Mouse"] = { pos, at }: taps around the open phone not yet let go
 }
 
 local current = "Home" -- the PAGES key on screen (show keeps it)
@@ -343,6 +369,23 @@ local function customOf(id)
 	end
 	local a, b, c = string.match(s, "(%d+),(%d+),?(%d*)")
 	return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
+end
+
+-- Paints and rims bought for this car (GarageService mirrors "Style_<id>" = "3,5;2"), as sets with
+-- string keys: the shape Garage.StyleCost takes.
+local function styleOf(id)
+	local text = player:GetAttribute("Style_" .. id)
+	local paints, rims = {}, {}
+	if type(text) == "string" then
+		local p, r = string.match(text, "^([%d,]*);([%d,]*)$")
+		for n in string.gmatch(p or "", "%d+") do
+			paints[n] = true
+		end
+		for n in string.gmatch(r or "", "%d+") do
+			rims[n] = true
+		end
+	end
+	return paints, rims
 end
 
 local function canDrive(def)
@@ -600,58 +643,158 @@ function W.lock(parent)
 	return disc
 end
 
--- One row of colour swatches on the STYLE page: thumb-sized squares in a grid; the one on the car wears
--- a white ring and a dot, locked ones a padlock. The grid's holder keeps its default name ("Frame").
-function W.swatches(parent, title, price, items, current, order, onPick)
-	local touch, nameH = touchHeight(), textPx(15) + 4
+-- Is this STYLE swatch (its Key) waiting for its second tap?
+function W.styleArmed(key)
+	local arm = S.styleArm
+	return key ~= nil and arm ~= nil and arm.key == key and os.clock() - arm.at < K.StyleArmTime
+end
+
+-- One section of the STYLE page: its name and price on top, a line saying what a tap does (or, while a
+-- swatch waits for its second tap, "TAP AGAIN TO BUY" with its name and price, in cash green), then a
+-- grid of swatches: a thumb-sized colour chip with a caption under it. The one on the car wears a white
+-- ring and a dot, one waiting for its second tap a green ring (the TUNE page's confirm colour), locked
+-- ones a padlock. cells[i] = { Color, Name, Caption, CaptionColor, Current, Locked, Price, Key, Pick }:
+-- Price set = it costs money, so it takes two taps (see the header); Pick() sends the request. Free and
+-- locked swatches send on the first tap (a locked one: the server says what unlocks it). The grid's
+-- holder keeps its default name ("Frame"); the swatches are "Swatch<n>", the line "Status".
+function W.swatches(parent, title, price, note, cells, order)
+	local touch, nameH, small = touchHeight(), textPx(15) + 4, textPx(13)
 	local gap = 6
-	local width = ui.screen.Size.X.Offset - 6 - 4 -- the list's scroll bar keeps 6; 2 each side for the ring
-	local cols = math.max(1, math.floor((width + gap) / (touch + gap)))
-	local lines = math.ceil(#items / cols)
-	local top = 10 + nameH + 8
-	local r = W.row(parent, title, top + lines * (touch + gap) + 6, order)
-	themeText(r, string.upper(title), UDim2.new(0.5, 0, 0, nameH), UDim2.fromOffset(0, 10), 15, "Bold")
-	themeText(r, price, UDim2.new(0.5, 0, 0, nameH), UDim2.new(0.5, 0, 0, 10), 15, "Display", C.Cash, Enum.TextXAlignment.Right)
+	local cellW = math.max(touch, math.ceil(small * 3.6)) -- room for "RANK 10" / "$1,500" under the chip
+	local cellH = touch + 4 + small + 2
+	local width = ui.screen.Size.X.Offset - 6 - 4 -- the list's scroll bar keeps 6, the holder 4 (see below)
+	local cols = math.max(1, math.floor((width + gap) / (cellW + gap)))
+	local lines = math.ceil(#cells / cols)
+	local armedCell
+	for _, cell in ipairs(cells) do
+		if cell.Price and W.styleArmed(cell.Key) then
+			armedCell = cell
+		end
+	end
+	local r = W.frame(parent, title, order)
+	r.Size = UDim2.fromScale(1, 0)
+	r.AutomaticSize = Enum.AutomaticSize.Y
+	local stack = Instance.new("UIListLayout")
+	stack.SortOrder = Enum.SortOrder.LayoutOrder
+	stack.Padding = UDim.new(0, 4)
+	stack.Parent = r
+	W.rule(r).LayoutOrder = 0
+	local head = W.frame(r, "Head", 1)
+	head.Size = UDim2.new(1, 0, 0, 6 + nameH)
+	themeText(head, string.upper(title), UDim2.new(0.5, 0, 0, nameH), UDim2.fromOffset(0, 6), 15, "Bold")
+	themeText(head, price, UDim2.new(0.5, 0, 0, nameH), UDim2.new(0.5, 0, 0, 6), 15, "Display", C.Cash, Enum.TextXAlignment.Right)
+	local status = themeText(r, armedCell and ("TAP AGAIN TO BUY: " .. tostring(armedCell.Name) .. "  " .. money(armedCell.Price)) or note,
+		UDim2.fromScale(1, 0), nil, 13, armedCell and "Bold" or "Body", armedCell and C.Cash or C.Dim)
+	status.Name = "Status"
+	status.LayoutOrder = 2
+	status.AutomaticSize = Enum.AutomaticSize.Y
+	status.TextWrapped = true
+	status.TextTruncate = Enum.TextTruncate.None
 	local holder = Instance.new("Frame")
-	holder.Size = UDim2.new(1, -4, 0, lines * (touch + gap))
-	holder.Position = UDim2.fromOffset(2, top)
+	holder.Size = UDim2.new(1, -4, 0, lines * (cellH + gap) + 4)
 	holder.BackgroundTransparency = 1
+	holder.LayoutOrder = 3
 	holder.Parent = r
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 4) -- room for the top of a ring (each chip sits centred in a wider cell)
+	pad.Parent = holder
 	local grid = Instance.new("UIGridLayout")
-	grid.CellSize = UDim2.fromOffset(touch, touch)
+	grid.CellSize = UDim2.fromOffset(cellW, cellH)
 	grid.CellPadding = UDim2.fromOffset(gap, gap)
 	grid.SortOrder = Enum.SortOrder.LayoutOrder
 	grid.Parent = holder
-	for i, item in ipairs(items) do
+	for i, cell in ipairs(cells) do
+		local armed = cell.Price ~= nil and W.styleArmed(cell.Key)
 		local b = Instance.new("TextButton")
 		b.Name = "Swatch" .. i
 		b.Text = ""
-		b.AutoButtonColor = true
-		b.BackgroundColor3 = item.Color
+		b.AutoButtonColor = false
+		b.BackgroundTransparency = 1
 		b.BorderSizePixel = 0
 		b.LayoutOrder = i
-		Theme.Corners(b, 6)
 		b.Parent = holder
-		if i == current then
-			W.ring(b, C.Text, 2)
-			local dot = W.block(b, "On", 0, 0, 10, 10, C.Text, 5)
+		local chip = W.block(b, "Chip", 0, 0, touch, touch, cell.Color, 6)
+		chip.AnchorPoint = Vector2.new(0.5, 0)
+		chip.Position = UDim2.fromScale(0.5, 0)
+		if cell.Current then
+			W.ring(chip, C.Text, 2)
+			local dot = W.block(chip, "On", 0, 0, 10, 10, C.Text, 5)
 			dot.AnchorPoint = Vector2.new(0.5, 0.5)
 			dot.Position = UDim2.fromScale(0.5, 0.5)
 			W.ring(dot, K.Ink, 2)
+		elseif armed then
+			W.ring(chip, C.Cash, 3)
 		else
-			W.ring(b, C.Text, 1).Transparency = 0.8
+			W.ring(chip, C.Text, 1).Transparency = 0.8
 		end
-		if not Garage.Allowed(player, item) then
-			W.lock(b)
+		if cell.Locked then
+			W.lock(chip)
 		end
+		local cap = themeText(b, armed and "AGAIN" or tostring(cell.Caption or ""), UDim2.new(1, 0, 0, small + 2),
+			UDim2.fromOffset(0, touch + 4), 13, "Display", armed and C.Cash or cell.CaptionColor or C.Dim, Enum.TextXAlignment.Center)
+		cap.Name = "Caption"
+		cap.TextTruncate = Enum.TextTruncate.None
+		-- The longest ("RANK 20", about 47 real pixels) only just fits the narrowest cell: let it shrink a
+		-- little rather than run into its neighbour.
+		cap.TextScaled = true
+		local fit = Instance.new("UITextSizeConstraint")
+		fit.MaxTextSize = small
+		fit.MinTextSize = small - 3
+		fit.Parent = cap
 		b.Activated:Connect(function()
-			if i == current then
-				return -- already on the car (white ring): a second tap would just pay again
+			sfx("Click")
+			if cell.Current then
+				return -- already on the car (white ring)
 			end
-			onPick(i, item)
+			if cell.Locked or not cell.Price then
+				S.styleArm = nil
+				cell.Pick() -- free (owned, stock, a pass / unlock one), or locked: the server explains
+				return
+			end
+			if W.styleArmed(cell.Key) then
+				S.styleArm = nil
+				cell.Pick() -- the second tap: buy it (the server checks the price and our cash again)
+				show("Custom")
+				return
+			end
+			local arm = { key = cell.Key, at = os.clock() }
+			S.styleArm = arm
+			show("Custom") -- draws this one armed (and any other one back to normal)
+			task.delay(K.StyleArmTime, function()
+				if S.styleArm == arm then
+					S.styleArm = nil
+					if S.open and current == "Custom" then
+						show("Custom")
+					end
+				end
+			end)
 		end)
 	end
 	return r
+end
+
+-- A paint or rim swatch: what it costs on this car (Garage.StyleCost, the rule the server charges by)
+-- and whether it's on the car, locked, owned, stock or for sale. remote = "RequestPaint" / "RequestRims".
+function W.styleCell(kind, def, index, entry, wearing, ownedSet, remote)
+	local cell = { Color = entry.Color, Name = entry.Name, Key = kind .. ":" .. def.Id .. ":" .. index }
+	local cost = Garage.StyleCost(kind, index, ownedSet) or 0
+	if index == wearing then
+		cell.Current, cell.Caption, cell.CaptionColor = true, "ON", C.Text
+	elseif not Garage.Allowed(player, entry) then
+		cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", C.Gold
+	elseif cost > 0 then
+		cell.Price, cell.Caption, cell.CaptionColor = cost, money(cost), C.Cash
+	elseif Garage.IsStock(kind, index) then
+		cell.Caption = "STOCK"
+	elseif ownedSet[tostring(index)] then
+		cell.Caption = "OWNED"
+	else
+		cell.Caption = "FREE" -- a pass or unlock entry you have
+	end
+	cell.Pick = function()
+		Remotes.Event(remote):FireServer(def.Id, index)
+	end
+	return cell
 end
 
 -- App icon glyphs: a few white blocks on the app's coloured tile (no image assets). `g` is a 28 x 28
@@ -942,21 +1085,49 @@ end
 function PAGES.Custom()
 	local def = Vehicles.ById[detailId]
 	if not def or def.Boat or def.Hidden then
-		return show("Garage") -- boats can't be styled (the Garage shows no STYLE button for them)
+		show("Garage") -- boats can't be styled (the Garage shows no STYLE button for them)
+		return
 	end
 	setHeader(string.upper(def.DisplayName or def.Id), "Garage")
 	local paint, glow, rim = customOf(def.Id)
+	local paints, rims = styleOf(def.Id)
 	local s = W.list(0)
-	W.swatches(s, "Paint", money(Garage.PaintPrice), Garage.Paints, paint, 1, function(i)
-		Remotes.Event("RequestPaint"):FireServer(def.Id, i)
-	end)
-	W.swatches(s, "Rims", money(Garage.RimPrice), Garage.Rims, rim, 2, function(i)
-		Remotes.Event("RequestRims"):FireServer(def.Id, i)
-	end)
-	local glowPrice = glow > 0 and "FREE SWAP" or money(Garage.UnderglowPrice)
-	W.swatches(s, "Underglow", glowPrice, Garage.Glows, glow, 3, function(i)
-		Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
-	end)
+	-- Paint: the car's own colour first (STOCK, always owned), then every Garage paint.
+	local stock = typeof(def.Color) == "Color3" and def.Color or C.Dim
+	local cells = { W.styleCell("Paints", def, 0, { Name = "Stock", Color = stock }, paint, paints, "RequestPaint") }
+	for i, entry in ipairs(Garage.Paints) do
+		table.insert(cells, W.styleCell("Paints", def, i, entry, paint, paints, "RequestPaint"))
+	end
+	W.swatches(s, "Paint", money(Garage.PaintPrice) .. " A COLOR",
+		"Each new color costs " .. money(Garage.PaintPrice) .. " once on this car. Colors you own switch back free.", cells, 1)
+	cells = {}
+	for i, entry in ipairs(Garage.Rims) do
+		table.insert(cells, W.styleCell("Rims", def, i, entry, rim > 0 and rim or Garage.StockRim, rims, "RequestRims"))
+	end
+	W.swatches(s, "Rims", money(Garage.RimPrice) .. " A STYLE",
+		"Each new rim style costs " .. money(Garage.RimPrice) .. " once on this car. Rims you own switch back free.", cells, 2)
+	-- Underglow: installed once per car, then every colour you may use is free.
+	local installed = glow > 0
+	cells = {}
+	for i, entry in ipairs(Garage.Glows) do
+		local cell = { Color = entry.Color, Name = entry.Name, Key = "Glows:" .. def.Id .. ":" .. i }
+		if installed and i == glow then
+			cell.Current, cell.Caption, cell.CaptionColor = true, "ON", C.Text
+		elseif not Garage.Allowed(player, entry) then
+			cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", C.Gold
+		elseif not installed then
+			cell.Price, cell.Caption, cell.CaptionColor = Garage.UnderglowPrice, "INSTALL", C.Cash
+		else
+			cell.Caption = "FREE"
+		end
+		cell.Pick = function()
+			Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
+		end
+		table.insert(cells, cell)
+	end
+	W.swatches(s, "Underglow", installed and "INSTALLED" or money(Garage.UnderglowPrice),
+		installed and "Installed on this car: color swaps are free."
+			or ("Install once for " .. money(Garage.UnderglowPrice) .. ", then every color is free on this car."), cells, 3)
 	W.note(s, "Changes show on this car next time it's delivered (or right away if it's out).", 4, nil,
 		Enum.TextXAlignment.Center).Name = "Hint"
 end
@@ -1741,19 +1912,26 @@ end
 function PAGES.Jobs()
 	setHeader("JOBS", "Home")
 	local s = W.list(0)
-	local side = player:GetAttribute("Side") or "Civilian"
+	-- Police duty: an optional job (everyone joins free roam). TeamService checks heat, the cooldown and
+	-- the cop cap and says why in a toast; a switch respawns you at your side's spawn with its starter
+	-- car, and the phone goes away when it lands (PhoneUI.Init, "Side").
+	local cop = (player:GetAttribute("Side") or "Civilian") == "Cop"
+	local cops = 0
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p:GetAttribute("Side") == "Cop" then
+			cops += 1
+		end
+	end
 	W.item(s, {
-		Name = "Role", Order = 1,
-		Title = "You are: " .. (side == "Cop" and "POLICE" or side == "Prisoner" and "IN PRISON" or "FREE ROAM"),
-		TitleColor = side == "Cop" and C.Police or nil,
-		Sub = "Switch between free roam and police.",
-		Button = "SWITCH ROLE", ButtonName = "Switch", Width = 116,
+		Name = "Duty", Order = 1,
+		Title = cop and "ON DUTY: POLICE" or "POLICE: AN OPTIONAL JOB", TitleColor = C.Police,
+		Sub = cop and "Chase wanted players for bounties. Go off duty to roam free again."
+			or "Chase wanted players for bounties. Go off duty any time.",
+		Meta = "Cops on duty: " .. cops .. " / " .. Teams.MaxCops(#Players:GetPlayers()), MetaColor = C.Police,
+		Button = cop and "GO OFF DUTY" or "GO ON DUTY", ButtonName = "Duty", Kind = cop and "Quiet" or "Primary", Width = 124,
 		OnTap = function()
-			PhoneUI.Close()
-			local TeamUI = require(script.Parent:WaitForChild("TeamUI"))
-			if TeamUI.Open then
-				TeamUI.Open()
-			end
+			S.dutyAskedAt = os.clock()
+			Remotes.Event("RequestTeam"):FireServer(cop and "Civilian" or "Cop")
 		end,
 	})
 	local jobs = {
@@ -1797,76 +1975,100 @@ end
 
 ------------------------------------------------------------------ shop
 
-local priceCache = {} -- [id] = "R$ 499" (read live: prices are never hard-coded)
-local function priceText(id, infoType)
-	if id == 0 then
-		return "SOON"
+local priceCache = {} -- [Id] = the Robux price Roblox gave for it (read live: Config.Shop's is only a start)
+
+-- "R$ 499": Roblox's live price once the item has a real Id (a web call: yields, cached), else the
+-- starting price in Config.Shop. noWait: no web call (what's known right now, for the first draw).
+local function priceText(item, infoType, noWait)
+	if item.Id ~= 0 and priceCache[item.Id] == nil and not noWait then
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, item.Id, infoType)
+		if ok and type(info) == "table" and type(info.PriceInRobux) == "number" then
+			priceCache[item.Id] = info.PriceInRobux
+		end
 	end
-	if priceCache[id] then
-		return priceCache[id]
+	local robux = item.Id ~= 0 and priceCache[item.Id] or item.Price
+	return type(robux) == "number" and ("R$ " .. string.sub(money(robux), 2)) or ""
+end
+
+-- One SHOP row: the item's words, its Robux price and one button: OWNED, FREE (Studio and the game's
+-- owner, "ShopFree": the server grants it, RequestShopFree), BUY (Roblox's prompt) or SOON (no Id yet).
+-- kind = "Pass" | "Product" (RequestShopFree's kinds).
+function W.shopRow(parent, kind, item, order, o)
+	local free = player:GetAttribute("ShopFree")
+	local infoType = kind == "Pass" and Enum.InfoType.GamePass or Enum.InfoType.Product
+	local tail = "" -- after the price on the row's last line
+	local text, buttonKind, tap
+	if o.Owns then
+		text, buttonKind, tail = "OWNED", "Quiet", "  ·  yours"
+	elseif free == "Studio" or free == "Owner" then
+		text, buttonKind = "FREE", "Confirm"
+		tail = free == "Studio" and "  ·  free in Studio" or "  ·  free for you"
+		tap = function()
+			Remotes.Event("RequestShopFree"):FireServer(kind, item.Key)
+		end
+	elseif item.Id ~= 0 then
+		text, buttonKind = "BUY", "Primary"
+		tap = function()
+			if kind == "Pass" then
+				MarketplaceService:PromptGamePassPurchase(player, item.Id)
+			else
+				MarketplaceService:PromptProductPurchase(player, item.Id)
+			end
+		end
+	else
+		text, buttonKind, tail = "SOON", "Quiet", "  ·  COMING SOON"
+		tap = function()
+			NotifyController.Show((kind == "Pass" and (tostring(item.Name) .. " is") or "Cash packs are") .. " coming soon!", nil, "info")
+		end
 	end
-	local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, id, infoType)
-	if ok and info and info.PriceInRobux then
-		priceCache[id] = "R$ " .. info.PriceInRobux
-		return priceCache[id]
+	local _, b, words = W.item(parent, {
+		Name = item.Key, Order = order,
+		Title = o.Title, TitleColor = o.TitleColor, Sub = o.Sub,
+		Meta = priceText(item, infoType, true) .. tail, MetaColor = C.Text,
+		Button = text, ButtonName = "Buy", Kind = buttonKind, Width = 96,
+		OnTap = function()
+			if tap then
+				tap()
+			end
+		end,
+	})
+	if not tap and b then
+		b.TextColor3 = C.Dim -- nothing to do with one you own
+		b.AutoButtonColor = false
 	end
-	return "BUY"
+	if item.Id ~= 0 and priceCache[item.Id] == nil then
+		task.spawn(function()
+			local price = priceText(item, infoType)
+			local meta = words:FindFirstChild("Meta")
+			if meta and meta.Parent then
+				meta.Text = price .. tail
+			end
+		end)
+	end
 end
 
 function PAGES.Shop()
 	setHeader("SHOP", "Home")
 	local s = W.list(0)
+	local free = player:GetAttribute("ShopFree")
+	if free == "Studio" then
+		W.note(s, "STUDIO TEST: every pass and cash pack here is free and instant.", -1, C.Gold, Enum.TextXAlignment.Center).Name = "Free"
+	elseif free == "Owner" then
+		W.note(s, "YOUR GAME: every pass is on for you, and cash packs are free.", -1, C.Gold, Enum.TextXAlignment.Center).Name = "Free"
+	end
 	W.head(s, "GAME PASSES", 0)
 	for i, pass in ipairs(Shop.Passes) do
-		local has = player:GetAttribute("Pass_" .. pass.Key) == true
-		local _, b = W.item(s, {
-			Name = pass.Key, Order = i,
-			Title = pass.Name,
-			Sub = pass.Perk,
-			Button = has and "OWNED" or "...", ButtonName = "Buy", Kind = has and "Quiet" or "Primary", Width = 96,
-			OnTap = function()
-				if not has and pass.Id ~= 0 then
-					MarketplaceService:PromptGamePassPurchase(player, pass.Id)
-				elseif pass.Id == 0 then
-					NotifyController.Show(pass.Name .. " is coming soon!", nil, "info")
-				end
-			end,
+		W.shopRow(s, "Pass", pass, i, {
+			Title = pass.Name, Sub = pass.Perk, Owns = player:GetAttribute("Pass_" .. pass.Key) == true,
 		})
-		if has then
-			b.TextColor3 = C.Dim
-			b.AutoButtonColor = false
-		else
-			task.spawn(function()
-				local text = priceText(pass.Id, Enum.InfoType.GamePass)
-				if b.Parent then
-					b.Text = text
-				end
-			end)
-		end
 	end
 	W.head(s, "CASH PACKS", 49)
 	-- Honest about what cash packs can't do: heist locks, cop ranks and pass cars stay locked.
 	W.note(s, "Cash packs add cash only: they can't skip heist locks, cop ranks or passes.", 50).Name = "CashNote"
 	for i, product in ipairs(Shop.Products) do
-		local _, b = W.item(s, {
-			Name = product.Key, Order = 50 + i,
-			Title = money(product.Cash), TitleColor = C.Cash,
-			Button = "...", ButtonName = "Buy", Kind = "Primary", Width = 96,
-			OnTap = function()
-				if product.Id ~= 0 then
-					MarketplaceService:PromptProductPurchase(player, product.Id)
-				else
-					NotifyController.Show("Cash packs are coming soon!", nil, "info")
-				end
-			end,
-		})
-		task.spawn(function()
-			local text = priceText(product.Id, Enum.InfoType.Product)
-			if b.Parent then
-				b.Text = text
-			end
-		end)
+		W.shopRow(s, "Product", product, 50 + i, { Title = money(product.Cash), TitleColor = C.Cash })
 	end
+	W.note(s, "Prices in Robux. Cash goes straight into your bank.", 100, nil, Enum.TextXAlignment.Center).Name = "Foot"
 end
 
 ------------------------------------------------------------------ goals: ranks + daily challenges
@@ -2509,7 +2711,7 @@ local function guideSections()
 		{
 			Id = "Police", Title = "Play as police", Short = "POLICE",
 			Lines = {
-				"[JOBS] > [SWITCH ROLE] to be a cop.",
+				"Optional job: [JOBS] > [GO ON DUTY].",
 				-- $80: ArrestService PATROL_PAY.
 				"Cops earn $80 a minute on patrol.",
 				-- The Cuff prompt is held with Q (ArrestService), not E.
@@ -2822,6 +3024,13 @@ local function build()
 	phone.Active = true -- taps on the phone never fall through to the game
 	phone.Visible = false
 	phone.Parent = gui
+	-- A tap or click that begins on the phone (on its words too) never puts it away (PhoneUI.Init).
+	phone.InputBegan:Connect(function(input)
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+			S.phoneTouchAt = os.clock()
+		end
+	end)
 	Theme.Corners(phone, K.Round)
 	W.ring(phone, K.Edge, 1.5) -- the thin metal edge
 	ui.fit = Instance.new("UIScale")
@@ -3122,6 +3331,8 @@ function PhoneUI.Close()
 		GuiService.SelectedObject = nil
 	end
 	S.open = false
+	table.clear(S.taps)
+	S.styleArm = nil
 	lower()
 	holdPhone(false)
 end
@@ -3209,6 +3420,52 @@ function PhoneUI.Init()
 			end)
 		end
 	end)
+	-- Tap or click anywhere around the open phone to put it away (see the header): only a quick tap that
+	-- no GUI took and that lands outside the body. Both ways of reading a screen point are tried (an input
+	-- position may or may not count Roblox's top bar; the body's lives in a gui that ignores it), so a tap
+	-- near the phone's top or bottom edge is never taken for one outside it.
+	local function onPhone(pos)
+		local a, size = phone.AbsolutePosition, phone.AbsoluteSize
+		for _, p in ipairs({ pos, pos + GuiService:GetGuiInset() }) do
+			if p.X >= a.X and p.X <= a.X + size.X and p.Y >= a.Y and p.Y <= a.Y + size.Y then
+				return true
+			end
+		end
+		return false
+	end
+	-- Where a tap is kept: each finger by its own input, the mouse's left button by one key; nil for
+	-- every other input (keys, the right button, the mouse moving).
+	local function tapKey(input)
+		local t = input.UserInputType
+		if t == Enum.UserInputType.Touch then
+			return input
+		end
+		return t == Enum.UserInputType.MouseButton1 and "Mouse" or nil
+	end
+	UserInputService.InputBegan:Connect(function(input, processed)
+		local key = tapKey(input)
+		if not key then
+			return
+		end
+		local pos = Vector2.new(input.Position.X, input.Position.Y)
+		if processed or not S.open or S.sliding or onPhone(pos) then
+			return -- a HUD button, the phone itself, or a phone still moving
+		end
+		S.taps[key] = { pos = pos, at = os.clock() }
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		local key = tapKey(input)
+		local tap = key and S.taps[key]
+		if not tap then
+			return
+		end
+		S.taps[key] = nil
+		local pos = Vector2.new(input.Position.X, input.Position.Y)
+		if S.open and not S.sliding and os.clock() - tap.at <= K.TapTime and (pos - tap.pos).Magnitude <= K.TapSlop
+			and os.clock() - S.phoneTouchAt > 0.3 and not onPhone(pos) then
+			PhoneUI.Close()
+		end
+	end)
 	-- Keep open pages fresh when the server changes what we own or how our cars look.
 	local function maybeRefresh()
 		if S.open and (current == "Garage" or current == "Custom" or current == "Tune" or current == "Dealer" or current == "Shop"
@@ -3222,6 +3479,10 @@ function PhoneUI.Init()
 			or name == "CopRank" or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" or name == "JourneyHidden"
 			or name == "BigHeists" or name == "Home" then
 			maybeRefresh()
+		elseif string.sub(name, 1, 6) == "Style_" then
+			refreshIf("Custom") -- the paints and rims this car owns (GarageService)
+		elseif name == "ShopFree" then
+			refreshIf("Shop") -- FREE buttons (ShopService)
 		elseif string.sub(name, 1, 5) == "Tune_" then
 			refreshIf("Tune")
 			refreshIf("Garage") -- its TUNE strips count the upgrades
@@ -3235,9 +3496,16 @@ function PhoneUI.Init()
 			refreshStatus()
 			refreshIf("Tune") -- prices turn green the moment they're affordable, and AUTO TUNE's plan grows
 		elseif name == "Side" then
-			ui.openButton.Visible = player:GetAttribute("Side") ~= "Prisoner"
-			if player:GetAttribute("Side") == "Prisoner" then
+			local side = player:GetAttribute("Side")
+			ui.openButton.Visible = side ~= "Prisoner"
+			if side == "Prisoner" then
 				PhoneUI.Close()
+			elseif os.clock() - S.dutyAskedAt < K.DutyWait then
+				-- JOBS asked for this switch: the server is respawning us at the side's spawn.
+				S.dutyAskedAt = -math.huge
+				PhoneUI.Close()
+				NotifyController.Show(side == "Cop" and "On duty! Your patrol car is waiting at the station."
+					or "Off duty. Port Solana is yours to roam.", side == "Cop" and C.Police or nil, side == "Cop" and "police" or "info")
 			else
 				maybeRefresh()
 			end
@@ -3314,11 +3582,16 @@ function PhoneUI.Init()
 		if result.Kind == "Bought" then
 			HUDController.Stamp("NEW RIDE!", name .. " is in your Garage", C.Brand)
 		elseif result.Kind == "Painted" then
-			NotifyController.Show("Fresh paint on your " .. name .. "!", nil, "success")
+			local what = tostring(result.Name or "New")
+			NotifyController.Show(result.Bought and (what .. " paint is yours on the " .. name .. "! Switch back free any time.")
+				or (what .. " paint on your " .. name .. "."), nil, result.Bought and "success" or "info")
 		elseif result.Kind == "Rims" then
-			NotifyController.Show("New rims on your " .. name .. "!", nil, "success")
+			local what = tostring(result.Name or "New")
+			NotifyController.Show(result.Bought and (what .. " rims are yours on the " .. name .. "! Switch back free any time.")
+				or (what .. " rims on your " .. name .. "."), nil, result.Bought and "success" or "info")
 		elseif result.Kind == "Glow" then
-			NotifyController.Show("Underglow set on your " .. name .. "!", nil, "success")
+			NotifyController.Show(result.Bought and ("Underglow installed on your " .. name .. "! Color swaps are free now.")
+				or (tostring(result.Name or "New") .. " underglow on your " .. name .. "."), nil, result.Bought and "success" or "info")
 		elseif result.Kind == "Tuned" then
 			tuneLanded(result.Id, { result.Track })
 			NotifyController.Show(tostring(result.Track) .. " stage " .. tostring(result.Stage) .. " fitted to your " .. name .. "!",

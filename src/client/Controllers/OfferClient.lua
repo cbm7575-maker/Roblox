@@ -19,8 +19,11 @@
 -- up. A card that can't show yet waits a while for a calm moment, then is dropped (a bag usually
 -- overflows with the cops on you, so that card comes once you've lost them and are on foot, e.g. at the
 -- Hideout to bank).
--- A pass whose Id is still 0 is never offered in a live game. In Studio the card still shows, and BUY
--- explains that the Id isn't set (the Workspace attribute TestPasses, set before Play, grants passes).
+-- A pass whose Id is still 0 is never offered in a live game. In Studio the card still shows.
+-- Free shop (player attribute "ShopFree" = "Studio" | "Owner", ShopService): BUY reads FREE and asks the
+-- server for the pass (RequestShopFree "Pass"; the server checks Studio / owner itself) instead of
+-- Roblox's prompt. The owner already has every pass on join, so live cards never show for them; in
+-- Studio the card and the dealer's pass cars grant the pass at once.
 -- Studio only: the Workspace attribute TestOfferGap (number, seconds) replaces the 10-minute gap.
 -- Look and place ("street" HUD, Theme; fitToScreen, again when the screen size or input type changes):
 -- CanvasGroup "Card" in ScreenGui "Offer": a flat dark panel with small corners and a thin brand-pink
@@ -35,10 +38,11 @@
 -- touch screens.
 -- API (DealerClient's pass cars use Buy / CanBuy / PriceText / Seen too):
 --   OfferClient.Queue(key, info)    ask for the card for Shop.Offers[key]; it waits for a good moment
---   OfferClient.CanBuy(passKey)     true when the pass has a real Id (it can be bought)
---   OfferClient.Buy(passKey, key)   Roblox purchase prompt, or "coming soon" while the Id is 0;
---                                   key = the offer it came from (analytics), may be nil
---   OfferClient.PriceText(passKey)  "R$ 499" read live from Roblox (yields, cached), nil if unknown
+--   OfferClient.CanBuy(passKey)     true when the pass has a real Id (it can be bought), or the shop is free
+--   OfferClient.Buy(passKey, key)   Roblox purchase prompt, the free grant (ShopFree), or "coming soon"
+--                                   while the Id is 0; key = the offer it came from (analytics), may be nil
+--   OfferClient.PriceText(passKey)  "R$ 499" read live from Roblox (yields, cached), "FREE" when the shop
+--                                   is free, nil if unknown
 --   OfferClient.Seen(key)           log an offer as shown (analytics, ShopService)
 --   OfferClient.Hide()              fade the card away now
 
@@ -126,13 +130,22 @@ end
 
 ------------------------------------------------------------------ public helpers
 
+-- Studio, or the game's owner: passes are free (ShopService sets it and checks it again on every ask).
+local function freeShop()
+	local free = player:GetAttribute("ShopFree")
+	return free == "Studio" or free == "Owner"
+end
+
 function OfferClient.CanBuy(passKey)
 	local pass = Shop.PassByKey(passKey)
-	return pass ~= nil and pass.Id ~= 0
+	return pass ~= nil and (pass.Id ~= 0 or freeShop())
 end
 
 function OfferClient.PriceText(passKey)
 	local pass = Shop.PassByKey(passKey)
+	if pass and freeShop() then
+		return "FREE"
+	end
 	if not pass or pass.Id == 0 then
 		return nil
 	end
@@ -160,13 +173,12 @@ function OfferClient.Buy(passKey, key)
 		NotifyController.Show("You already have the " .. pass.Name .. " pass!", C.Cash, "success")
 		return
 	end
+	if freeShop() then
+		Remotes.Event("RequestShopFree"):FireServer("Pass", pass.Key) -- (the server says yes with PassGranted)
+		return
+	end
 	if pass.Id == 0 then
-		if RunService:IsStudio() then
-			NotifyController.Show("Studio: the " .. pass.Name .. " pass has no Id yet (Config.Shop). To test owning it, set the"
-				.. " Workspace attribute TestPasses to " .. pass.Key .. " before pressing Play.", C.Gold, "info")
-		else
-			NotifyController.Show("The " .. pass.Name .. " pass is coming soon!", C.Gold, "info")
-		end
+		NotifyController.Show("The " .. pass.Name .. " pass is coming soon!", C.Gold, "info")
 		return
 	end
 	if key then

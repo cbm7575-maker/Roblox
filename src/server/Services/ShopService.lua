@@ -8,7 +8,19 @@
 --     PurchaseGranted after that save succeeds. A repeat delivery of a recorded PurchaseId is
 --     acknowledged without paying again. Buyer not in this server or profile not loaded ->
 --     NotProcessedYet (Roblox retries later).
---   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") grants passes for testing.
+--   * Free for testing and for the game's owner (player attribute "ShopFree" = "Studio" | "Owner", set
+--     here; it tells the phone's SHOP and OfferClient to show FREE buttons):
+--       Studio (RunService:IsStudio() on the server): every pass and cash pack is free and instant
+--         through RequestShopFree(kind, key), kind = "Pass" | "Product", key = a Config.Shop Key.
+--       The owner in a live server (the user who owns the place, or rank 255 in the group that owns
+--         it; looked up once on join, pcall'd and retried): every pass is granted on join, quietly,
+--         and cash packs are claimed free through RequestShopFree.
+--       Everyone else's RequestShopFree is ignored: they buy through Roblox's prompt.
+--     Free grants use the same code as purchases: a pass sets Pass_<Key> and fires PassGranted; a pack
+--     pays its Cash (reason "shopfree:<Key>", so analytics never count it as a Robux purchase) and
+--     fires CashPackGranted. A pack is only paid once the save has loaded (cash before that would be
+--     overwritten by the load). Studio grants last for that play session (a test server saves nothing).
+--   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") also grants passes on join.
 --   * Offer analytics: remote OfferEvent(action, key) from OfferClient, action "Shown" | "Tapped" |
 --     "Hidden", key a Config.Shop.Offers key or "Showroom_<PassKey>" (only for a pass that an AutoNeon
 --     pass car sells, e.g. Showroom_Hypercar: that car's dealer card). Logged as Telemetry.Custom
@@ -37,6 +49,7 @@ local MAX_RECEIPTS = 100 -- remember this many recent purchase IDs per player
 local OFFER_BUY_WINDOW = 600 -- seconds: a pass bought this soon after tapping an offer's BUY counts for it
 
 local offerTaps = {} -- [player] = { key = offer key, pass = pass key, t = os.clock() } (the last BUY tapped)
+local owners = {} -- [player] = true: the game's owner (checked on join: the server's own record)
 
 -- The pass an offer key sells: a Shop.Offers key, or "Showroom_<PassKey>". nil for anything else.
 local function offerPass(key)
@@ -94,7 +107,41 @@ local function onOfferEvent(player, action, key)
 	end
 end
 
+-- Does this player own the game? A game owned by a user: that user. A group game: the group's owner
+-- (rank 255). GetRankInGroup is a web call, so it's pcall'd and retried.
+local function isOwner(player)
+	if game.CreatorId == 0 then
+		return false -- a place that was never published
+	end
+	if game.CreatorType == Enum.CreatorType.User then
+		return player.UserId == game.CreatorId
+	end
+	if game.CreatorType == Enum.CreatorType.Group then
+		for attempt = 1, 3 do
+			local ok, rank = pcall(player.GetRankInGroup, player, game.CreatorId)
+			if ok then
+				return rank == 255
+			end
+			task.wait(attempt)
+		end
+	end
+	return false
+end
+
 local function checkPasses(player)
+	if RunService:IsStudio() then
+		player:SetAttribute("ShopFree", "Studio")
+	elseif isOwner(player) then
+		if player.Parent ~= Players then
+			return -- left during the group lookup
+		end
+		owners[player] = true
+		player:SetAttribute("ShopFree", "Owner")
+		for _, pass in ipairs(Shop.Passes) do
+			grantPass(player, pass) -- the owner's own passes are free (quietly, on every join)
+		end
+		return
+	end
 	for _, pass in ipairs(Shop.Passes) do
 		if pass.Id ~= 0 then
 			for attempt = 1, 3 do
@@ -124,6 +171,11 @@ function ShopService.Has(player, key)
 	return player:GetAttribute("Pass_" .. key) == true
 end
 
+-- Pay a cash pack: a real receipt, or a free Studio / owner claim (its own reason: not a Robux sale).
+local function payPack(player, product, free)
+	EconomyService.AddCash(player, product.Cash, (free and "shopfree:" or "product:") .. product.Key)
+end
+
 local function processReceipt(info)
 	local player = Players:GetPlayerByUserId(info.PlayerId)
 	if not player or not DataService.IsLoaded(player) then
@@ -140,7 +192,7 @@ local function processReceipt(info)
 	if data.receipts[id] then
 		return Enum.ProductPurchaseDecision.PurchaseGranted -- already paid out
 	end
-	EconomyService.AddCash(player, product.Cash, "product:" .. product.Key)
+	payPack(player, product, false)
 	data.receipts[id] = os.time()
 	-- Keep the list short: drop the oldest entries.
 	local ids = {}
@@ -164,9 +216,32 @@ local function processReceipt(info)
 	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
 
+-- RequestShopFree(kind, key): free and instant in Studio and for the game's owner (see the header).
+local function onFree(player, kind, key)
+	if not RateLimit.Allow(player, "ShopFree", 1, 2) or type(kind) ~= "string" or type(key) ~= "string" then
+		return
+	end
+	if not RunService:IsStudio() and not owners[player] then
+		return
+	end
+	if kind == "Pass" then
+		local pass = Shop.PassByKey(key)
+		if pass then
+			grantPass(player, pass, true)
+		end
+	elseif kind == "Product" then
+		local product = Shop.ProductByKey(key)
+		if product and DataService.IsLoaded(player) then
+			payPack(player, product, true)
+			Remotes.Event("CashPackGranted"):FireClient(player, product.Cash)
+		end
+	end
+end
+
 function ShopService.Init()
 	Remotes.Event("PassGranted")
 	Remotes.Event("CashPackGranted")
+	Remotes.Event("RequestShopFree").OnServerEvent:Connect(onFree)
 	Remotes.Event("OfferEvent").OnServerEvent:Connect(onOfferEvent)
 	MarketplaceService.ProcessReceipt = processReceipt
 	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
@@ -194,6 +269,7 @@ function ShopService.Init()
 	end
 	Players.PlayerRemoving:Connect(function(p)
 		offerTaps[p] = nil
+		owners[p] = nil
 	end)
 end
 

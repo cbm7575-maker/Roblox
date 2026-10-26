@@ -1,22 +1,26 @@
 -- TeamUI (ModuleScript, StarterPlayerScripts.Controllers.TeamUI)
--- The title screen and role picker ("street" look, Theme):
+-- The title screen and the role line ("street" look, Theme). Free roam only: everyone joins as a
+-- citizen, and police is an optional job taken from the phone (PHONE > JOBS: GO ON DUTY).
 --   * First join (HasPicked not set): a title screen. The camera drifts slowly round the street you spawned
---     on, the rest of the HUD is hidden (local player attribute "TitleScreen" = true meanwhile, for HUD
---     layers that switch themselves back on), the logo sits top-left and two flat cards at the bottom
---     ask how you want to play: FREE ROAM or POLICE. Picking one hands the camera back.
+--     on (round a home's front door for a returning owner, who spawns there: HousingService), the rest
+--     of the HUD is hidden (local player attribute "TitleScreen" = true meanwhile, for HUD layers that
+--     switch themselves back on), the logo sits top-left, and one big PLAY button at the bottom (a tap
+--     anywhere else, Enter / Space or gamepad A / Start too) starts the game: it asks the server for
+--     free roam (RequestTeam "Civilian": TeamService sets HasPicked, which the tutorial, the daily
+--     reward, GET IN and the friends' join wait for) and hands the camera back. No respawn: you play
+--     on from where you stand. Inside a home (InHome) the camera circles close and stays in the room.
 --   * The logo (built from UI, no image, so a new name is a one-line change: LOGO_WORDS): THEFT / MIAMI /
 --     COAST stacked in Theme.Font.Logo (extra-heavy italic) filled with Theme.Sunset, a thick Theme.Ink
 --     outline and drop shadow, over a striped synthwave sun, then a pink rule and "PORT SOLANA  ·  OPEN
 --     WORLD". Our own mark: no numeral, no other game's lettering or layout. Top-left on a PC; top centre
---     on a phone (Roblox's buttons own the top-left corner there, and the cards need the bottom).
---   * Later (the role line under your cash, or the phone's JOBS app): the same two cards over a dimmed
---     game, plus KEEP MY SIDE (where the title screen has its question line). No camera move, the HUD stays.
---   * The role line itself ("CITIZEN", "COP", "PRISONER") is a small quiet button in the HUD's Status
---     zone (Theme.Zone), bottom row, right-aligned.
+--     on a phone (Roblox's buttons own the top-left corner there, and PLAY needs the bottom).
+--   * The role line ("CITIZEN", "COP", "PRISONER") is a small quiet button in the HUD's Status zone
+--     (Theme.Zone), bottom row, right-aligned. Tapping it opens PHONE > JOBS (police duty).
 -- The server decides; this only asks (RequestTeam).
---   TeamUI.Open()    open the picker (not for prisoners)
+--   TeamUI.Open()    open PHONE > JOBS, where police duty is (not for prisoners)
 --   TeamUI.Badge     the role line button (other HUD pieces may read its place)
 --   TeamUI.IsTitle() true while the first-join title screen is up
+-- CombatClient reads the overlay frame's name ("Picker"): no gun is out while it shows.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,7 +29,6 @@ local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
-local TeamsConfig = require(ReplicatedStorage.Shared.Config.Teams)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 
@@ -41,11 +44,18 @@ local LOGO_ASPECT = 1.45 -- the logo's width / height (three lines of five lette
 -- The sun's stripes, as shares of its height from the top: a solid cap, then bands with growing gaps.
 local SUN_BANDS = { { 0, 0.52 }, { 0.56, 0.64 }, { 0.68, 0.75 }, { 0.79, 0.85 }, { 0.885, 0.93 }, { 0.955, 0.985 } }
 
-local gui, overlay, shade, badge, copCount, robberCount, copFull, closeButton, logo, ask
+local START_KEYS = { -- keys that press PLAY on the title screen
+	[Enum.KeyCode.Return] = true, [Enum.KeyCode.KeypadEnter] = true, [Enum.KeyCode.Space] = true,
+	[Enum.KeyCode.ButtonA] = true, [Enum.KeyCode.ButtonStart] = true,
+}
+local HOME_ORBIT = 9 -- studs: the title camera's circle inside a home (pulled in front of any wall)
+
+local gui, overlay, badge, logo, play
 local logoInk = {} -- the logo's outlines and drop shadows: { stroke = UIStroke } / { drop = label, x, y }
 local requestTeam
 local title = false -- the first-join title screen is showing
 local hidden = {} -- [ScreenGui] = true: HUD layers switched off for the title screen
+local started = false -- PLAY was pressed (once a session)
 
 local function label(parent, str, size, pos, kind, color, anchor)
 	local l = Instance.new("TextLabel")
@@ -64,68 +74,21 @@ local function label(parent, str, size, pos, kind, color, anchor)
 	return l
 end
 
-local function card(parent, side, xScale)
-	local color = COLOR[side]
-	local b = Instance.new("TextButton")
-	b.Name = side
-	b.Text = ""
-	b.AnchorPoint = Vector2.new(0.5, 1)
-	b.Position = UDim2.new(xScale, 0, 1, -76)
-	b.Size = UDim2.new(0.34, 0, 0.3, 0)
-	Theme.Panel(b, 0.25)
-	b.AutoButtonColor = true
-	b.Parent = parent
-	local limit = Instance.new("UISizeConstraint")
-	limit.MinSize = Vector2.new(220, 130)
-	limit.MaxSize = Vector2.new(520, 250)
-	limit.Parent = b
-	-- A thin colour bar down the left edge says which side this is.
-	local bar = Instance.new("Frame")
-	bar.Name = "Bar"
-	bar.Size = UDim2.new(0, 5, 1, 0)
-	bar.BackgroundColor3 = color
-	bar.BorderSizePixel = 0
-	bar.Parent = b
-	Theme.Corners(bar, 2)
-	label(b, TeamsConfig.BySide[side].Label, UDim2.fromScale(0.82, 0.26), UDim2.fromScale(0.08, 0.1), "Display")
-	local pitch = label(b, TeamsConfig.BySide[side].Pitch, UDim2.fromScale(0.84, 0.3), UDim2.fromScale(0.08, 0.4), "Body", Theme.Color.Dim)
-	pitch.TextWrapped = true
-	pitch.TextYAlignment = Enum.TextYAlignment.Top
-	local count = label(b, "", UDim2.fromScale(0.84, 0.13), UDim2.fromScale(0.08, 0.78), "Bold", color)
-	b.Activated:Connect(function()
-		requestTeam:FireServer(side)
-		TeamUI.Close()
-	end)
-	return b, count
-end
-
+-- The role line's words and colour.
 local function refresh()
-	local robbers, cops = 0, 0
-	for _, p in ipairs(Players:GetPlayers()) do
-		local s = p:GetAttribute("Side")
-		if s == "Cop" then
-			cops += 1
-		elseif s == "Civilian" or s == "Prisoner" then
-			robbers += 1
-		end
-	end
-	local maxCops = TeamsConfig.MaxCops(#Players:GetPlayers())
-	robberCount.Text = robbers .. " in the city"
-	local full = cops >= maxCops and player:GetAttribute("Side") ~= "Cop"
-	copCount.Text = full and "FULL - try again soon" or string.format("%d / %d on duty", cops, maxCops)
-	copFull.Visible = full
-	closeButton.Visible = player:GetAttribute("HasPicked") == true
-	-- KEEP MY SIDE sits on the question's lower half, so the picker opened again showed half-hidden words
-	-- behind the button: the question only shows on the title screen, where that button is hidden.
-	ask.Visible = not closeButton.Visible
 	local side = player:GetAttribute("Side") or "Civilian"
-	badge.Text = LABEL[side]
-	badge.TextColor3 = COLOR[side]
+	badge.Text = LABEL[side] or LABEL.Civilian
+	badge.TextColor3 = COLOR[side] or COLOR.Civilian
 end
 
 -- The title camera: a slow circle round the spawn street, a little above head height, looking across it.
+-- It follows the character, so a returning owner whom HousingService has moved to their front door sees
+-- their home. Inside a home (InHome: the inside is a room far off the map) it circles close instead and
+-- is pulled in front of any wall, so it never shows the room from outside.
 local function titleCamera()
 	local t0 = os.clock()
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
 	RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 2, function()
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 		local camera = Workspace.CurrentCamera
@@ -133,11 +96,20 @@ local function titleCamera()
 			return
 		end
 		local a = (os.clock() - t0) * 0.05 + 0.6
+		camera.CameraType = Enum.CameraType.Scriptable
+		camera.FieldOfView = 60
+		if player:GetAttribute("InHome") == true then
+			local centre = root.Position + Vector3.new(0, 2, 0)
+			local want = Vector3.new(math.cos(a) * HOME_ORBIT, 3, math.sin(a) * HOME_ORBIT)
+			params.FilterDescendantsInstances = { player.Character }
+			local hit = Workspace:Raycast(centre, want, params)
+			local eye = hit and (centre + want.Unit * math.max(hit.Distance - 0.6, 0.5)) or (centre + want)
+			camera.CFrame = CFrame.lookAt(eye, centre)
+			return
+		end
 		local centre = root.Position + Vector3.new(0, 16, 0)
 		local eye = centre + Vector3.new(math.cos(a) * 70, 14 + math.sin(a * 0.7) * 5, math.sin(a) * 70)
-		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CFrame = CFrame.lookAt(eye, centre + Vector3.new(0, 6, 0))
-		camera.FieldOfView = 60
 	end)
 end
 
@@ -169,7 +141,7 @@ local function setTitle(on)
 	-- HUD layers that switch themselves on every update check this (local-only attribute).
 	player:SetAttribute("TitleScreen", on or nil)
 	logo.Visible = on
-	shade.BackgroundTransparency = on and 1 or 0.35
+	overlay.Visible = on
 	badge.Visible = not on
 	if on then
 		titleCamera()
@@ -305,7 +277,7 @@ local function buildLogo(parent)
 end
 
 -- PC: top-left, under Roblox's top bar. Phone: small, top centre (Roblox's buttons sit top-left there),
--- so it stays clear of the cards along the bottom.
+-- so it stays clear of PLAY along the bottom.
 local function placeLogo()
 	if not logo then
 		return
@@ -329,6 +301,27 @@ local function placeBadge()
 	badge.TextSize = touch and 13 or 14
 end
 
+-- PLAY (or any tap, Enter / Space, gamepad A / Start on the title screen): free roam, and the game starts.
+local function start()
+	if not title or started then
+		return
+	end
+	started = true
+	requestTeam:FireServer("Civilian") -- TeamService sets HasPicked (no respawn: we're a citizen already)
+	TeamUI.Close()
+	-- Everything that waits for HasPicked (GET IN, the tutorial, the daily reward) hangs on that answer:
+	-- ask again if it hasn't come (TeamService ignores a second ask within a second, never a later one).
+	task.spawn(function()
+		for _ = 1, 3 do
+			task.wait(3)
+			if player:GetAttribute("HasPicked") == true or player.Parent == nil then
+				return
+			end
+			requestTeam:FireServer("Civilian")
+		end
+	end)
+end
+
 local function build()
 	gui = Instance.new("ScreenGui")
 	gui.Name = "TeamUI"
@@ -337,21 +330,27 @@ local function build()
 	gui.IgnoreGuiInset = true
 	gui.Parent = player:WaitForChild("PlayerGui")
 
+	-- The title screen ("Picker": CombatClient keeps guns away while it shows).
 	overlay = Instance.new("Frame")
 	overlay.Name = "Picker"
 	overlay.Size = UDim2.fromScale(1, 1)
 	overlay.BackgroundTransparency = 1
+	overlay.Visible = false
 	overlay.Parent = gui
 
-	-- Dims the game when the picker is reopened later (clear on the title screen: the city is the backdrop).
-	shade = Instance.new("Frame")
-	shade.Name = "Shade"
-	shade.Size = UDim2.fromScale(1, 1)
-	shade.BackgroundColor3 = Color3.new(0, 0, 0)
-	shade.BackgroundTransparency = 0.35
-	shade.BorderSizePixel = 0
-	shade.Parent = overlay
-	-- A soft dark band along the bottom so the cards read over any street.
+	-- A tap anywhere starts too: a see-through button under everything else on the title screen.
+	local anywhere = Instance.new("TextButton")
+	anywhere.Name = "TapToStart"
+	anywhere.Size = UDim2.fromScale(1, 1)
+	anywhere.BackgroundTransparency = 1
+	anywhere.Text = ""
+	anywhere.AutoButtonColor = false
+	anywhere.Selectable = false
+	anywhere.ZIndex = 0
+	anywhere.Parent = overlay
+	anywhere.Activated:Connect(start)
+
+	-- A soft dark band along the bottom so PLAY and its line read over any street.
 	local band = Instance.new("Frame")
 	band.Name = "Band"
 	band.AnchorPoint = Vector2.new(0, 1)
@@ -365,51 +364,36 @@ local function build()
 	fade.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.6, 0.45), NumberSequenceKeypoint.new(1, 0.15) })
 	fade.Parent = band
 
-	-- The logo, top-left (title screen only).
+	-- The logo, top-left (top centre on a phone).
 	logo = buildLogo(overlay)
 	placeLogo()
 
-	ask = label(overlay, "HOW DO YOU WANT TO PLAY?", UDim2.new(0.5, 0, 0, 22), UDim2.new(0.5, 0, 1, -44), "Bold", Theme.Color.Dim, Vector2.new(0.5, 1))
-	ask.TextXAlignment = Enum.TextXAlignment.Center
-
-	local robberCard
-	robberCard, robberCount = card(overlay, "Civilian", 0.31)
-	local copCard
-	copCard, copCount = card(overlay, "Cop", 0.69)
-	copFull = Instance.new("Frame")
-	copFull.Name = "FullShade"
-	copFull.Size = UDim2.fromScale(1, 1)
-	copFull.BackgroundColor3 = Color3.new(0, 0, 0)
-	copFull.BackgroundTransparency = 0.45
-	copFull.BorderSizePixel = 0
-	copFull.Visible = false
-	copFull.Parent = copCard
-	Theme.Corners(copFull)
-	-- New players: the free-roam card breathes a little so it is the obvious first choice.
+	-- PLAY: one clear way in. It breathes a little so it reads as the thing to press.
+	play = Instance.new("TextButton")
+	play.Name = "Play"
+	play.AnchorPoint = Vector2.new(0.5, 1)
+	play.Position = UDim2.new(0.5, 0, 1, -58)
+	play.Size = UDim2.fromOffset(240, 56)
+	play.Text = "PLAY"
+	Theme.Button(play, "Primary")
+	play.FontFace = Theme.Font.Display
+	play.TextSize = 28
+	play.Parent = overlay
+	play.Activated:Connect(start)
 	local scale = Instance.new("UIScale")
-	scale.Parent = robberCard
+	scale.Parent = play
 	task.spawn(function()
 		local t = 0
-		while robberCard.Parent do
+		while play.Parent do
 			t += task.wait()
-			scale.Scale = (overlay.Visible and title) and (1 + 0.02 * math.sin(t * 3)) or 1
+			scale.Scale = (overlay.Visible and title) and (1 + 0.03 * math.sin(t * 3)) or 1
 		end
 	end)
-
-	local close = Instance.new("TextButton")
-	close.Name = "Close"
-	close.AnchorPoint = Vector2.new(0.5, 1)
-	close.Position = UDim2.new(0.5, 0, 1, -14)
-	close.Size = UDim2.fromOffset(200, Theme.Touch)
-	close.Text = "KEEP MY SIDE"
-	close.TextSize = 16
-	Theme.Button(close, "Quiet")
-	close.Parent = overlay
-	closeButton = close
-	close.Activated:Connect(function()
-		requestTeam:FireServer(player:GetAttribute("Side") or "Civilian")
-		TeamUI.Close()
-	end)
+	-- One line on what kind of game this is (the old FREE ROAM / POLICE choice, as a sentence).
+	local line = label(overlay, "Free roam: drive, explore, rob if you dare. Police is an optional job on your PHONE.",
+		UDim2.new(0.92, 0, 0, 18), UDim2.new(0.5, 0, 1, -24), "Body", Theme.Color.Dim, Vector2.new(0.5, 1))
+	line.Name = "Line"
+	line.TextXAlignment = Enum.TextXAlignment.Center
 
 	-- The role line: bottom row of the Status zone (top-right), right-aligned, quiet.
 	badge = Instance.new("TextButton")
@@ -424,17 +408,23 @@ local function build()
 	badge.Activated:Connect(TeamUI.Open)
 end
 
--- Open the role picker (the role line and the phone's JOBS app use this).
+-- Police duty lives in the phone's JOBS app (the role line and older callers use this). PhoneUI starts
+-- after this controller, so it's looked up on use.
 function TeamUI.Open()
-	if player:GetAttribute("Side") == "Prisoner" then
+	if title or player:GetAttribute("Side") == "Prisoner" then
 		return
 	end
-	refresh()
-	overlay.Visible = true
+	local module = script.Parent:FindFirstChild("PhoneUI")
+	local ok, phone = pcall(function()
+		return module and require(module)
+	end)
+	if ok and type(phone) == "table" and type(phone.Open) == "function" then
+		phone.Open("Jobs")
+	end
 end
 
+-- Ends the title screen (PLAY, or the server set HasPicked: a prisoner who rejoined mid-sentence).
 function TeamUI.Close()
-	overlay.Visible = false
 	setTitle(false)
 end
 
@@ -454,28 +444,19 @@ function TeamUI.Init()
 	pcall(function()
 		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
 	end)
-	local first = player:GetAttribute("HasPicked") ~= true
-	overlay.Visible = first
-	setTitle(first)
+	setTitle(player:GetAttribute("HasPicked") ~= true)
 	refresh()
 	player:GetAttributeChangedSignal("Side"):Connect(refresh)
 	player:GetAttributeChangedSignal("HasPicked"):Connect(function()
 		if player:GetAttribute("HasPicked") then
 			TeamUI.Close()
 		end
-		refresh()
 	end)
-	Players.PlayerAdded:Connect(refresh)
-	Players.PlayerRemoving:Connect(function()
-		task.defer(refresh)
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if title and not processed and START_KEYS[input.KeyCode] then
+			start()
+		end
 	end)
-	local function watch(p)
-		p:GetAttributeChangedSignal("Side"):Connect(refresh)
-	end
-	for _, p in ipairs(Players:GetPlayers()) do
-		watch(p)
-	end
-	Players.PlayerAdded:Connect(watch)
 end
 
 return TeamUI

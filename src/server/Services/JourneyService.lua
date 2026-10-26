@@ -14,15 +14,19 @@
 --     police chain runs from the first shift. Only the current goal of each chain counts anything.
 --   * Progress comes from ProgressService events (ProgressService.OnEvent), matched on the goal's Kind
 --     (and Min: the heist's tier). Some goals also count as done from what the save shows: rank goals,
---     Paint / BuyCar / BuyHome (a painted car, a bought car, a home), Heist (a big heist in BigHeists,
---     which crewmates who helped get too) and the police actions that need a wanted robber (TaserHit,
---     SpikeHit, Arrest: remembered in `seen` when they happen early). Checked on load, after every
---     event, and when the rank, owned cars, car styles, home, big heists or tutorial step change.
+--     Paint / BuyCar / BuyHome (a painted car, a bought car, a home), BuyGun (a gun in data.gear.guns,
+--     CombatService: Coast Arms sets the "Guns" attribute after a purchase, which brings the check),
+--     Heist (a big heist in BigHeists, which crewmates who helped get too) and the police actions that
+--     need a wanted robber (TaserHit, SpikeHit, Arrest: remembered in `seen` when they happen early).
+--     Checked on load, after every event, and when the rank, owned cars, car styles, guns, home, big
+--     heists or tutorial step change.
 --   * A finished goal pays its Reward (EconomyService.AddCash, reason "journey:<Id>"), is logged
 --     (free roam: onboarding funnel step 7 on, after TutorialService's 1-6; police: custom event
 --     JourneyCop_<Id>) and fires JourneyDone { Cop, Index, Total, Reward } to the player for the stamp.
 --   * The save keeps a count of goals done. It also keeps the next goal's Id, and on load the count
---     follows that Id if an update moved the goal in the list (Config.Journey: only append goals).
+--     follows that Id if an update put new goals before it (Config.Journey: never reorder goals). A
+--     chain with no next Id was finished: it stays finished when goals are added (its count goes to the
+--     list's end), so a new goal never comes round for players who were done.
 -- Remote: JourneyStep("Hide") client -> server hides the goals (the pill's X, tapped twice);
 --   JourneyStep("Show") brings them back where they were (for a button in PHONE > GOALS).
 -- JourneyService.Reset(player) starts the goals over (testing with an old save, from the command bar).
@@ -62,7 +66,8 @@ local REMEMBER = { TaserHit = true, SpikeHit = true, Arrest = true }
 
 -- Player attributes whose change can finish a goal without an event (see stateDone). "Custom_<car>"
 -- (a car's paint, glow and rims, GarageService) is matched by its prefix.
-local WATCH = { CivRank = true, CopRank = true, OwnedCars = true, Home = true, BigHeists = true, TutorialStep = true }
+local WATCH = { CivRank = true, CopRank = true, OwnedCars = true, Home = true, BigHeists = true, TutorialStep = true,
+	Guns = true }
 
 local doneRemote
 
@@ -119,6 +124,20 @@ local function stateDone(player, data, j, def)
 		end
 	elseif def.Kind == "BuyHome" then
 		return data.home ~= nil
+	elseif def.Kind == "BuyGun" then
+		-- Any citizen gun bought at Coast Arms (or the old Stun Blaster, which CombatService turns into the
+		-- Pistol when the save loads).
+		local gear = data.gear
+		if type(gear) == "table" then
+			if gear.blaster == true then
+				return true
+			end
+			for _, owned in pairs(type(gear.guns) == "table" and gear.guns or {}) do
+				if owned == true then
+					return true
+				end
+			end
+		end
 	elseif def.Kind == "Tune" then
 		-- A stage or an exhaust bought before this goal came up (GarageService's data.custom[car]).
 		for _, c in pairs(data.custom or {}) do
@@ -200,7 +219,9 @@ local function onEvent(player, kind, amount)
 	check(player) -- also finishes a remembered police action whose goal just came up
 end
 
--- If an update moved a player's next goal in its list, put their count where that goal is now.
+-- If an update put new goals before a player's next goal, put their count where that goal is now (the
+-- new ones before it are skipped, unpaid). A chain with no next goal was finished: it stays finished
+-- (a goal added since must not come round, nor one already done move up into the gap).
 local function followIds(j)
 	for _, chain in ipairs(CHAINS) do
 		local id = j[chain.id]
@@ -214,6 +235,9 @@ local function followIds(j)
 					break
 				end
 			end
+		elseif id == nil and (j[chain.key] or 0) > 0 and (j[chain.key] or 0) < #chain.list then
+			j[chain.key] = #chain.list
+			j[chain.progress] = 0
 		end
 	end
 end

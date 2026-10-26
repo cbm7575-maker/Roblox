@@ -1,9 +1,15 @@
 -- TeamService (ModuleScript, ServerScriptService.Services.TeamService)
--- Civilians (default, free roam), Cops (a job) and Prisoners. The role picker shows on first join
--- (not for a prisoner who left mid-sentence and rejoined: PrisonService.Rejoined sends them back).
--- Switching (RequestTeam) is allowed when: not a prisoner, no heat, not on cooldown, and for cops,
--- the cop cap (about 1 cop per 2 robbers) has room. Switching respawns you at your side's spawn
--- with that side's starter car waiting on a pad.
+-- Civilians (default, free roam), Cops (an optional job) and Prisoners. Everyone joins as a citizen:
+-- there is no role choice at join. The first-join title screen (TeamUI) has one PLAY button, which
+-- sends RequestTeam("Civilian"): that sets HasPicked (= "past the title screen"; TutorialService,
+-- DailyService, FriendsService, InteractClient, HUDController and TutorialClient wait for it) and, as
+-- the side is already Civilian, changes nothing else (no respawn). A prisoner who left mid-sentence and
+-- rejoined never sees it (PrisonService.Rejoined sends them back and sets HasPicked).
+-- Police duty is taken from the phone (PHONE > JOBS: GO ON DUTY / GO OFF DUTY = RequestTeam "Cop" /
+-- "Civilian"). Switching is allowed when: not a prisoner, no heat, not on cooldown, and for cops,
+-- the cop cap (about 1 cop per 2 robbers) has room; a refusal comes back as a Notify toast. Switching
+-- respawns you at your side's spawn with that side's starter car waiting on a pad (back on free roam,
+-- a home owner's respawn goes home: HousingService).
 -- TeamService.IsFreeRoaming(player): a Civilian who isn't wanted and isn't inside their home (only then
 -- does FriendsService move a friend who just arrived to stand beside them).
 
