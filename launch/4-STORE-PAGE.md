@@ -33,9 +33,10 @@ to check the current list.
 
 ## Icon
 
-The icon in `launch/icons/game_icon.png` still says NEON COAST, so it needs replacing. Use the title
-screen's logo (THEFT / MIAMI / COAST over the striped sun) on a car-at-sunset shot. I can generate one
-if you want.
+`launch/icons/game_icon.png` (512 x 512): the title screen's logo (THEFT / MIAMI / COAST in the
+sunset fill over the striped sun) above a dusk coast with palms, police lights and a getaway car. It
+reads at the small sizes Roblox shows icons at. Upload it in the Creator Hub: the game > Places > Basic
+Settings > Game Icon.
 
 ## Thumbnails (you capture these; they must show the real game)
 
