@@ -97,9 +97,10 @@ Then type `/console` in chat and check the client side for red errors too.
       Bungalow a tin-roof cottage with a screened porch; the Palm Hills Ranch an L-shape with a 3-door
       garage and a hot tub; the Solana Heights Penthouse has a terrace pool and a sky garage; the Marina
       Row Villa has two floors, a tower, a pool and spa, and a 6-car garage; the Flamingo Beach Mansion
-      ($1.2M) has three levels, an 8-car showroom, an infinity pool and a roof spa.
+      ($1.2M) has three levels, an infinity pool, a roof spa and a 14-car garage (it was 8): a 7-car
+      showroom, and a stair in its back corner down to THE COLLECTION, a 7-car vault underneath.
     - Walk every floor of every home. Check: the pools hold water, "Drive this" works from every garage
-      bay, the wardrobe works, the EXIT gets you out, and the FOR SALE stand works on a tour. Look at the
+      bay (the Mansion's vault too: is it bright enough down there?), the wardrobe works, the EXIT gets you out, and the FOR SALE stand works on a tour. Look at the
       lots at night too.
     - I could only build and render these outside Roblox, with plain colours and no real lighting.
       Send me screenshots of anything that looks wrong (gaps, floating parts, things you can walk
@@ -113,7 +114,7 @@ Then type `/console` in chat and check the client side for red errors too.
     - Go on police duty and respawn: you don't go home. Off duty again: you do.
     - Your cash, cars, paint and guns are still there after rejoining.
     - Several players at home at once (Clients and Servers, 3 players), especially in the Penthouse and
-      Mansion: note any lag. Each home copy is big (640 to 1,010 parts).
+      Mansion: note any lag. Each home copy is big (about 640 to 1,100 parts with the cars).
 
 ## D. Guns in the hand
 

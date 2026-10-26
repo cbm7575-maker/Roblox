@@ -39,7 +39,8 @@ local ServerStorage = game:GetService("ServerStorage")
 local HouseBuilder = {}
 
 HouseBuilder.STORY = 14 -- studs per floor
-HouseBuilder.MAX_LIGHTS = { Lot = 10, Inside = 16 } -- PointLights per build (Shadows off)
+HouseBuilder.MAX_LIGHTS = { Lot = 10, Inside = 16 } -- PointLights per build (Shadows off); a style may set
+-- K.stats.maxLights for its own build (the Mansion's windowless car collection needs a few more)
 
 local function rgb(r, g, b)
 	return Color3.fromRGB(r, g, b)
@@ -291,7 +292,7 @@ end
 -- A PointLight in `part` (no shadows), within the build's cap. In a NightNeon / NightLamp part it starts
 -- off (SkyClient switches it); otherwise it is always on (rooms, garages).
 function Kit:Light(part, color, range, brightness)
-	if not part or self.stats.lights >= (HouseBuilder.MAX_LIGHTS[self.mode] or 10) then
+	if not part or self.stats.lights >= (self.stats.maxLights or HouseBuilder.MAX_LIGHTS[self.mode] or 10) then
 		return nil
 	end
 	self.stats.lights += 1

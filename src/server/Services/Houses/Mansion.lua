@@ -1,9 +1,11 @@
 -- Mansion (ModuleScript, ServerScriptService.Services.Houses.Mansion)
--- Flamingo Beach Mansion ($1.2M, 8 cars, the biggest garage): a three-level modern beach house in white
--- stucco, glass and teak, raised the Florida way over a ground floor that is mostly an eight-car
--- SHOWROOM garage behind four glass doors (neon under them after dark). Level 2 cantilevers over the
--- motor court, level 3 steps back behind a glass-railed terrace, and the roof carries a pink neon
--- flamingo and the name. Out back, toward the sea: a pool deck at level 2 with an infinity pool, a spa
+-- Flamingo Beach Mansion ($1.2M, 14 cars, the biggest garage): a three-level modern beach house in
+-- white stucco, glass and teak, raised the Florida way over a ground floor that is mostly a SHOWROOM
+-- garage behind four glass doors (neon under them after dark): seven bays there, and in the owner's
+-- and the tour's copy seven more in THE COLLECTION, a car vault dug in under it (down a glass-railed
+-- stair from the showroom's back corner; the street lot is the same either way). Level 2 cantilevers
+-- over the motor court, level 3 steps back behind a glass-railed terrace, and the roof carries a pink
+-- neon flamingo and the name. Out back, toward the sea: a pool deck at level 2 with an infinity pool, a spa
 -- and a pool bar under a pergola, over a shaded beach cabana with a lounge and an outdoor bar, and a
 -- stair down to the sand. Inside: a foyer with a koi pond, a home cinema, a stair core up through all
 -- three floors to the roof; on level 2 one great room (living, dining, kitchen, a neon bar) with glass
@@ -27,6 +29,12 @@ local C3Z0 = -12 -- level 3 steps back 4 behind the front
 local C3X1 = 40 -- level 3 ends here (the game room's roof is a terrace)
 local CORE = { -54, -44 } -- the stair core, x
 local DECK = 40 -- the pool deck's back edge
+-- The collection (inside copies only): its floor top, its footprint dug in under the garage and the
+-- cabana, and the stair well through the showroom floor (x0, x1, z0, z1). Its floor stays within 30
+-- of the spawn's height (HousingService puts anyone lower back at the spawn as fallen through).
+local B0 = -9
+local CX0, CX1, CZ0, CZ1 = GX, X1, Z0, 26
+local WELL = { 3, 12.5, 5, 16.5 }
 
 return function(K, home)
 	local white = rgb(244, 242, 238)
@@ -40,19 +48,32 @@ return function(K, home)
 	local dark = rgb(30, 30, 34)
 
 	local pools = { { -48, -8, 24, 36 }, { 0, 12, 28, 36 } }
-	-- Ground: sand, the paved motor court, the front walk. Inside, the copy's ground under it.
-	K.out.ground = K:Box("Sand", -55, 57, 0, 0.2, -35, 40, sand, M.Sand)
+	if K.inside then
+		K.stats.maxLights = 21 -- (the collection has no windows: three strip lights of its own)
+	end
+	-- Ground: sand, the paved motor court, the front walk. Inside, the copy's ground under it, both with
+	-- the collection's hole.
+	local dig = K.inside and { { CX0, CX1, CZ0, CZ1 } } or nil
+	K.out.ground = K:Slab("Sand", -55, 57, 0, 0.2, -35, 40, sand, M.Sand, dig) or K.model:FindFirstChild("Sand", true)
 	K:Box("MotorCourt", -38, 57, 0.2, 0.3, -35, Z0, rgb(206, 198, 184), M.Cobblestone)
 	K:Box("Walk", door.X - 4, door.X + 4, 0.2, 0.3, -35, -22, rgb(206, 198, 184), M.Cobblestone)
 	if K.inside then
-		K:Box("Base", -60, 60, -2, 0, -40, 40, sand, M.Sand)
+		K:Slab("Base", -60, 60, -2, 0, -40, 40, sand, M.Sand, dig)
 	end
 	local S = K
 	local Y = K:In("Yard")
 
 	-- Ground floor: the foyer's glass front with the pivot front door, the four glass garage doors, a
 	-- white wall between, the back wall to the cabana.
-	S:Box("GroundSlab", X0, X1, 0.2, G0, Z0, Z1, marble, M.Marble)
+	if K.inside then
+		-- (Inside: the garage floor is a thick slab over the collection with the stair well through it,
+		-- the cabana's floor runs out over the collection's back aisle.)
+		S:Box("GroundSlab", X0, GX, 0.2, G0, Z0, Z1, marble, M.Marble)
+		S:Slab("GarageSlab", GX, X1, -0.8, 0.4, Z0, Z1, P.WarmWhite, M.Concrete, { WELL })
+		S:Box("CabanaSlab", CX0, CX1, -0.8, 0.2, Z1, CZ1, P.WarmWhite, M.Concrete)
+	else
+		S:Box("GroundSlab", X0, X1, 0.2, G0, Z0, Z1, marble, M.Marble)
+	end
 	local gdoors = { { 4, 15 }, { 17, 28 }, { 30, 41 }, { 43, 54 } }
 	local front = {
 		{ -42, door.X - 3.4, G0 + 0.4, L2 - 2, "pane", bars = 2 }, { door.X - 3, door.X + 3, G0, G0 + 11, "none" },
@@ -302,12 +323,15 @@ return function(K, home)
 		I:Sofa(-24, y, z, 180, 16, rgb(120, 20, 40), { mat = M.Fabric, seats = 4, exitSide = -1 })
 	end
 	K:Sub(0, G0, 0, 0):CeilingLight(-24, 12, L2 - 1.2 - G0, 2, 24, 0.25)
-	-- Garage showroom: eight bays in two rows, a gloss-black floor with pink neon lines, the garage sign.
-	G:Box("ShowroomFloor", GX + 0.5, X1 - 1, 0.4, 0.45, Z0 + 1, Z1 - 1, rgb(24, 24, 28), M.Marble)
+	-- Garage showroom: seven bays in two rows (the back left corner is the stair down to the collection),
+	-- a gloss-black floor with pink neon lines, the garage sign.
+	G:Slab("ShowroomFloor", GX + 0.5, X1 - 1, 0.4, 0.45, Z0 + 1, Z1 - 1, rgb(24, 24, 28), M.Marble, { WELL })
 	R:WallZ(GX, Z0 + 1, Z1 - 1, G0, L2 - 1, 0.6, plaster, M.Plaster, { { -2, 4, G0, G0 + 10, "door" } }, { out = "+X" })
 	for _, x in ipairs({ 8.5, 21.5, 34.5, 47.5 }) do
 		K:Bay(x, 0.45, -6, 0)
-		K:Bay(x, 0.45, 12, 0)
+		if x > 10 then
+			K:Bay(x, 0.45, 12, 0)
+		end
 	end
 	for _, x in ipairs({ 15, 28, 41 }) do
 		G:Neon(x - 0.15, x + 0.15, 0.5, 0.56, Z0 + 1, Z1 - 1, pink)
@@ -316,6 +340,52 @@ return function(K, home)
 	for _, z in ipairs({ -6, 12 }) do
 		local strip = G:Deco("StripLight", GX + 4, X1 - 4, L2 - 1.8, L2 - 1.4, z - 0.6, z + 0.6, rgb(240, 248, 255), M.Neon)
 		K:Light(strip, rgb(235, 242, 255), 34, 0.55)
+	end
+
+	-- The collection: a car vault under the showroom (x 2..56, z -16..26, floor at B0), seven bays nosed
+	-- in toward a centre aisle, gloss-black floor, pink neon lines, white strip lights, the name on the
+	-- back wall. In by the stair in the well: down along +Z by the wall, a landing, back along -Z to the
+	-- aisle; glass rails round the well, a glass wall on the flight's open side.
+	local W0, W1, WZ0, WZ1 = WELL[1], WELL[2], WELL[3], WELL[4]
+	local LAND = (0.45 + B0) / 2
+	G:Box("CollectionFloor", CX0, CX1, B0 - 1, B0, CZ0, CZ1, rgb(24, 24, 28), M.Marble)
+	G:Box("CollectionWall", CX0, CX0 + 0.6, B0, -0.8, CZ0, CZ1, plaster, M.Plaster)
+	G:Box("CollectionWall", CX1 - 0.6, CX1, B0, -0.8, CZ0, CZ1, plaster, M.Plaster)
+	G:Box("CollectionWall", CX0 + 0.6, CX1 - 0.6, B0, -0.8, CZ0, CZ0 + 0.6, plaster, M.Plaster)
+	G:Box("CollectionWall", CX0 + 0.6, CX1 - 0.6, B0, -0.8, CZ1 - 0.6, CZ1, plaster, M.Plaster)
+	K:Stairs(5, 12.5, "-Z", 4, LAND, 0.45, marble, M.Marble) -- flight 1, x 3..7: the showroom down to the landing
+	K:Stairs(10, WZ0, "+Z", 4, B0, LAND, marble, M.Marble) -- flight 2, x 8..12: the landing down to the aisle
+	G:Box("StairBase", CX0 + 0.6, 7, B0, LAND, WZ0, 12.5, marble, M.Marble)
+	G:Box("StairLanding", CX0 + 0.6, W1, B0, LAND, 12.5, WZ1, marble, M.Marble)
+	G:Box("StairSpine", 7, 8, B0, 0.45, WZ0, 12.5, plaster, M.Plaster)
+	local pane = { Transparency = 0.6, Reflectance = 0.1, CastShadow = false }
+	G:Box("StairGlass", W1, W1 + 0.4, B0, -0.8, WZ0, WZ1 + 0.4, P.RailGlass, M.Glass, pane)
+	G:Box("StairGlass", CX0 + 0.6, W1, LAND, -0.8, WZ1, WZ1 + 0.4, P.RailGlass, M.Glass, pane)
+	K:Rail(W1, WZ0, W1, WZ1, 0.45, 3.6, "glass", { color = glassFrame })
+	K:Rail(GX + 0.3, WZ1, W1, WZ1, 0.45, 3.6, "glass", { color = glassFrame })
+	K:Rail(7.5, WZ0, W1, WZ0, 0.45, 3.6, "glass", { color = glassFrame })
+	K:Rail(7.5, WZ0, 7.5, 12.5, 0.45, 3.6, "glass", { color = glassFrame })
+	R:Letters((W0 + W1) / 2, 8.5, Z1 - 1.15, 9, 1.4, "THE COLLECTION", pink, Enum.NormalId.Front)
+	for _, x in ipairs({ 8.5, 21.5, 34.5, 47.5 }) do
+		K:Bay(x, B0, -6, 180)
+	end
+	for _, x in ipairs({ 21.5, 34.5, 47.5 }) do
+		K:Bay(x, B0, 14.5, 0)
+	end
+	for _, x in ipairs({ 15, 28, 41 }) do
+		G:Neon(x - 0.15, x + 0.15, B0 + 0.05, B0 + 0.11, CZ0 + 1, CZ1 - 1, pink)
+	end
+	for _, s in ipairs({ { 6, -6 }, { 14, 4.2 }, { 17, 14.5 } }) do
+		local strip = G:Deco("StripLight", s[1], CX1 - 4, -1.3, -0.9, s[2] - 0.6, s[2] + 0.6, rgb(240, 248, 255), M.Neon)
+		K:Light(strip, rgb(235, 242, 255), 32, 0.6)
+	end
+	R:Letters(34.5, B0 + 6.6, CZ1 - 0.75, 24, 2.4, "THE COLLECTION", pink, Enum.NormalId.Front)
+	-- Behind the stair: a tool chest and stacked tyres.
+	G:Box("ToolChest", CX0 + 0.6, CX0 + 2.6, B0, B0 + 4, 19, 23, rgb(200, 40, 50), M.Metal)
+	for i, x in ipairs({ 7.5, 10.6 }) do
+		for k = 0, 3 - i do
+			G:Cyl("Tyre", x, 23.4, B0 + k * 1.05, B0 + k * 1.05 + 1, 2.8, P.Black, M.Rubber)
+		end
 	end
 
 	-- Level 2: the great room (living, dining, kitchen, the bar) and the game room.
@@ -370,5 +440,5 @@ return function(K, home)
 	K:SaleStand(-10, G0, -10, -26, -16)
 	K:ParkStand(29, 0.45, 3.3, 29, -16)
 	K:Backdrop("beach")
-	K:Bounds(-58, 60, -36, 41, -2, RF + 24)
+	K:Bounds(-58, 60, -36, 41, B0 - 2, RF + 24)
 end

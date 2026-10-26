@@ -18,8 +18,8 @@
 --   "Penthouse" Solana Heights Penthouse: a downtown tower; inside, the top-floor penthouse with a sky
 --               garage behind glass and a roof terrace with a pool.
 --   "Villa"     Marina Row Villa: a two-storey Mediterranean villa, a pool terrace on the marina.
---   "Mansion"   Flamingo Beach Mansion: a three-level modern beach house, an infinity pool and an
---               8-car showroom garage.
+--   "Mansion"   Flamingo Beach Mansion: a three-level modern beach house, an infinity pool, a 7-car
+--               showroom garage and 7 more bays in the collection under it (14 in all).
 -- A home whose module is missing falls back to HousingService's plain shell (and keeps the shared
 -- Layout below). Layout (optional, lot space) overrides Housing.Layout for that home: Door = the bottom
 -- middle of the front door on the front wall's outer face, DoorStep = where you appear outside it,
@@ -157,8 +157,8 @@ Housing.List = {
 		Price = 1200000,
 		Position = Vector3.new(1340, 0, -1270),
 		Facing = Vector3.new(0, 0, -1), -- north, toward the causeway road at z = -1350
-		GarageSlots = 8,
-		Blurb = "The big one: three floors on the beach, an infinity pool, a roof spa, a cinema and an 8-car showroom garage.",
+		GarageSlots = 14,
+		Blurb = "The big one: three floors on the beach, an infinity pool, a roof spa, a cinema and a 14-car garage with a car vault.",
 		Style = "Mansion",
 		Stories = 3,
 		Layout = {
