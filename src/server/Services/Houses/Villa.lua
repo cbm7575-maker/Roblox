@@ -303,7 +303,7 @@ return function(K, home)
 	R:WallZ(-6, IZ0, 4, F2, H - 0.8, 0.5, plaster, M.Plaster, {}, { out = "+X" })
 	I:Bookshelf(-35.2, up, -2, -90, 10, 12, walnut)
 	I:Bookshelf(-16.8, up, -2, 90, 10, 12, walnut)
-	I:Armchair(-33, up, -8.5, 45, rgb(96, 60, 44), M.Leather)
+	I:Armchair(-33, up, -8.5, 45, rgb(96, 60, 44), M.Leather, false) -- (no seat: getting up would land in the wall or on the gallery rail)
 	-- The library under the tower: shelves, a desk, a globe.
 	I:Bookshelf(IX1 - 0.8, up, -4, 90, 12, 12, walnut)
 	I:Desk(0, up, -9, 0, walnut, rgb(96, 60, 44), theme)

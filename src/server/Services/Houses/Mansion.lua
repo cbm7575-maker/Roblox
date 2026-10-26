@@ -298,7 +298,8 @@ return function(K, home)
 		if row > 0 then
 			R:Box("Riser", -34, -14, G0, y, z - 2, z + 2, dark, M.Carpet)
 		end
-		I:Sofa(-24, y, z, 180, 16, rgb(120, 20, 40), { mat = M.Fabric, seats = 4 })
+		-- (Getting up steps into the side aisle: the rows stand too close to stand between them.)
+		I:Sofa(-24, y, z, 180, 16, rgb(120, 20, 40), { mat = M.Fabric, seats = 4, exitSide = -1 })
 	end
 	K:Sub(0, G0, 0, 0):CeilingLight(-24, 12, L2 - 1.2 - G0, 2, 24, 0.25)
 	-- Garage showroom: eight bays in two rows, a gloss-black floor with pink neon lines, the garage sign.

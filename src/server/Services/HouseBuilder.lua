@@ -1065,15 +1065,18 @@ end
 
 -- Furniture (inside only; each drawn in its own frame: front = -Z, standing on y = 0) ------------------------
 
-local function seatAt(self, x, y, z, w, d, exitDist)
+local function seatAt(self, x, y, z, w, d, exitDist, exitX)
 	local s = self:Part("Seat", "Seat", Vector3.new(w, 0.4, d), self.cf * CFrame.new(x, y, z),
 		P.White, M.SmoothPlastic, { Transparency = 1, CanCollide = false, CastShadow = false })
-	-- EXIT stands you in front of the seat (VehicleService: a home's model is no car to step out of).
-	s:SetAttribute("ExitAt", (self.cf * CFrame.new(x, 3.2, z - d / 2 - (exitDist or 2.6))).Position)
+	-- EXIT stands you in front of the seat (VehicleService: a home's model is no car to step out of), or
+	-- at exitX level with it (rows too close together to stand between: off the end of the row).
+	local spot = exitX and CFrame.new(exitX, 3.2, z) or CFrame.new(x, 3.2, z - d / 2 - (exitDist or 2.6))
+	s:SetAttribute("ExitAt", (self.cf * spot).Position)
 	return s
 end
 
--- A sofa w wide (seat at -Z, back at +Z), o.seats = how many seats (0 for none), o.l = an L end on +X.
+-- A sofa w wide (seat at -Z, back at +Z), o.seats = how many seats (0 for none), o.l = an L end on +X,
+-- o.exitSide = -1 / 1: getting up steps off that end of the sofa instead of in front of it.
 function Kit:Sofa(x, y, z, yaw, w, color, o)
 	if not self.inside then
 		return
@@ -1095,8 +1098,9 @@ function Kit:Sofa(x, y, z, yaw, w, color, o)
 		f:Deco("Pillow", w / 2 - 2.3, w / 2 - 0.5, 2, 3.8, 0.2, 0.9, o.pillows, M.Fabric)
 	end
 	local n = o.seats or math.max(1, math.floor(w / 5))
+	local exitX = o.exitSide and o.exitSide * (w / 2 + 0.9 + 2) or nil
 	for i = 1, n do
-		seatAt(f, -w / 2 + w * (i - 0.5) / n, 2.2, -0.3, 3.4, 3, 2.8)
+		seatAt(f, -w / 2 + w * (i - 0.5) / n, 2.2, -0.3, 3.4, 3, 2.8, exitX)
 	end
 end
 

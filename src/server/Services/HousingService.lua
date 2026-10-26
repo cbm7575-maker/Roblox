@@ -51,9 +51,12 @@
 --     with the same rule). On join both wait the same VehicleService.JoinWait for the save, so the
 --     player and the car end up in the same place. While the first-join title screen is up (HasPicked
 --     not yet set: TeamUI's PLAY sends RequestTeam, which sets it) they wait at their front door, the
---     title camera circling their house, and go in when PLAY is pressed.
+--     title camera circling their house, and go in when PLAY is pressed (also when PLAY came while the
+--     door area was still loading). Not while FriendsService may still move them beside a friend they
+--     arrived to meet (player attribute MeetPending).
 --   * No hiding from the police at home: wanted players can't go in or tour, don't spawn at home, and
---     anyone inside who turns out to be wanted is put out of the front door (HomeWanted).
+--     anyone inside who turns out to be wanted is put out of the front door (HomeWanted). "Drive this"
+--     is refused while wanted too.
 -- Remote RequestHouse(action, arg): "Buy" (home id), "Enter" (home id), "Tour" (home id), "Leave",
 -- "Drive" (car id).
 -- Server -> client: HouseCard { Id, OldId, Refund, At? (the FOR SALE stand, on a tour) },
@@ -1722,6 +1725,10 @@ drive = function(player, id)
 	if not def or def.Boat or not home or not VehicleService.CanDrive(side, id) or not GarageService.Owns(player, id) then
 		return
 	end
+	if (player:GetAttribute("Heat") or 0) > 0 then
+		notify:FireClient(player, "HomeWanted") -- (the housekeeping loop puts them out within 2 s)
+		return
+	end
 	busy[player] = true
 	local ok, err = pcall(function()
 		fade(player, "Out")
@@ -1779,13 +1786,14 @@ end
 -- and isn't wanted (no hiding from the cops at home, and a wanted respawn stays at the city spawn).
 local function spawnsHome(player)
 	return player:GetAttribute("Side") == "Civilian" and (player:GetAttribute("Heat") or 0) <= 0 and ownedHome(player) ~= nil
+		and player:GetAttribute("MeetPending") ~= true -- (arriving to meet a friend: FriendsService moves them)
 end
 
 -- Into the owner's own inside, standing in the living room (the join and respawn spawn): the same trip
 -- as the front door's, without the door (they're not at it) and only for `char`.
 local function goInside(player, home, char)
-	if busy[player] or inside[player] then
-		return
+	if busy[player] or inside[player] or player.Parent ~= Players then
+		return -- (gone: a copy built now would outlive PlayerRemoving's clean-up)
 	end
 	busy[player] = true
 	local ok, err = pcall(function()
@@ -1832,28 +1840,41 @@ local function homeSpawn(player, char)
 		return
 	end
 	local cf = Housing.DoorCFrame(home)
-	stream(player, cf.Position)
-	if player.Character ~= char or not moveTo(player, cf) then
-		return
-	end
-	local conn
-	conn = player:GetAttributeChangedSignal("HasPicked"):Connect(function()
-		if player:GetAttribute("HasPicked") ~= true then
-			return
-		end
-		conn:Disconnect()
+	local atDoor = false -- (PLAY can come while the door area is still loading: see the end)
+	local waiting = true -- until PLAY has been acted on (or the character went)
+	local function tryInside()
+		waiting = false
 		local root = rootOf(player)
 		local seated = hum and hum.SeatPart ~= nil
 		if player.Character == char and root and not seated and not inside[player] and ownedHome(player) == home
 			and (root.Position - cf.Position).Magnitude < 30 then
 			task.spawn(goInside, player, home, char)
 		end
+	end
+	local conn
+	conn = player:GetAttributeChangedSignal("HasPicked"):Connect(function()
+		if player:GetAttribute("HasPicked") ~= true or not atDoor then
+			return -- (not at the door yet: the check after the trip below takes it)
+		end
+		conn:Disconnect()
+		tryInside()
 	end)
 	char.AncestryChanged:Connect(function()
 		if not char:IsDescendantOf(game) and conn.Connected then
 			conn:Disconnect()
 		end
 	end)
+	stream(player, cf.Position)
+	if player.Character ~= char or not moveTo(player, cf) then
+		conn:Disconnect()
+		return
+	end
+	atDoor = true
+	if player:GetAttribute("HasPicked") == true and waiting then
+		-- PLAY was pressed while the door area loaded.
+		conn:Disconnect()
+		tryInside()
+	end
 end
 
 local function onCharacter(player, char)

@@ -12,7 +12,8 @@
 --     friend and their parked car is brought to the road in front of them (if there's room). The move
 --     only happens when both roam free (TeamService.IsFreeRoaming: Civilian, not wanted, not inside a
 --     home), the friend is standing (or stopped) on open city ground off the prison island, and there's
---     a clear spot in sight of them; otherwise the normal spawn stands.
+--     a clear spot in sight of them; otherwise the normal spawn stands. While that move may still come
+--     (player attribute MeetPending), HousingService doesn't take a home owner inside their home.
 --   * JOIN: RequestFriends("Join", friendUserId, jobId) teleports to a friend's other server of this game.
 --     The server checks the friendship itself and goes only where Roblox says the friend is right now
 --     (the client's jobId, from a list that may be old, is ignored). Not from prison, not while wanted,
@@ -56,7 +57,7 @@ local COPLAY_MINUTES = STUDIO and 2 or 10
 local COPLAY_CASH = 2000
 local SQUAD_DAYS = 3
 local MOVE_MIN = 20 -- studs a player must move in a minute to count as playing (not away from keys)
-local SETTLE = 4 -- seconds after the save loads before moving a newcomer (the home spawn and starter car finish first)
+local SETTLE = 4 -- seconds after the save loads before moving a newcomer (the starter car finishes first)
 local READY_WAIT = 120 -- seconds to wait for a newcomer to pick a side before giving up on the meet-up
 local HOST_MAX_SPEED = 25 -- studs/s: a friend driving faster than this is mid-drive, so no meet-up
 local JOIN_GUARD = 20 -- seconds a JOIN request blocks another (the teleport is under way)
@@ -330,8 +331,15 @@ local function meet(player, hostId, via)
 	-- Counted on arrival, so a newcomer who never picks a side still shows in the invite funnel.
 	Telemetry.Custom(player, via == "Invite" and "ArrivedByInvite" or "ArrivedByJoin", 1)
 	Telemetry.Custom(host, "FriendArrived", 1)
+	-- A move beside the friend may follow: until it's done (or off), HousingService doesn't take a home
+	-- owner inside their home, which would win over the meet-up.
+	local sent = invitedAt[host]
+	if via == "Join" or (sent ~= nil and os.clock() - sent < INVITE_WINDOW) then
+		player:SetAttribute("MeetPending", true)
+	end
 	whenReady(player, function(ready)
 		if host.Parent ~= Players then
+			player:SetAttribute("MeetPending", nil)
 			return
 		end
 		-- Anyone can put a UserId in a join link's launchData: only an invite the host really opened here
@@ -342,6 +350,7 @@ local function meet(player, hostId, via)
 		notify:FireClient(host, carded and "FriendArrivedCrew" or "FriendArrived")
 		-- A JOIN is the newcomer's own choice to follow the friend, so it gets the move as well.
 		local moved = ready and (invited or via == "Join") and placeBeside(player, host)
+		player:SetAttribute("MeetPending", nil)
 		notify:FireClient(player, moved and "FriendMeetup" or "FriendInServer")
 	end)
 end
