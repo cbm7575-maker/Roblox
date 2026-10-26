@@ -10,7 +10,8 @@ whether everything loaded.
 
 0. **Back up first.** In Studio, File > Save to File As... `TheftMiamiCoast-backup.rbxl`. The sync
    replaces every script that differs from these files.
-1. Unzip over your project folder, then run `python tools/manifest.py`. It should say
+1. Unzip over your project folder (the zip leaves out NeonCoast.rbxl, so your own place file is never
+   overwritten), then run `python tools/manifest.py`. It should say
    **133 scripts**. Don't skip this: without a fresh manifest, DevSync skips scripts it thinks
    are up to date.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder.
