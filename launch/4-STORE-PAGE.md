@@ -35,8 +35,8 @@ to check the current list.
 
 `launch/icons/game_icon.png` (512 x 512): the title screen's logo (THEFT / MIAMI / COAST in the
 sunset fill over the striped sun) above a dusk coast with palms, police lights and a getaway car. It
-reads at the small sizes Roblox shows icons at. Upload it in the Creator Hub: the game > Places > Basic
-Settings > Game Icon.
+reads at the small sizes Roblox shows icons at. Upload it in the Creator Hub where the game's icon is
+set (I couldn't open the Creator Hub from here to check the current menu names).
 
 ## Thumbnails (you capture these; they must show the real game)
 
