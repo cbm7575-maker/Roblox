@@ -1,19 +1,22 @@
-# 6. Playtest this update (Oct 25: free roam, houses, guns, your fixes)
+# 6. Playtest this update (Oct 26: your Theft Miami Coast fixes)
 
-None of this has been run in Roblox yet. It was written and checked outside Studio: type checks, four
-code reviews, and the houses and gun store built in a stand-in for Roblox and rendered. Studio is
-where it gets proven. Go in order: section A tells you in two minutes whether everything loaded.
+This update is built on your own Studio save of THEFT MIAMI COAST (Oct 25, 126 scripts). None of it
+has been run in Roblox yet. It was checked outside Studio: type checks, offline tests of the paint,
+shop, nitro and seat-fit logic, two independent code reviews, and the houses built in a stand-in for
+Roblox and rendered. Studio is where it gets proven. Go in order: section A tells you in two minutes
+whether everything loaded.
 
 ## Load it into Studio
 
-0. **Back up first.** In Studio, File > Save to File As... `NeonCoast-backup.rbxl`. The sync replaces
-   every script that differs from these files.
-1. Unzip over your project folder, then run `python tools/manifest.py`. It should say **108
-   scripts**. Don't skip this: without a fresh manifest, DevSync skips scripts it thinks are up to date.
+0. **Back up first.** In Studio, File > Save to File As... `TheftMiamiCoast-backup.rbxl`. The sync
+   replaces every script that differs from these files.
+1. Unzip over your project folder, then run `python tools/manifest.py`. It should say
+   **133 scripts**. Don't skip this: without a fresh manifest, DevSync skips scripts it thinks
+   are up to date.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder.
 3. Studio command bar: `require(game.ServerStorage.Tools.DevSync).Run()`.
-   - Expect 13 NEW lines: HouseBuilder, the 8 house styles (in a new Houses folder), HouseClient,
-     WeaponService, WeaponClient, Weapons.
+   - Expect 7 NEW lines: HouseBuilder and the 6 house styles (Loft, Bungalow, Ranch, Penthouse,
+     Villa, Mansion) in a new Services.Houses folder.
    - Many UPD lines are normal.
    - Then save (Ctrl+S).
 
@@ -21,128 +24,111 @@ where it gets proven. Go in order: section A tells you in two minutes whether ev
 
 Press Play. In Output (View > Output), check:
 - `[Main] server ready`, with **no** `[Main] ... failed to start` lines.
-- No `[WeaponService] gun store not built` and no `[PropertyService] couldn't build` lines.
 - No red errors. Send me the exact text of any red error or `[...]` warning.
 
 Then type `/console` in chat and check the client side for red errors too.
 
-## B. Free roam (no role picker)
+## B. Free roam start
 
-1. Press Play: no "How do you want to play?" screen. You're a CITIZEN.
-2. Tap the CITIZEN badge (top left). The phone opens on JOBS, which has the police card. GO ON DUTY
-   makes you police; GO OFF DUTY switches back.
-3. The tutorial bar has 6 steps: car, rob, escape, bank, **buy your first gun**, phone. SHOW ME on the
-   gun step routes to Shoreline Arms (the pink-signed shop on the plaza east of the spawn).
-4. Stay a minute: the DAY 1 STREAK stamp shows (it used to be lost).
+1. The title screen has one **PLAY** button. No FREE ROAM / POLICE choice any more.
+2. Press PLAY: you're in free roam as a citizen.
+3. Police is an optional job: PHONE > JOBS has the card "POLICE: AN OPTIONAL JOB" with GO ON DUTY.
+   GO OFF DUTY switches back. It refuses while you have stars ("Lose your heat before going on or off
+   duty."), in prison, and for a few seconds after switching.
+4. Road to the Coast: the goal after "Paint your ride" is **"Gear up: buy your first gun at Coast
+   Arms"**. SHOW ME routes you to Coast Arms. Buy the pistol ($2,500): the goal ticks and pays $1,000.
+   - Only players who haven't got past "Paint your ride" yet get it. Anyone further along skips it
+     (that's how the game already treats new goals). If your own save is past it, start your goals
+     over in the **server** command bar:
+     `require(game.ServerScriptService.Services.JourneyService).Reset(game.Players:GetPlayers()[1])`.
 
 ## C. Your fixes, one by one
 
-1. **Paint:** phone > GARAGE > a car > a colour.
-   - The swatch shows $500. Tap it: the line above says "TAP AGAIN: $500". Tap again: $500 spent.
-   - Pick another colour, then go back to the first: OWNED, $0. Rims work the same way.
-2. **Shop:** phone > SHOP lists 5 passes and 5 cash packs, all with FREE (Studio) buttons. Tap a cash
-   pack: the money arrives. In your live game you get them free as the owner. Players see the prices,
-   with "Coming soon" until you send me the IDs (launch/2).
-3. **Jet ski:** at the marina, walk up to a moored Splash: the prompt shows from the dock. Get on.
-4. **Nitro:** hold nitro until the tank runs dry. You hear one whoosh that fades, then one click. Keep
-   holding: silence, no flicker.
-5. **F to exit:** drive around for 15 minutes, getting in and out with F the whole time. If F ever
-   fails, Output has a `[DriveController]` line saying why: send it to me.
-6. **Phone:** open it, then tap anywhere outside it: it closes.
+1. **Paint you keep:** PHONE > GARAGE > a car > STYLE.
+   - Each swatch has its price under it. Tap one: the line says "TAP AGAIN TO BUY" with the name and
+     price. Tap again: the money goes.
+   - Pick another colour, then go back to the first: it says OWNED and costs nothing. Rims work the
+     same way. Stock paint and stock rims are always free.
+   - VIP and Neon Garage pass paints are free for pass owners (they used to cost $500). Tell me if you
+     want that changed back.
+2. **Shop:** PHONE > SHOP lists the 5 passes (VIP, Big Duffel Bag, SWAT Unit, Neon Garage, Hypercar)
+   and the 5 cash packs. In Studio and for you as the owner in the live game they're free: tap one and
+   it's yours. Other players see the Robux price; until the real IDs are in (launch/2) the buttons say
+   it's coming soon.
+3. **Jet ski:** at a marina, walk to the end of the dock next to your moored boat.
+   - The Drive bubble shows from the dock (boat bubbles now reach 60 studs). Use it: you're on.
+   - Launching a boat from the phone while you stand on the dock near its pad sits you straight in it.
+4. **Empty nitro:** hold nitro until the tank runs dry. You hear one whoosh that fades, then one
+   click. Keep holding: silence, no flicker. Let go and it recharges as before.
+5. **F to exit:** play for 20+ minutes, getting in and out with F the whole time. Include a reset
+   (Esc > Reset) while sitting in a car, then get back in and press F.
+   - The likely cause, found by reading the code: this place keeps a body's joints when it dies
+     (CharacterBreakJointsOnDeath is off), so a reset in a seat left the dead body's seat weld behind,
+     and the old F only removed the first weld it found in the seat. That is a strong guess, not
+     proven: I couldn't reproduce it without Studio. Now every weld holding you goes, leftovers are
+     cleaned up, and your device asks again and stands you up if nothing happened.
+   - If F ever fails, a `[DriveController] still held by ...` line says why. In Studio it's in Output;
+     in the live game type `/console` in chat (Client log). Send me that line.
+6. **Phone:** open it, then tap anywhere outside it: it closes. Tapping a HUD button outside the phone
+   presses that button and leaves the phone open.
 7. **Heads in cars.** Two ways to check:
-   - In Studio, hold **Shift** and press 1-9, 0, -, = to spawn each car (plain number keys now pick
-     guns). Sit in each one: your head stays under the roof.
-   - Or use the Server command bar:
-     `require(game.ServerStorage.Tools.CarBuilder).Showroom(Vector3.new(2150, 0, -1450))` builds every
-     car with a dummy in each seat in the drift zone.
-     `Showroom(nil)` removes them.
-8. **Taxi:** start the taxi job and stop next to a fare: they hop in and you can see them sitting in
-   the passenger seat. At their stop they get out and walk away.
+   - Spawn each car and sit in it: your head stays under the roof. Tall avatars and big hats sink into
+     the seat and lean back a little. The Riot Truck, Armored Van and Gatorback get this too.
+   - Or, in Play mode, run this in the **server** command bar:
+     `require(game.ServerStorage.Tools.CarBuilder).Showroom(Vector3.new(2110, 0.35, -1350))`.
+     It builds every car and boat in a row in the Lighthouse Key drift zone, with a dummy in each seat.
+     Add `, 1.3` after the position for tall dummies. `Showroom(nil)` removes them.
+   - The boat seats (Harbor Patrol, Moonstone) are my estimates, not measured. Screenshot those.
+8. **Taxi:** start a taxi shift and stop next to a fare. They sit in the passenger seat where everyone
+   can see them. At their stop they get out and walk off.
 9. **Riding with friends:** Studio Test tab > Clients and Servers, 2 players > Start.
-   - Player 1 spawns a 4-seat car (the Gatorback or Mangrove).
-   - Player 1 invites player 2 (phone > CREW > Invite), and player 2 joins.
-   - Player 2 walks up to the car and uses Ride. F gets them out.
-   - Roblox friends can ride without a crew. Two Studio test players aren't friends, so that part
-     needs a live test.
-10. **Houses.** Give yourself cash: Server command bar,
-    `game.Players:GetPlayers()[1]:SetAttribute("Cash", 2000000)`.
-    - Phone > HOMES > SHOW ME on each house. Each one looks different, and the bigger ones have two
-      floors and pools.
-    - The Coastal Mansion needs rank 15. To test it, set `CivRank` the same way:
-      `game.Players:GetPlayers()[1]:SetAttribute("CivRank", 15)`.
-    - Buy one, then press Reset: you respawn inside it.
-    - Your cars stand in the garage. DRIVE on one puts you in it.
-    - Walk onto the STASH pad with a bag and no stars: it banks.
-11. **Saved when you come back:**
-    - In Studio, saves only persist with Game Settings > Security > "Enable Studio Access to API
-      Services" turned on.
-    - Better: in your private live game, buy a house, leave, rejoin. You spawn inside it, and your
-      cash, cars, paint and guns are all still there.
-12. **No hiding at home:** get a star, then walk into your house.
-    - The doors stay shut, and if you're inside you're moved out to the FOR SALE sign: "No hiding at
-      home while you're wanted!"
-    - DRIVE in the garage is refused while you have any stars.
+   - Player 1 spawns a car. Player 2 walks up to its passenger side: a RIDE button shows (or press F).
+     They're in. F gets them out.
+   - Crewmates can ride, and so can Roblox friends without a crew. Studio's test players count as
+     friends, so you can test that here too.
+   - It's one passenger per car (the passenger seat). There are no back seats yet.
+   - Not into a cop's car as a citizen, and not out of prison.
+10. **Houses:** every home now has its own build. Give yourself cash first: SHOP's free cash
+    packs, or the **server** command bar: `game.Players:GetPlayers()[1]:SetAttribute("Cash", 2000000)`.
+    - PHONE > HOME lists the 6 homes. GPS takes you to a front door: "View / Buy", then TOUR to walk
+      round inside first.
+    - What to look for: the Rustwater Loft is a brick warehouse with a mezzanine bedroom; the Palm Hills
+      Bungalow a tin-roof cottage with a screened porch; the Palm Hills Ranch an L-shape with a 3-door
+      garage and a hot tub; the Solana Heights Penthouse has a terrace pool and a sky garage; the Marina
+      Row Villa has two floors, a tower, a pool and spa, and a 6-car garage; the Flamingo Beach Mansion
+      ($1.2M) has three levels, an 8-car showroom, an infinity pool and a roof spa.
+    - Walk every floor of every home. Check: the pools hold water, "Drive this" works from every garage
+      bay, the wardrobe works, the EXIT gets you out, and the FOR SALE stand works on a tour. Look at the
+      lots at night too.
+    - I could only build and render these outside Roblox, with plain colours and no real lighting.
+      Send me screenshots of anything that looks wrong (gaps, floating parts, things you can walk
+      through, a room you can't get out of).
+11. **Spawning at home** (needs saves: in Studio, Game Settings > Security > "Enable Studio Access to
+    API Services"; or use your private live game):
+    - Buy a home, leave, rejoin. The title screen shows from your front door; press PLAY and you fade
+      inside your home, with your cars in the garage.
+    - Reset (Esc > Reset): you come back inside.
+    - Get a star while inside: you're put out of the front door ("Lose the cops first!...").
+    - Go on police duty and respawn: you don't go home. Off duty again: you do.
+    - Your cash, cars, paint and guns are still there after rejoining.
+    - Several players at home at once (Clients and Servers, 3 players), especially in the Penthouse and
+      Mansion: note any lag. Each home copy is big (640 to 1,010 parts).
 
-## D. Guns (new)
+## D. Guns in the hand
 
-1. **Store:** walk into Shoreline Arms and press E at the counter. The store screen lists 4 guns.
-   - BUY $750 on the Coral 9 asks TAP TO CONFIRM; tap again.
-   - It lands in your backpack (bottom of the screen), and the tutorial gun step ticks.
-   - The others show their rank locks.
-2. **Shooting, PC:** press 1 to take the gun out.
-   - Output says `[WeaponClient] Coral 9 held right`. If it says "isn't held right" instead, send me
-     that line and a screenshot.
-   - The gun points forward out of your right hand.
-   - A crosshair follows your mouse, and your character turns to face where you aim.
-   - Click fires: a pink tracer, a flash and a gunshot.
-   - The ammo counter (bottom right) counts down, R reloads, and an empty mag reloads by itself.
-3. **Shooting, phone** (Studio's device emulator works for layout; your real phone for feel):
-   - Tap the gun in the backpack bar at the bottom. FIRE and RELOAD appear on the right, with the ammo
-     count beside RELOAD, and you aim with the crosshair in the middle of the screen. Drag anywhere
-     else to turn the camera; your character turns with it.
-   - Hold FIRE on the Riptide SMG: it keeps firing. Slide your thumb off the button and lift: it
-     stops.
-   - As police, FIRE moves left of TASER and SPIKES.
-   - Nothing overlaps: I checked every button's position at 5 phone and tablet sizes.
-4. **Two players** (Clients and Servers, 2 players):
-   - Player 1 shoots player 2: player 2's health bar (bottom centre) drops and the screen flashes
-     red. Player 1 sees a ✕ hit marker and gets 1 star.
-   - Keep shooting: player 2 falls apart, respawns at home or the spawn after about 5 s, and the feed
-     says "took down".
-5. **PASSIVE:** tap PASSIVE (next to PHONE).
-   - Nobody can hurt you, you can't shoot, and others see a 🛡 over your head.
-   - It can't be turned on with stars or within 15 s of a fight. Getting a star turns it off.
-6. **Police:** go on duty: you carry a Duty Pistol only.
-   - It does nothing to innocent players.
-   - Shooting a wanted player down sends them to prison, and you get the bounty.
-7. **No-hit rules:**
-   - Nobody can hurt you in your first 6 s after spawning.
-   - Pedestrians: bullets pass through them.
-   - In a car, guns go away and you can't fire.
-8. **Cars:** shooting a police car gives a star and damages it, and enough shots make it smoke.
-   Shooting a passive player's car does nothing.
+Equip each gun on a few different avatars (your own, a tall one, a blocky one). The gun points
+forward out of the right hand. Send a screenshot of any that doesn't.
 
-## E. Gun sounds
+## E. Phone layout
 
-The guns use free ProSoundEffects sounds from the Creator Store: a 9mm pistol, a Mini Uzi, an AK-47
-single shot (also slowed down into the shotgun's boom) and a magazine reload.
-1. Press Play. Output prints `[WeaponClient] gun sounds: PistolShot 3.7s, SMGShot 1.5s, ...`.
-   - A `0.0s`, or a "didn't load" warning, means that sound is unavailable. Send me the line.
-2. Fire each gun and listen.
-   - Too long, or cut off too early: change that gun's `Cut` in `src/shared/Config/Sounds.lua`
-     (seconds before it fades out).
-   - Too high or too low: change its `Speed`.
-
-## F. Phone performance
-
-On your phone (private publish), drive downtown at night in rain for 5 minutes. Then have a friend
-shoot an SMG near you. Note the frame rate and anything that stutters.
+In Studio's device emulator (and on your phone if you can), check the goal bar and banners don't run
+under the cash and stars, and that the AIM button doesn't cover the subtitles or the action button.
 
 ## What to send me
 
 For anything that fails, send:
-- the step (e.g. C7 or D3),
+- the step (e.g. C5 or C10),
 - what you saw,
 - any red Output or `/console` text,
-- a screenshot for anything visual: overlaps, heads through roofs, house interiors, a gun that
-  doesn't sit right.
+- a screenshot for anything visual: heads through roofs, house interiors, a gun that doesn't sit
+  right.
