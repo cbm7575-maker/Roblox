@@ -6,7 +6,7 @@ phone test needs one too. New experiences start private, so nobody else can join
 ## Before you publish (in Studio)
 
 1. Open `NeonCoast.rbxl`, sync the latest scripts (see the main README: `python tools/manifest.py`,
-   `python -m http.server 34999 --bind 127.0.0.1`, then `require(game.ServerStorage.Tools.DevSync).Run()`
+   `python -m http.server 34999 --bind 127.0.0.1`, then `print(require(game.ServerStorage.Tools.DevSync).Run())`
    in the command bar), and save (Ctrl+S).
 2. **Publish under NightShift Dev.** The owner gets the game, its passes and its Robux.
    - If NightShift Dev is a **group**: stay signed in as TCTRADES_CHRIS and, in the Publish to Roblox

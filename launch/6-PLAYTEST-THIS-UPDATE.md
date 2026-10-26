@@ -15,7 +15,7 @@ whether everything loaded.
    **133 scripts**. Don't skip this: without a fresh manifest, DevSync skips scripts it thinks
    are up to date.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder.
-3. Studio command bar: `require(game.ServerStorage.Tools.DevSync).Run()`.
+3. Studio command bar: `print(require(game.ServerStorage.Tools.DevSync).Run())`.
    - Expect 7 NEW lines: HouseBuilder and the 6 house styles (Loft, Bungalow, Ranch, Penthouse,
      Villa, Mansion) in a new Services.Houses folder.
    - Many UPD lines are normal.

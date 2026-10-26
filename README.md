@@ -21,7 +21,7 @@ as Neon Coast, which is why the place file and some folders still carry that nam
 
 1. `python tools/manifest.py` rebuilds `manifest.json` (git-ignored).
 2. `python -m http.server 34999 --bind 127.0.0.1` from this folder.
-3. In Studio (HttpService.HttpEnabled on): `require(game.ServerStorage.Tools.DevSync).Run()`.
+3. In Studio (HttpService.HttpEnabled on): `print(require(game.ServerStorage.Tools.DevSync).Run())`.
    It creates or updates every changed script and never deletes anything.
 
 `tools/DevSync.lua` is a copy of that helper. It is not in the manifest; paste it into
