@@ -230,7 +230,7 @@ local function refreshCard()
 	card.Price.Text = money(home.Price)
 	-- HousingService only spawns Civilians at home (cops keep the police spawn), so say so to everyone else.
 	local civ = (player:GetAttribute("Side") or "Civilian") == "Civilian"
-	card.Info.Text = "Garage for " .. home.GarageSlots .. " cars  ·  " .. (civ and "You spawn here" or "Citizens spawn here")
+	card.Info.Text = "Garage for " .. home.GarageSlots .. " cars  ·  " .. (civ and "You spawn inside" or "Citizens spawn inside")
 	card.Blurb.Text = home.Blurb or ""
 	if old and net >= 0 then
 		card.Trade.Text = "Moving? Your " .. old.Name .. " sells back for " .. money(refund) .. " (half price), so you pay " .. money(net) .. "."
@@ -572,7 +572,7 @@ local function onInHome()
 		-- (The server sets Touring before InHome: a tour gets its own toast, onTouring.)
 		if not hinted and player:GetAttribute("Touring") == nil then
 			hinted = true
-			NotifyController.Show("Welcome home! Pick a car in the garage, or use the glowing door to go out.", nil, "info")
+			NotifyController.Show("Welcome home! Pick a car in the garage, or walk to the EXIT to go out.", nil, "info")
 		end
 	end
 end
@@ -585,7 +585,7 @@ local function onTouring()
 		closeCard()
 	end
 	if home then
-		NotifyController.Show("Welcome to the " .. home.Name .. "! Look around, buy it at the FOR SALE stand, or LEAVE by the front door.", nil, "info")
+		NotifyController.Show("Welcome to the " .. home.Name .. "! Look around, buy it at the FOR SALE stand, or LEAVE at the EXIT.", nil, "info")
 	end
 end
 

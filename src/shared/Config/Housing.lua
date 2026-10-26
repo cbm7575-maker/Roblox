@@ -9,12 +9,22 @@
 -- toward the street, +X to the right as you look at the street from the house. The lot is 110 wide
 -- (x -55..55) and 70 deep (z -35..35): the house on the left, the garage and driveway on the right.
 --
--- Style = how the outside looks (HousingService builds each one from plain parts on that same layout):
---   "Classic" (the default) a pastel block with balconies upstairs; 3+ storeys get a neon crown.
---   "Loft"    a brick dock warehouse: factory windows, a sawtooth roof, a water tank, a neon sign.
---   "Ranch"   a single storey in wooden siding with a wide front porch and a pitched roof.
---   "Mansion" white stacked volumes with glass walls, a roof terrace and a neon flamingo (3 storeys).
--- Roof = the roof colour (white when left out). GarageSlots can be up to 8 (the garage inside widens).
+-- Style = the home's own build: ServerScriptService.Services.Houses.<Style> (HouseBuilder draws it twice:
+-- on the lot as the street sees it, and inside, far off the map, as each owner's private copy):
+--   "Loft"      Rustwater Loft: a brick dock warehouse, one big room with a mezzanine, the loading door
+--               is the garage.
+--   "Bungalow"  Palm Hills Bungalow: an Old Florida cottage with a porch, a garden and a garage out back.
+--   "Ranch"     Palm Hills Ranch: one long storey, a wide porch, a 3-car garage, a family back yard.
+--   "Penthouse" Solana Heights Penthouse: a downtown tower; inside, the top-floor penthouse with a sky
+--               garage behind glass and a roof terrace with a pool.
+--   "Villa"     Marina Row Villa: a two-storey Mediterranean villa, a pool terrace on the marina.
+--   "Mansion"   Flamingo Beach Mansion: a three-level modern beach house, an infinity pool and an
+--               8-car showroom garage.
+-- A home whose module is missing falls back to HousingService's plain shell (and keeps the shared
+-- Layout below). Layout (optional, lot space) overrides Housing.Layout for that home: Door = the bottom
+-- middle of the front door on the front wall's outer face, DoorStep = where you appear outside it,
+-- Driveway = car spots (centres on the ground, noses to the street; the last one on the verge).
+-- Stories = floors above the ground (the buy card and phone just read Blurb). GarageSlots = bays inside.
 -- The list is kept cheapest first: the phone's HOME page and the map list homes in this order.
 --
 -- Picking a new lot: a 120 x 80 box around the centre must be empty, including the CanQuery = false
@@ -38,6 +48,11 @@ Housing.List = {
 		Blurb = "Your first place in Port Solana: a brick dock loft under a neon sign.",
 		Style = "Loft",
 		Stories = 2,
+		Layout = {
+			Door = Vector3.new(-30, 0.6, -12),
+			DoorStep = Vector3.new(-30, 0.2, -18),
+			Driveway = { Vector3.new(8, 0.3, -26), Vector3.new(20, 0.3, -26), Vector3.new(25, 0, -46) },
+		},
 		Wall = Color3.fromRGB(156, 66, 52), -- brick red
 		Accent = Color3.fromRGB(184, 98, 50), -- rust: the beam between the floors, the door canopy
 		Roof = Color3.fromRGB(58, 56, 66), -- dark steel: parapet, sawtooth roof, window bars
@@ -53,8 +68,14 @@ Housing.List = {
 		Position = Vector3.new(-450, 0, -1550),
 		Facing = Vector3.new(0, 0, -1), -- north, to the street at z = -1650
 		GarageSlots = 2,
-		Blurb = "A cosy seafoam bungalow under the palms.",
+		Blurb = "A cosy Old Florida cottage: a porch swing, a tin roof, a garden out back and a two-car garage.",
+		Style = "Bungalow",
 		Stories = 1,
+		Layout = {
+			Door = Vector3.new(-24, 1.2, -12),
+			DoorStep = Vector3.new(-24, 1.2, -17),
+			Driveway = { Vector3.new(28.5, 0.3, -16), Vector3.new(42.5, 0.3, -16), Vector3.new(35.5, 0, -46) },
+		},
 		Wall = Color3.fromRGB(170, 232, 222), -- outside walls
 		Accent = Color3.fromRGB(255, 190, 214), -- bands, awning
 		Trim = Color3.fromRGB(255, 62, 165), -- neon trim and door frame
@@ -69,9 +90,14 @@ Housing.List = {
 		Position = Vector3.new(260, 0, -1578),
 		Facing = Vector3.new(0, 0, -1), -- north, to the street at z = -1650 (behind Palm Plaza)
 		GarageSlots = 3,
-		Blurb = "A sunny ranch house with a wide front porch and a three-car garage.",
+		Blurb = "A sunny family ranch: a wide porch, a hot tub and swings out back, and a three-car garage.",
 		Style = "Ranch",
 		Stories = 1,
+		Layout = {
+			Door = Vector3.new(-20, 1, -10),
+			DoorStep = Vector3.new(-20, 1, -15),
+			Driveway = { Vector3.new(17, 0.3, -26), Vector3.new(30, 0.3, -26), Vector3.new(43, 0.3, -26) },
+		},
 		Wall = Color3.fromRGB(255, 228, 160), -- butter-yellow wooden siding
 		Accent = Color3.fromRGB(252, 250, 244), -- white porch posts, rails and eaves
 		Roof = Color3.fromRGB(204, 108, 78), -- terracotta
@@ -87,8 +113,14 @@ Housing.List = {
 		Position = Vector3.new(500, 0, 50),
 		Facing = Vector3.new(0, 0, 1), -- south, to the street at z = 150
 		GarageSlots = 4,
-		Blurb = "A lavender tower in the middle of downtown, with a view of the whole city.",
-		Stories = 5,
+		Blurb = "The top floor of a downtown tower: a pool terrace in the sky and a glass sky garage for four cars.",
+		Style = "Penthouse",
+		Stories = 6,
+		Layout = {
+			Door = Vector3.new(-20, 0.6, -14),
+			DoorStep = Vector3.new(-20, 0.2, -20),
+			Driveway = { Vector3.new(18, 0.3, -25), Vector3.new(38, 0.3, -25), Vector3.new(28, 0, -46) },
+		},
 		Wall = Color3.fromRGB(206, 190, 255),
 		Accent = Color3.fromRGB(250, 250, 255),
 		Trim = Color3.fromRGB(34, 225, 255),
@@ -103,8 +135,14 @@ Housing.List = {
 		Position = Vector3.new(675, 0, 1400),
 		Facing = Vector3.new(0, 0, 1), -- south, to Marina Row at z = 1500
 		GarageSlots = 6,
-		Blurb = "A peach seaside villa with its own pool and a six-car garage.",
+		Blurb = "A two-storey Mediterranean villa on the marina: a belvedere tower, a pool and spa, and a six-car garage.",
+		Style = "Villa",
 		Stories = 2,
+		Layout = {
+			Door = Vector3.new(-24, 1.2, -12),
+			DoorStep = Vector3.new(-24, 0.2, -19),
+			Driveway = { Vector3.new(18, 0.3, -27), Vector3.new(32, 0.3, -27), Vector3.new(25, 0, -48) },
+		},
 		Wall = Color3.fromRGB(255, 214, 170),
 		Accent = Color3.fromRGB(255, 255, 255),
 		Trim = Color3.fromRGB(255, 214, 10),
@@ -120,9 +158,14 @@ Housing.List = {
 		Position = Vector3.new(1340, 0, -1270),
 		Facing = Vector3.new(0, 0, -1), -- north, toward the causeway road at z = -1350
 		GarageSlots = 8,
-		Blurb = "The big one: a white glass mansion with a pool, pink neon and an 8-car garage.",
+		Blurb = "The big one: three floors on the beach, an infinity pool, a roof spa, a cinema and an 8-car showroom garage.",
 		Style = "Mansion",
 		Stories = 3,
+		Layout = {
+			Door = Vector3.new(-26, 0.6, -16),
+			DoorStep = Vector3.new(-26, 0.2, -23),
+			Driveway = { Vector3.new(14, 0.3, -26), Vector3.new(28, 0.3, -26), Vector3.new(38, 0, -45) },
+		},
 		Wall = Color3.fromRGB(250, 250, 252),
 		Accent = Color3.fromRGB(255, 255, 255),
 		Roof = Color3.fromRGB(255, 255, 255),
@@ -161,21 +204,27 @@ function Housing.Frame(home)
 	return CFrame.lookAt(home.Position, home.Position + home.Facing)
 end
 
+-- A home's own lot-space spot (its Layout), else the shared one.
+function Housing.Spot(home, key)
+	local own = home.Layout and home.Layout[key]
+	return own or Housing.Layout[key]
+end
+
 -- World position of the bottom of the front door (the GPS target).
 function Housing.DoorPosition(home)
-	return (Housing.Frame(home) * CFrame.new(Housing.Layout.Door)).Position
+	return (Housing.Frame(home) * CFrame.new(Housing.Spot(home, "Door"))).Position
 end
 
 -- Where a character appears outside the front door, facing the street.
 function Housing.DoorCFrame(home)
-	return Housing.Frame(home) * CFrame.new(Housing.Layout.DoorStep + Vector3.new(0, 3.5, 0))
+	return Housing.Frame(home) * CFrame.new(Housing.Spot(home, "DoorStep") + Vector3.new(0, 3.5, 0))
 end
 
 -- Car spawn spots on the driveway (chassis height, like the city car pads).
 function Housing.DrivewayCFrames(home)
 	local frame = Housing.Frame(home)
 	local list = {}
-	for _, p in ipairs(Housing.Layout.Driveway) do
+	for _, p in ipairs(Housing.Spot(home, "Driveway")) do
 		table.insert(list, frame * CFrame.new(p + Vector3.new(0, 3.2, 0)))
 	end
 	return list

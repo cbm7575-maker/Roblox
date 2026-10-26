@@ -1,10 +1,13 @@
 -- HousingService (ModuleScript, ServerScriptService.Services.HousingService)
 -- Homes you can buy (Config.Housing). Saved as data.home (one home at a time), mirrored to the
 -- player attribute "Home".
---   * Each property's outside is built at start-up in Workspace.Homes with plain parts: a front door,
---     a garage door, a driveway, a sign and palms around a house in the home's Style (stucco Classic
---     house or tower, brick dock Loft, wooden porch Ranch, white glass Mansion: see `bodies` below).
---     Many players can own the same property: its door leads to each owner's own private inside.
+--   * Every home has its own build: ServerScriptService.Services.Houses.<Style> (Config.Housing's
+--     Style), drawn by HouseBuilder twice: at start-up on its lot in Workspace.Homes as the street sees
+--     it (a closed shell: the brick dock loft, the Old Florida bungalow, the family ranch, the downtown
+--     tower with its sky garage, the Mediterranean villa, the three-level beach mansion), and inside,
+--     for each owner (below). The plain shared shell (`bodies`, legacyExterior / legacyInterior) is
+--     only the fallback for a home whose own build is missing or fails. Many players can own the same
+--     property: its door leads to each owner's own private inside.
 --   * The look follows Look 3.0 (Tools/Look3): real materials in believable colours (Config.Housing's
 --     pastel walls become stucco with a hint of their colour here), dark tinted glass, wood and dark
 --     metal doors, clay-tile or flat roofs, a paved path and a concrete driveway with edging. Neon is
@@ -27,23 +30,30 @@
 --     attribute "Touring" = the home id while on a tour (InHome is set too: indoors is indoors); both
 --     clear on leaving, respawning and leaving the server. Buying on the tour turns the show home
 --     into your own inside where you stand (the stand goes, the closet and the garage fill in).
---   * Inside: built for each player far off the map (from x = 12000, y = 50, on a grid 2500 studs
---     apart: further than the streaming radius, so nobody else's inside ever streams in around yours)
---     the first time they go in, reused after that, destroyed when they leave the server. A living
---     room, a bed, a wardrobe (closet and mirror) and a garage whose bays show the land cars you own
---     and can drive on your side (up to GarageSlots: past 3 bays a row the garage gets wider, e.g. 8
---     cars in two rows of 4). "Drive this" takes you out of the front door and seats you in that car
---     on the driveway. Indoors is Look 3.0 too: plaster, marble, wood and fabric with the home's Theme
---     colour as the one accent; the ceiling and garage lights are always on (no windows), the lamps,
---     cove strips and neon art light up after dark, and softenInterior tones it all down a notch.
+--   * Inside: the whole house again, rooms, stairs and furniture, with its yard (and pools of real
+--     Terrain water, filled when the copy is built and cleared with it) inside a small neighbourhood
+--     (HouseBuilder's Backdrop) so the windows look out on something, built for each player far off the
+--     map (from x = 12000, y = 48, on a grid 2500 studs apart: further than the streaming radius, so
+--     nobody else's inside ever streams in around yours) the first time they go in, reused after that,
+--     destroyed when they leave the server. Its way out is the front door (the penthouse's: its
+--     elevator), with an EXIT sign; a wardrobe (closet and mirror); a garage whose GarageSlots bays show
+--     the land cars you own and can drive on your side. "Drive this" takes you out of the front door
+--     and seats you in that car on the driveway. Invisible walls round the copy's lot keep everyone on
+--     it. Indoors is Look 3.0 too, and softenInterior tones the rooms down a notch.
 --   * The wardrobe's "Change look" prompt (WardrobePrompt) has no server handler: the owner's
 --     WardrobeUI opens its dressing room from it (and shows its WARDROBE button anywhere inside), and
 --     DisguiseService accepts a new look while InHome is set (IsInside: a tour too, where WardrobeUI's
 --     button shows unless it checks Touring). A look changed at home never drops a star (only a
 --     hideout does that; homes and tours turn wanted players away at the door anyway).
---   * Free-roam (Side "Civilian") home owners spawn at their front door, and VehicleService parks
---     their starter car on the driveway (HousingService.DrivewayFor). On join both wait the same
---     VehicleService.JoinWait for the save, so the player and the car end up in the same place.
+--   * Free-roam (Side "Civilian") home owners who aren't wanted spawn INSIDE their home, in the living
+--     room (every respawn, and on join; never cops, prisoners or wanted players, who keep the normal
+--     spawn), and VehicleService parks their starter car on the driveway (HousingService.DrivewayFor,
+--     with the same rule). On join both wait the same VehicleService.JoinWait for the save, so the
+--     player and the car end up in the same place. While the first-join title screen is up (HasPicked
+--     not yet set: TeamUI's PLAY sends RequestTeam, which sets it) they wait at their front door, the
+--     title camera circling their house, and go in when PLAY is pressed.
+--   * No hiding from the police at home: wanted players can't go in or tour, don't spawn at home, and
+--     anyone inside who turns out to be wanted is put out of the front door (HomeWanted).
 -- Remote RequestHouse(action, arg): "Buy" (home id), "Enter" (home id), "Tour" (home id), "Leave",
 -- "Drive" (car id).
 -- Server -> client: HouseCard { Id, OldId, Refund, At? (the FOR SALE stand, on a tour) },
@@ -67,10 +77,12 @@ local GarageService = require(ServerScriptService.Services.GarageService)
 local VehicleService = require(ServerScriptService.Services.VehicleService)
 local Telemetry = require(ServerScriptService.Services.Telemetry)
 local CarBuilder = require(ServerStorage.Tools.CarBuilder)
+local HouseBuilder = require(ServerScriptService.Services.HouseBuilder)
 
 local HousingService = {}
 
-local INTERIOR_ORIGIN = Vector3.new(12000, 50, 0)
+-- (on the 4-stud Terrain grid, so a pool's water lines up with its basin: x, y and the gap are multiples of 4)
+local INTERIOR_ORIGIN = Vector3.new(12000, 48, 0)
 -- Studs between two players' insides: more than the default StreamingTargetRadius (1024), so a
 -- player at home never streams in the neighbours' insides and their display cars.
 local INTERIOR_GAP = 2500
@@ -750,7 +762,9 @@ function bodies.Mansion(model, frame, home, H, _, wall)
 	end
 end
 
-local function buildExterior(home)
+-- The plain shell every home used to share (the Style bodies above): now only the fallback for a home
+-- whose own build (HouseBuilder, Houses.<Style>) is missing or fails. Returns the front door part.
+local function legacyExterior(home)
 	local frame = Housing.Frame(home)
 	local style = bodies[home.Style or ""] and home.Style or "Classic"
 	local look = LOOKS[style]
@@ -803,12 +817,6 @@ local function buildExterior(home)
 		WARM), WARM, 18, 1.2)
 	local step = look.Step or 0.3 -- the floor in front of the door: the path, or the ranch's porch deck
 	box(model, "Doormat", frame, -20.5, -15.5, step, step + 0.1, -13.5, -10.6, Color3.fromRGB(88, 72, 56), Enum.Material.Fabric)
-	-- Everyone gets the buy text; an owner's own client changes it to "Enter home" (HouseClient).
-	local prompt = makePrompt(door, "HomeDoor", "View / Buy " .. money(home.Price), home.Name)
-	prompt:SetAttribute("HomeId", home.Id)
-	prompt.Triggered:Connect(function(player)
-		onDoor(player, home)
-	end)
 
 	-- A concrete planter under the front windows: bushes with a few hibiscus flowers.
 	box(model, "Planter", frame, -48, -28, 0.2, 1, -12.6, -10, CONCRETE, Enum.Material.Concrete)
@@ -892,7 +900,32 @@ local function buildExterior(home)
 		model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic -- the whole house streams in at once
 	end)
 	model.Parent = homesFolder
-	return model
+	return door
+end
+
+-- The home on its lot: its own build (HouseBuilder draws Houses.<Style>), or the plain shell when that is
+-- missing or fails. Either way its front door gets the HomeDoor prompt: everyone gets the buy text, an
+-- owner's own client changes it to "Enter home" (HouseClient).
+local function buildExterior(home)
+	local door
+	if HouseBuilder.Has(home) then
+		local ok, out = pcall(HouseBuilder.Lot, home, homesFolder)
+		if ok and out.door then
+			door = out.door
+		else
+			warn("[HousingService] couldn't build " .. home.Id .. "'s own house, using the plain one: " .. tostring(out))
+			local broken = homesFolder:FindFirstChild("Home_" .. home.Id)
+			if broken then
+				broken:Destroy()
+			end
+		end
+	end
+	door = door or legacyExterior(home)
+	local prompt = makePrompt(door, "HomeDoor", "View / Buy " .. money(home.Price), home.Name)
+	prompt:SetAttribute("HomeId", home.Id)
+	prompt.Triggered:Connect(function(player)
+		onDoor(player, home)
+	end)
 end
 
 -- Inside ----------------------------------------------------------------------------------------------
@@ -970,9 +1003,10 @@ local function slotFrame(slot)
 	return CFrame.new(INTERIOR_ORIGIN + Vector3.new(col * INTERIOR_GAP, 0, row * INTERIOR_GAP))
 end
 
--- `show`: a tour's show copy (see the header): the same rooms, with an empty garage, no wardrobe prompt
--- and a FOR SALE stand. moveIn turns one into the owner's inside.
-local function buildInterior(player, home, slot, show)
+-- The plain inside every home used to share: now only the fallback for a home whose own build is missing
+-- or fails. `show`: a tour's show copy (see the header): the same rooms, with an empty garage, no
+-- wardrobe prompt and a FOR SALE stand. moveIn turns one into the owner's inside.
+local function legacyInterior(player, home, slot, show)
 	local frame = slotFrame(slot)
 	local model = Instance.new("Model")
 	model.Name = "Home_" .. player.UserId
@@ -1339,6 +1373,15 @@ local function refreshGarage(player, rec)
 	end
 end
 
+-- Pool water (Terrain) for an inside's pools: `material` Water to fill, Air to clear.
+local function poolWater(list, material)
+	for _, w in ipairs(list or {}) do
+		pcall(function()
+			Workspace.Terrain:FillBlock(w.cf, w.size, material)
+		end)
+	end
+end
+
 local function destroyInterior(player)
 	local rec = interiors[player]
 	interiors[player] = nil
@@ -1346,16 +1389,20 @@ local function destroyInterior(player)
 		if slots[rec.slot] == player then
 			slots[rec.slot] = nil
 		end
+		poolWater(rec.water, Enum.Material.Air)
 		rec.model:Destroy()
 	end
 end
 
 -- With the realistic day lighting (WorldService), near-white rooms under nine lamps looked blown out.
 -- Tone every interior down a notch: softer lamps, and the brightest surfaces a little less white.
-local function softenInterior(model)
+-- `lights` false keeps the lamps (a house's own build sets its lights low already).
+local function softenInterior(model, lights)
 	for _, d in ipairs(model:GetDescendants()) do
 		if d:IsA("Light") then
-			d.Brightness *= 0.6
+			if lights ~= false then
+				d.Brightness *= 0.6
+			end
 		elseif d:IsA("BasePart") and d.Material ~= Enum.Material.Neon then
 			local c = d.Color
 			if c.R + c.G + c.B > 2.4 then -- nearly white
@@ -1363,6 +1410,81 @@ local function softenInterior(model)
 			end
 		end
 	end
+end
+
+-- The home's own inside (HouseBuilder draws Houses.<Style> again, rooms and all, at this slot): its
+-- prompts (the way out, the wardrobe unless it's a show copy, the FOR SALE stand on one), the rooms
+-- toned down like every inside, streamed to the owner only, and the pools filled with water.
+local function ownInterior(player, home, slot, show)
+	local out = HouseBuilder.Inside(home, slotFrame(slot), { show = show, ownerId = player.UserId })
+	local model = out.model
+	local leavePrompt = makePrompt(out.exit, "LeavePrompt", show and "End tour" or "Leave home", out.exitName or "Front door")
+	leavePrompt.Triggered:Connect(function(who)
+		if who == player then
+			leave(player)
+		end
+	end)
+	if out.closet and not show then
+		makePrompt(out.closet, "WardrobePrompt", "Change look", "Wardrobe")
+	end
+	if show and out.saleBoard then
+		local salePrompt = makePrompt(out.saleBoard, "SalePrompt", "Buy this home", home.Name)
+		salePrompt.Triggered:Connect(function(who)
+			if who == player and RateLimit.Allow(player, "House", 2, 3) then
+				onSale(player)
+			end
+		end)
+	end
+	for _, name in ipairs({ "Rooms", "Decor", "Garage" }) do
+		local f = model:FindFirstChild(name)
+		if f then
+			softenInterior(f, false)
+		end
+	end
+	pcall(function()
+		model.ModelStreamingMode = Enum.ModelStreamingMode.PersistentPerPlayer
+	end)
+	model.Parent = interiorFolder
+	pcall(function()
+		model:AddPersistentPlayer(player) -- always loaded on the owner's device
+	end)
+	poolWater(out.water, Enum.Material.Water)
+	return {
+		model = model,
+		slot = slot,
+		homeId = home.Id,
+		show = show == true,
+		spawn = out.spawn,
+		bays = out.bays,
+		cars = out.cars,
+		shown = {},
+		signSub = out.signSub,
+		garageTitle = out.garageTitle,
+		closet = out.closet,
+		leavePrompt = leavePrompt,
+		sale = model:FindFirstChild("ForSale"),
+		saleAt = out.saleAt,
+		water = out.water,
+	}
+end
+
+-- This home's inside in `slot`: its own build, or the plain one when that's missing or fails.
+local function buildInterior(player, home, slot, show)
+	if HouseBuilder.Has(home) then
+		local ok, rec = pcall(ownInterior, player, home, slot, show)
+		if ok then
+			return rec
+		end
+		warn("[HousingService] couldn't build " .. home.Id .. "'s own inside, using the plain one: " .. tostring(rec))
+		for _, m in ipairs(interiorFolder:GetChildren()) do
+			if m:GetAttribute("OwnerUserId") == player.UserId and not interiors[player] then
+				m:Destroy() -- (a half-built copy)
+			end
+		end
+	end
+	local rec = legacyInterior(player, home, slot, show)
+	softenInterior(rec.model)
+	return rec
 end
 
 -- This player's inside for `home` (`show`: a tour's show copy of it): reused if it's already built for
@@ -1384,7 +1506,6 @@ local function interiorFor(player, home, show)
 	end
 	slots[slot] = player
 	rec = buildInterior(player, home, slot, show)
-	softenInterior(rec.model)
 	interiors[player] = rec
 	return rec
 end
@@ -1654,30 +1775,85 @@ end
 
 -- Home spawn ------------------------------------------------------------------------------------------
 
--- Free roam with a home: move a fresh character to the front door (once per character).
+-- A character that may spawn at home: a free-roam citizen (not a cop, not a prisoner) who owns a home
+-- and isn't wanted (no hiding from the cops at home, and a wanted respawn stays at the city spawn).
+local function spawnsHome(player)
+	return player:GetAttribute("Side") == "Civilian" and (player:GetAttribute("Heat") or 0) <= 0 and ownedHome(player) ~= nil
+end
+
+-- Into the owner's own inside, standing in the living room (the join and respawn spawn): the same trip
+-- as the front door's, without the door (they're not at it) and only for `char`.
+local function goInside(player, home, char)
+	if busy[player] or inside[player] then
+		return
+	end
+	busy[player] = true
+	local ok, err = pcall(function()
+		local rec = interiorFor(player, home)
+		refreshGarage(player, rec)
+		fade(player, "Out")
+		task.wait(FADE_TIME)
+		stream(player, rec.spawn.Position)
+		if player.Parent == Players and player.Character == char and spawnsHome(player) and moveTo(player, rec.spawn) then
+			setInside(player, true)
+		end
+	end)
+	if not ok then
+		warn("[HousingService] home spawn failed: " .. tostring(err))
+	end
+	fade(player, "In")
+	busy[player] = nil
+end
+
+-- Returning players spawn inside their home, once per character. On the first join the title screen
+-- (TeamUI) is up until the player presses PLAY, and its camera circles the character: they wait at their
+-- front door (their house is the title's backdrop) and go in when PLAY sets HasPicked, unless they walked
+-- off, sat down or something changed meanwhile.
 local function homeSpawn(player, char)
 	local s = spawned[player]
 	if not s or s.char ~= char or s.done then
 		return
 	end
 	s.done = true
-	if player:GetAttribute("Side") ~= "Civilian" or not ownedHome(player) then
+	if not spawnsHome(player) then
 		return
 	end
 	task.wait(SPAWN_DELAY)
 	local home = ownedHome(player)
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not home or player.Character ~= char or player:GetAttribute("Side") ~= "Civilian" or inside[player] then
+	if not home or player.Character ~= char or not spawnsHome(player) or inside[player] or busy[player] then
 		return
 	end
 	if hum and hum.SeatPart then
 		return -- already in a car (called one before the save loaded): leave them be
 	end
+	if player:GetAttribute("HasPicked") == true then
+		goInside(player, home, char)
+		return
+	end
 	local cf = Housing.DoorCFrame(home)
 	stream(player, cf.Position)
-	if player.Character == char and not inside[player] then
-		moveTo(player, cf)
+	if player.Character ~= char or not moveTo(player, cf) then
+		return
 	end
+	local conn
+	conn = player:GetAttributeChangedSignal("HasPicked"):Connect(function()
+		if player:GetAttribute("HasPicked") ~= true then
+			return
+		end
+		conn:Disconnect()
+		local root = rootOf(player)
+		local seated = hum and hum.SeatPart ~= nil
+		if player.Character == char and root and not seated and not inside[player] and ownedHome(player) == home
+			and (root.Position - cf.Position).Magnitude < 30 then
+			task.spawn(goInside, player, home, char)
+		end
+	end)
+	char.AncestryChanged:Connect(function()
+		if not char:IsDescendantOf(game) and conn.Connected then
+			conn:Disconnect()
+		end
+	end)
 end
 
 local function onCharacter(player, char)
@@ -1707,13 +1883,35 @@ function HousingService.TouringOf(player)
 	return rec and tourOf(player, rec.homeId) and rec.homeId or nil
 end
 
--- The driveway spots of the player's home when they roam free, else nil (VehicleService's starter car).
+-- The driveway spots of the player's home when they roam free and aren't wanted (then they spawn at home
+-- too: spawnsHome), else nil (VehicleService's starter car goes to a city pad instead).
 function HousingService.DrivewayFor(player)
-	if (player:GetAttribute("Side") or "Civilian") ~= "Civilian" then
+	if (player:GetAttribute("Side") or "Civilian") ~= "Civilian" or (player:GetAttribute("Heat") or 0) > 0 then
 		return nil
 	end
 	local home = ownedHome(player)
 	return home and Housing.DrivewayCFrames(home) or nil
+end
+
+-- Look 3.0 scattered loose palms and bushes over Palm Hills' open lawns (Workspace.City.Art.Plazas,
+-- "LawnPalm" and "TropicalBush" models) before some homes' lots were where they are now: a few stand in a
+-- driveway or through a garage. The ones on a lot go at start-up (looks only: they never collided).
+local function clearLots()
+	local city = Workspace:FindFirstChild("City")
+	local art = city and city:FindFirstChild("Art")
+	local plazas = art and art:FindFirstChild("Plazas")
+	for _, d in ipairs(plazas and plazas:GetChildren() or {}) do
+		if d.Name == "LawnPalm" or d.Name == "TropicalBush" then
+			local pos = d:IsA("BasePart") and d.Position or (d:IsA("Model") and d:GetPivot().Position) or nil
+			for _, home in ipairs(pos and Housing.List or {}) do
+				local p = Housing.Frame(home):PointToObjectSpace(pos)
+				if math.abs(p.X) < 60 and p.Z > -38 and p.Z < 42 then
+					d:Destroy()
+					break
+				end
+			end
+		end
+	end
 end
 
 local function onRequest(player, action, arg)
@@ -1756,6 +1954,7 @@ function HousingService.Init()
 	interiorFolder.Name = "HomeInteriors"
 	interiorFolder:ClearAllChildren()
 	interiorFolder.Parent = Workspace
+	pcall(clearLots)
 	for _, home in ipairs(Housing.List) do
 		local ok, err = pcall(buildExterior, home)
 		if not ok then
@@ -1797,14 +1996,18 @@ function HousingService.Init()
 	end)
 
 	-- Housekeeping: anyone moved out of their inside by something else counts as outside again; anyone
-	-- who somehow falls through the floor goes back to the spot inside the door.
+	-- who somehow falls through the floor goes back to the spot inside the door; anyone who turns out to
+	-- be wanted in there (a crime that only counted after they went in) is put out of the front door.
 	task.spawn(function()
 		while true do
 			task.wait(2)
 			for player in pairs(inside) do
 				local rec = interiors[player]
 				local root = rootOf(player)
-				if rec and root and not busy[player] then
+				if rec and root and not busy[player] and (player:GetAttribute("Heat") or 0) > 0 then
+					notify:FireClient(player, "HomeWanted")
+					task.spawn(leave, player)
+				elseif rec and root and not busy[player] then
 					local s = rec.spawn.Position
 					local flat = Vector3.new(root.Position.X - s.X, 0, root.Position.Z - s.Z).Magnitude
 					if flat > 150 then
