@@ -79,8 +79,8 @@
 --     respawn.
 --   * Tools are put away when you sit in a car, go into your home, get knocked over or get tasered.
 --   * The Roblox backpack (hotbar) shows only for citizens and cops on foot with a keyboard or gamepad,
---     outside homes, the side picker and the shop panel, so it never covers the speed gauge, LEAVE HOME
---     or KEEP MY SIDE. The dressing room (WardrobeUI) hides and restores it itself.
+--     outside homes, the title screen and the shop panel, so it never covers the speed gauge, LEAVE HOME
+--     or PLAY. The dressing room (WardrobeUI) hides and restores it itself.
 -- Other controllers are looked up softly (other(name)): PoseClient, LocomotionClient, ImpactClient,
 -- DriveUI, PhoneUI, WardrobeUI, DealerClient, HouseClient. The game still works when one is missing.
 -- For other controllers: CombatClient.GunOut() (the camera, crosshair and mouse are in gun mode right
@@ -957,7 +957,7 @@ end
 
 ------------------------------------------------------------------ what state are we in
 
--- TeamUI's full-screen side picker (its KEEP MY SIDE button sits at the bottom centre).
+-- TeamUI's full-screen title screen (its overlay is still named Picker; PLAY sits along the bottom).
 local function pickerOpen()
 	local picker = ui.picker
 	if not picker or not picker.Parent then

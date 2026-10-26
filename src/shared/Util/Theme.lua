@@ -118,22 +118,37 @@ local ZONES = {
 	},
 }
 
+-- The width of the HUD's ScreenGui (every zone's parent gui has the same: the screen less a phone's side
+-- safe-area insets), or the camera's view before the HUD exists.
+local function hudWidth()
+	local player = game:GetService("Players").LocalPlayer
+	local pg = player and player:FindFirstChildOfClass("PlayerGui")
+	local hud = pg and pg:FindFirstChild("HUD")
+	if hud and hud:IsA("ScreenGui") and hud.AbsoluteSize.X > 0 then
+		return hud.AbsoluteSize.X
+	end
+	local camera = workspace.CurrentCamera
+	return camera and camera.ViewportSize.X or 0
+end
+
 function Theme.Zone(name, touch)
 	local set = touch and ZONES.Touch or ZONES.Desktop
 	local z = set[name] or ZONES.Desktop[name]
 	if touch and (name == "Goal" or name == "Banner") then
 		-- On a narrow phone (under ~800 px wide) the centred strip would run under Status in the top
-		-- right: keep its left edge and end it 8 px short of Status.
-		local camera = workspace.CurrentCamera
-		local w = camera and camera.ViewportSize.X or 0
+		-- right: keep its left edge and end it 8 px short of Status. Measured in the HUD gui's own width
+		-- (our guis keep a notched phone's side safe-area insets, so they are narrower than the camera's
+		-- view) and returned in scale form, so it fits any of those guis.
 		local status = ZONES.Touch.Status
-		local width = z.Size.X.Scale * w + z.Size.X.Offset
-		local left = z.Pos.X.Scale * w + z.Pos.X.Offset - z.Anchor.X * width
-		local limit = w + status.Pos.X.Offset - status.Size.X.Offset - 8
-		if w > 0 and left + width > limit and limit - left >= 160 then
-			width = limit - left
-			return { Anchor = Vector2.new(0, z.Anchor.Y), Pos = UDim2.new(0, left, z.Pos.Y.Scale, z.Pos.Y.Offset),
-				Size = UDim2.new(0, width, z.Size.Y.Scale, z.Size.Y.Offset), Grow = z.Grow }
+		local w = hudWidth()
+		local lScale = z.Pos.X.Scale - z.Anchor.X * z.Size.X.Scale
+		local lOffset = z.Pos.X.Offset - z.Anchor.X * z.Size.X.Offset
+		local rOffset = status.Pos.X.Offset - status.Size.X.Offset - 8 -- Status hangs from the right edge
+		local left = lScale * w + lOffset
+		local limit = w + rOffset
+		if w > 0 and left + z.Size.X.Scale * w + z.Size.X.Offset > limit and limit - left >= 160 then
+			return { Anchor = Vector2.new(0, z.Anchor.Y), Pos = UDim2.new(lScale, lOffset, z.Pos.Y.Scale, z.Pos.Y.Offset),
+				Size = UDim2.new(1 - lScale, rOffset - lOffset, z.Size.Y.Scale, z.Size.Y.Offset), Grow = z.Grow }
 		end
 	end
 	if name == "Subtitle" and not touch then

@@ -228,10 +228,8 @@ local function followIds(j)
 		if type(id) == "string" then
 			for i, def in ipairs(chain.list) do
 				if def.Id == id then
-					if (j[chain.key] or 0) ~= i - 1 then
-						j[chain.key] = i - 1
-						j[chain.progress] = 0
-					end
+					-- (Same goal, new place in the list: its progress so far stays.)
+					j[chain.key] = i - 1
 					break
 				end
 			end

@@ -656,7 +656,7 @@ end
 -- ones a padlock. cells[i] = { Color, Name, Caption, CaptionColor, Current, Locked, Price, Key, Pick }:
 -- Price set = it costs money, so it takes two taps (see the header); Pick() sends the request. Free and
 -- locked swatches send on the first tap (a locked one: the server says what unlocks it). The grid's
--- holder keeps its default name ("Frame"); the swatches are "Swatch<n>", the line "Status".
+-- holder keeps its default name ("Frame"); the swatches are "Swatch<n>", the line "Status" (in "StatusLine").
 function W.swatches(parent, title, price, note, cells, order)
 	local touch, nameH, small = touchHeight(), textPx(15) + 4, textPx(13)
 	local gap = 6
@@ -683,10 +683,36 @@ function W.swatches(parent, title, price, note, cells, order)
 	head.Size = UDim2.new(1, 0, 0, 6 + nameH)
 	themeText(head, string.upper(title), UDim2.new(0.5, 0, 0, nameH), UDim2.fromOffset(0, 6), 15, "Bold")
 	themeText(head, price, UDim2.new(0.5, 0, 0, nameH), UDim2.new(0.5, 0, 0, 6), 15, "Display", C.Cash, Enum.TextXAlignment.Right)
-	local status = themeText(r, armedCell and ("TAP AGAIN TO BUY: " .. tostring(armedCell.Name) .. "  " .. money(armedCell.Price)) or note,
+	local function armedText(cell)
+		return "TAP AGAIN TO BUY: " .. tostring(cell.Name) .. "  " .. money(cell.Price)
+	end
+	-- The line keeps one height whether a swatch waits or not (the taller of the note and the longest
+	-- "TAP AGAIN" text, laid under it unseen), so the grid doesn't jump between the two taps and the
+	-- second one lands on the same swatch.
+	local line = W.frame(r, "StatusLine", 2)
+	line.Size = UDim2.fromScale(1, 0)
+	line.AutomaticSize = Enum.AutomaticSize.Y
+	local sizers = { { note, "Body" } }
+	local longest
+	for _, cell in ipairs(cells) do
+		if cell.Price and (longest == nil or #armedText(cell) > #longest) then
+			longest = armedText(cell)
+		end
+	end
+	if longest then
+		table.insert(sizers, { longest, "Bold" })
+	end
+	for i, sizer in ipairs(sizers) do
+		local s = themeText(line, sizer[1], UDim2.fromScale(1, 0), nil, 13, sizer[2], C.Dim)
+		s.Name = "Sizer" .. i
+		s.TextTransparency = 1
+		s.AutomaticSize = Enum.AutomaticSize.Y
+		s.TextWrapped = true
+		s.TextTruncate = Enum.TextTruncate.None
+	end
+	local status = themeText(line, armedCell and armedText(armedCell) or note,
 		UDim2.fromScale(1, 0), nil, 13, armedCell and "Bold" or "Body", armedCell and C.Cash or C.Dim)
 	status.Name = "Status"
-	status.LayoutOrder = 2
 	status.AutomaticSize = Enum.AutomaticSize.Y
 	status.TextWrapped = true
 	status.TextTruncate = Enum.TextTruncate.None

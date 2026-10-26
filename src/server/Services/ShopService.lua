@@ -19,7 +19,8 @@
 --     Free grants use the same code as purchases: a pass sets Pass_<Key> and fires PassGranted; a pack
 --     pays its Cash (reason "shopfree:<Key>", so analytics never count it as a Robux purchase) and
 --     fires CashPackGranted. A pack is only paid once the save has loaded (cash before that would be
---     overwritten by the load). Studio grants last for that play session (a test server saves nothing).
+--     overwritten by the load). In Studio, passes last for that play session. Saves are real there when
+--     Studio has API access (DataService), so a free cash pack is then given to the owner only.
 --   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") also grants passes on join.
 --   * Offer analytics: remote OfferEvent(action, key) from OfferClient, action "Shown" | "Tapped" |
 --     "Hidden", key a Config.Shop.Offers key or "Showroom_<PassKey>" (only for a pass that an AutoNeon
@@ -131,6 +132,12 @@ end
 local function checkPasses(player)
 	if RunService:IsStudio() then
 		player:SetAttribute("ShopFree", "Studio")
+		-- (Free cash in Studio is kept only for the owner while saves are on: see onFree.)
+		task.spawn(function()
+			if isOwner(player) and player.Parent == Players then
+				owners[player] = true
+			end
+		end)
 	elseif isOwner(player) then
 		if player.Parent ~= Players then
 			return -- left during the group lookup
@@ -230,6 +237,12 @@ local function onFree(player, kind, key)
 			grantPass(player, pass, true)
 		end
 	elseif kind == "Product" then
+		-- A Studio test with API access on saves to the real DataStore: there only the owner's free cash
+		-- (theirs anyway in the live game) may land in it, not a collaborator's.
+		if RunService:IsStudio() and not owners[player] and ReplicatedStorage:GetAttribute("SavesOff") ~= true then
+			warn("[ShopService] free cash packs in Studio: saves are on (API access), so only the game's owner gets them")
+			return
+		end
 		local product = Shop.ProductByKey(key)
 		if product and DataService.IsLoaded(player) then
 			payPack(player, product, true)

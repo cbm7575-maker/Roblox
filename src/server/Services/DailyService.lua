@@ -55,7 +55,7 @@ end
 function DailyService.Init()
 	Remotes.Event("DailyReward")
 	DataService.OnLoaded(function(player, data)
-		-- Wait until they've picked a side so the reward isn't hidden behind the picker.
+		-- Wait until they've pressed PLAY (HasPicked) so the reward isn't hidden behind the title screen.
 		for _ = 1, 120 do
 			if player:GetAttribute("HasPicked") or player.Parent ~= Players then
 				break
