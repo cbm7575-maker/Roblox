@@ -2648,6 +2648,32 @@ local function onCharacter(player, char)
 			syncTools(player)
 		end
 	end)
+	-- How a gun sits in the hand: Roblox welds the Handle to the hand's RightGripAttachment (C0) and
+	-- Tool.Grip (C1). On standard R15 and R6 bodies that attachment is turned -90 degrees about X, which
+	-- Tool.Grip and the poses assume. Some avatar bodies ship it turned differently and hold every gun
+	-- backwards or sideways: put the standard turn back now and whenever a tool comes into the hand
+	-- (its position is kept; the server's change reaches every device).
+	local function normalizeGrip()
+		local hand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+		local att = hand and hand:FindFirstChild("RightGripAttachment")
+		if not att or not att:IsA("Attachment") then
+			return
+		end
+		local want = CFrame.new(att.Position) * CFrame.Angles(math.rad(-90), 0, 0)
+		if att.CFrame ~= want then
+			att.CFrame = want
+		end
+		local weld = hand:FindFirstChild("RightGrip")
+		if weld and weld:IsA("JointInstance") and weld.C0 ~= want then
+			weld.C0 = want -- already holding a tool: fix it in place
+		end
+	end
+	task.defer(normalizeGrip)
+	char.ChildAdded:Connect(function(c)
+		if c:IsA("Tool") then
+			task.defer(normalizeGrip) -- after Roblox makes the RightGrip weld
+		end
+	end)
 	-- Resetting mid-fight counts as a knockout (onFled).
 	task.spawn(function()
 		local hum = char:WaitForChild("Humanoid", 10)
