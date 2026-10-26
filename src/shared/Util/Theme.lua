@@ -121,6 +121,21 @@ local ZONES = {
 function Theme.Zone(name, touch)
 	local set = touch and ZONES.Touch or ZONES.Desktop
 	local z = set[name] or ZONES.Desktop[name]
+	if touch and (name == "Goal" or name == "Banner") then
+		-- On a narrow phone (under ~800 px wide) the centred strip would run under Status in the top
+		-- right: keep its left edge and end it 8 px short of Status.
+		local camera = workspace.CurrentCamera
+		local w = camera and camera.ViewportSize.X or 0
+		local status = ZONES.Touch.Status
+		local width = z.Size.X.Scale * w + z.Size.X.Offset
+		local left = z.Pos.X.Scale * w + z.Pos.X.Offset - z.Anchor.X * width
+		local limit = w + status.Pos.X.Offset - status.Size.X.Offset - 8
+		if w > 0 and left + width > limit and limit - left >= 160 then
+			width = limit - left
+			return { Anchor = Vector2.new(0, z.Anchor.Y), Pos = UDim2.new(0, left, z.Pos.Y.Scale, z.Pos.Y.Offset),
+				Size = UDim2.new(0, width, z.Size.Y.Scale, z.Size.Y.Offset), Grow = z.Grow }
+		end
+	end
 	if name == "Subtitle" and not touch then
 		-- The strip sits level with the minimap: on a narrow window it shrinks to stay clear of it (and of
 		-- the same margin on the right), never under 360 px.

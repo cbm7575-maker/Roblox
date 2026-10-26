@@ -1820,17 +1820,17 @@ local function placeHud()
 		local jump = frame and frame:FindFirstChild("JumpButton")
 		if jump and jump:IsA("GuiObject") and jump.AbsoluteSize.X > 10 then
 			local p = jump.AbsolutePosition - gui.AbsolutePosition
-			return p.X, p.Y
+			return p.X, p.Y, jump.AbsoluteSize.Y
 		end
 		local tiny = math.min(size.X, size.Y) <= 500
 		local b = tiny and 70 or 120
-		return size.X - (b * 1.5 - 10), size.Y - (tiny and (b + 20) or b * 1.75)
+		return size.X - (b * 1.5 - 10), size.Y - (tiny and (b + 20) or b * 1.75), b
 	end
 	-- FIRE and AIM for the right thumb: just above the jump button, left of the side column (LawClient's
 	-- situational tiles hug the right edge, 52 px wide) and under the Buttons zone. On a short phone the
 	-- gaps above and below FIRE shrink before anything may touch; if it still can't fit under the
 	-- Buttons zone the pair moves left of that zone.
-	local _, jy = jumpCorner()
+	local jx, jy, js = jumpCorner()
 	local bx, by, bw, bh = zoneRect("Buttons", true)
 	local right = math.floor(bx + bw) - 52 - gap
 	local room = jy - (by + bh) - fire -- pixels left over for the gap above FIRE and the gap below it
@@ -1843,7 +1843,21 @@ local function placeHud()
 	ui.fire.Size = UDim2.fromOffset(fire, fire)
 	ui.fire.Position = UDim2.fromOffset(fireX, fireBottom - fire)
 	ui.aim.Size = UDim2.fromOffset(aim, aim)
-	ui.aim.Position = UDim2.fromOffset(fireX - gap - aim, fireBottom - aim)
+	-- AIM goes left of FIRE. On a short phone (iPhone SE: 375 px tall) that spot covers the help line
+	-- (Subtitle zone) and the edge of GET IN / JACK (Action zone): then it sits left of the jump button,
+	-- level with it, still under the right thumb and clear of RELOAD.
+	local ax, ay = fireX - gap - aim, fireBottom - aim
+	local function covers(zoneName)
+		local zx, zy, zw, zh = zoneRect(zoneName, true)
+		return ax < zx + zw and zx < ax + aim and ay < zy + zh and zy < ay + aim
+	end
+	if covers("Subtitle") or covers("Action") then
+		local nx = math.floor(jx) - gap - aim
+		if nx > weaponX + 2 * small + 2 * gap then
+			ax, ay = nx, math.floor(jy + (js - aim) / 2)
+		end
+	end
+	ui.aim.Position = UDim2.fromOffset(ax, ay)
 end
 
 local function refreshVitals()
