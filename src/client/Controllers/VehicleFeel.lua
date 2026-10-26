@@ -13,6 +13,11 @@
 --     harder, since it arrives in network steps). The chase camera follows the chassis, so the body
 --     visibly moves inside a steady picture. Cars without the joint (boats, older models) are left alone.
 --     A model's attribute BodyLean (0-1) scales the lean (bodies with their tyres baked in get less).
+--     The people inside lean with it: the seats are fixed to the chassis, so a body dipping on its springs
+--     brought its roof down onto still heads (up to half a stud in a hard stop or over a kerb, through
+--     the roof on a tall avatar). Each rider's Root joint (LowerTorso) gets the very same move, on top of
+--     whatever the animations and poses gave it that frame (riders()), so the roof and the heads under it
+--     move as one.
 --   * Lights (parts named Headlight / Taillight, any car in Workspace.Vehicles):
 --       in the dark (Workspace attribute IsNight, or Raining) a car that is being driven, or was until
 --       LIGHTS_LINGER seconds ago, has glowing warm-white headlights and dim red taillights; parked cars
@@ -986,6 +991,63 @@ local function overlay()
 	end
 end
 
+-- Riders lean with the body (see the header). RIDE.last / RIDE.base: per Root joint, what we wrote last
+-- and the value we wrote it onto (a joint the animations didn't touch this frame still holds our last
+-- write: then the same base is used again, so the lean never piles up). RIDE.seen: joints written this frame.
+local RIDE = { last = setmetatable({}, { __mode = "k" }), base = setmetatable({}, { __mode = "k" }), seen = {} }
+local RIDE_SEATS = { "DriverSeat", "PassengerSeat" }
+
+local function leanRiders(rec)
+	local joint = rec.joint
+	if not joint or not joint.Parent or rec.resting then
+		return
+	end
+	local chassis = rec.chassis
+	local pivot = joint.C0
+	local move = pivot * joint.Transform * pivot:Inverse() -- the body's lean, in the chassis' space
+	for _, name in ipairs(RIDE_SEATS) do
+		local seat = rec.car:FindFirstChild(name)
+		local hum = seat and seat:IsA("BasePart") and seat.Occupant
+		local char = hum and hum.Parent
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		-- (not while the get-in overlay bends that body: two writers on one joint could pile up)
+		local rig = root and not (overlayOn and char == overlayChar) and rigOf(char)
+		local rj = rig and rig.root
+		local c0 = nil
+		if rj and rj:IsA("Motor6D") then
+			c0 = rj.C0
+		elseif rj and rj.ClassName == "AnimationConstraint" then
+			local a0 = (rj :: any).Attachment0
+			c0 = a0 and a0.CFrame or nil
+		end
+		if rj and c0 and root:IsA("BasePart") then
+			-- The joint's frame in the chassis' space: the same world move, written in that frame, goes in
+			-- front of the joint's own Transform.
+			local m = chassis.CFrame:ToObjectSpace(root.CFrame * c0)
+			local now = rj.Transform
+			local base = (RIDE.last[rj] ~= nil and now == RIDE.last[rj]) and RIDE.base[rj] or now
+			local out = m:Inverse() * move * m * base
+			rj.Transform = out
+			RIDE.last[rj], RIDE.base[rj] = out, base
+			RIDE.seen[rj] = true
+		end
+	end
+end
+
+-- Every rider leaned this frame was done above; one that wasn't (out of the car, the car at rest or out
+-- of range) gets its own pose back if nothing else has written that joint since.
+local function releaseRiders()
+	for rj, last in pairs(RIDE.last) do
+		if not RIDE.seen[rj] then
+			if rj.Parent and rj.Transform == last then
+				rj.Transform = RIDE.base[rj]
+			end
+			RIDE.last[rj], RIDE.base[rj] = nil, nil
+		end
+	end
+	table.clear(RIDE.seen)
+end
+
 -- After the animations, before the physics: drivers' poses and the local overlay.
 local function poses(dt)
 	local status = DriveController.Status
@@ -1005,6 +1067,13 @@ local function poses(dt)
 		end
 	end
 	overlay()
+	-- Last, on top of the poses and the overlay (both compose with it, see leanRiders).
+	for _, rec in ipairs(active) do
+		if rec.dist < POSE_RANGE then
+			leanRiders(rec)
+		end
+	end
+	releaseRiders()
 end
 
 ------------------------------------------------------------------ for other controllers

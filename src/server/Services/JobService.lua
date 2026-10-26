@@ -16,11 +16,20 @@
 -- the depot's reserved lot (Restyle.RUNTIME_LOTS: 23 studs either side of DEPOT_POS); only the shed is solid.
 -- Pickup and drop spots are on the kerb beside a road (outside its lanes, on solid ground, not water).
 -- Free-roam citizens only, not wanted and not on a phone mission; a refusal says why (Notify).
+-- Taxi fares are people you can see: one of the pedestrian looks (ReplicatedStorage.PedTemplates, made by
+-- PedService; plain skin colours if those aren't there yet) waits at the kerb with their name over their
+-- head. Picked up, they sit in your car's passenger seat for everyone to see (VehicleService.SeatNPC: a
+-- posed statue that can't push the car); if a crewmate or friend already rides there they climb in out
+-- of sight as before. At their stop they step out beside the passenger door, walk off and fade
+-- (walkOff). A shift that ends any other way (END SHIFT, wanted, left the car, left the game) takes the
+-- fare away with it.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local ServerStorage = game:GetService("ServerStorage")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local Textures = require(ReplicatedStorage.Shared.Config.Textures)
@@ -119,8 +128,25 @@ local function roadsideSpot(from, minD, maxD)
 	return nil
 end
 
+local function npcFolder()
+	local folder = Workspace:FindFirstChild("NPCs")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "NPCs"
+		folder.Parent = Workspace
+	end
+	return folder
+end
+
+-- A fare waiting at the kerb: a pedestrian look when PedService has made them, else plain skin colours.
 local function spawnPassenger(pos, name)
 	local ok, model = pcall(function()
+		local looks = ReplicatedStorage:FindFirstChild("PedTemplates")
+		local list = looks and looks:GetChildren() or {}
+		local pick = #list > 0 and list[rng:NextInteger(1, #list)] or nil
+		if pick and pick:IsA("Model") and pick:FindFirstChild("HumanoidRootPart") and pick:FindFirstChildOfClass("Humanoid") then
+			return pick:Clone()
+		end
 		local desc = Instance.new("HumanoidDescription")
 		local skin = { Color3.fromRGB(255, 220, 185), Color3.fromRGB(205, 160, 120), Color3.fromRGB(140, 95, 65), Color3.fromRGB(90, 60, 45) }
 		local c = skin[rng:NextInteger(1, #skin)]
@@ -132,17 +158,85 @@ local function spawnPassenger(pos, name)
 		return nil
 	end
 	model.Name = "Passenger"
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("BaseScript") then
+			d:Destroy()
+		end
+	end
 	local root = model:FindFirstChild("HumanoidRootPart")
 	root.Anchored = true
 	model:PivotTo(CFrame.new(pos + Vector3.new(0, 3, 0)))
 	local hum = model:FindFirstChildOfClass("Humanoid")
 	hum.DisplayName = name
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer
 	hum.NameDisplayDistance = 200
-	local folder = Workspace:FindFirstChild("NPCs") or Instance.new("Folder")
-	folder.Name = "NPCs"
-	folder.Parent = Workspace
-	model.Parent = folder
+	model.Parent = npcFolder()
 	return model
+end
+
+-- At the stop: the fare steps out beside the passenger door (the car's right), turns away from it, walks
+-- about WALK_OFF studs with Roblox's walk animation and fades out. The server's model, so everyone sees
+-- it. It removes itself.
+local WALK_OFF, WALK_TIME, FADE_TIME = 8, 2.2, 0.6
+local function walkOff(model, car, seat)
+	local root = model:FindFirstChild("HumanoidRootPart")
+	local chassis = car and car.PrimaryPart
+	if not root or not chassis or not seat then
+		model:Destroy()
+		return
+	end
+	local out = flat(chassis.CFrame.RightVector)
+	out = out.Magnitude > 0.1 and out.Unit or Vector3.new(1, 0, 0)
+	-- (beside the seat along the car, 2.2 studs clear of the body's right side)
+	local along = chassis.CFrame:PointToObjectSpace(seat.Position).Z
+	local spot = chassis.CFrame:PointToWorldSpace(Vector3.new(chassis.Size.X / 2 + 2.2, 0, along))
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = { model }
+	for _, name in ipairs({ "NPCs", "Vehicles", "Events" }) do
+		local f = Workspace:FindFirstChild(name)
+		if f then
+			table.insert(ignore, f)
+		end
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then
+			table.insert(ignore, p.Character)
+		end
+	end
+	params.FilterDescendantsInstances = ignore
+	local hit = Workspace:Raycast(spot + Vector3.new(0, 4, 0), Vector3.new(0, -14, 0), params)
+	local y = hit and hit.Position.Y + 3 or spot.Y
+	local from = Vector3.new(spot.X, y, spot.Z)
+	model.Parent = npcFolder()
+	root.Anchored = true
+	root.CFrame = CFrame.lookAt(from, from + out)
+	local CarBuilder = require(ServerStorage.Tools.CarBuilder)
+	local ctrl = model:FindFirstChildOfClass("AnimationController")
+	local animator = ctrl and ctrl:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop(0.15)
+		end
+	end
+	CarBuilder.PlayPose(model, "walk")
+	TweenService:Create(root, TweenInfo.new(WALK_TIME, Enum.EasingStyle.Linear), {
+		CFrame = CFrame.lookAt(from + out * WALK_OFF, from + out * (WALK_OFF + 1)),
+	}):Play()
+	task.delay(WALK_TIME - FADE_TIME, function()
+		if not model.Parent then
+			return
+		end
+		local fade = TweenInfo.new(FADE_TIME)
+		for _, d in ipairs(model:GetDescendants()) do
+			if (d:IsA("BasePart") and d ~= root) or d:IsA("Decal") then
+				TweenService:Create(d, fade, { Transparency = 1 }):Play()
+			end
+		end
+	end)
+	task.delay(WALK_TIME + 0.2, function()
+		model:Destroy()
+	end)
 end
 
 local function endShift(player, reason)
@@ -239,9 +333,20 @@ local function tick()
 				local speed = chassis.AssemblyLinearVelocity.Magnitude
 				if s.stage == "pickup" then
 					if (flat(chassis.Position) - flat(s.pickup)).Magnitude < STOP_RADIUS and speed < STOP_SPEED then
+						-- The fare gets in: into the passenger seat for all to see, or (someone rides there
+						-- already) out of sight as before.
 						if s.passenger then
-							s.passenger:Destroy()
-							s.passenger = nil
+							local VehicleService = require(ServerScriptService.Services.VehicleService)
+							local okSeat, seat = pcall(VehicleService.SeatNPC, car, s.passenger)
+							if okSeat and seat then
+								s.seat = seat
+							else
+								if not okSeat then
+									warn("[JobService] seating the fare: " .. tostring(seat))
+								end
+								s.passenger:Destroy()
+								s.passenger = nil
+							end
 						end
 						local drop = roadsideSpot(chassis.Position, DROP_MIN, DROP_MAX)
 						if not drop then
@@ -275,6 +380,22 @@ local function tick()
 						s.earned += pay
 						player:SetAttribute("Fares", (player:GetAttribute("Fares") or 0) + 1)
 						jobEvent:FireClient(player, "Paid", { Pay = pay, Tip = tip, Name = s.name, Took = took, Kind = s.kind })
+						-- The fare steps out and walks off (if still in this car: a car swap took them away).
+						local fare, seat = s.passenger, s.seat
+						s.passenger, s.seat = nil, nil
+						if fare and fare.Parent then
+							if fare:IsDescendantOf(car) then
+								local VehicleService = require(ServerScriptService.Services.VehicleService)
+								pcall(VehicleService.ReleaseNPC, fare)
+								local okWalk, err = pcall(walkOff, fare, car, seat)
+								if not okWalk then
+									warn("[JobService] fare getting out: " .. tostring(err))
+									fare:Destroy()
+								end
+							else
+								fare:Destroy()
+							end
+						end
 						s.stage = "waiting"
 						task.delay(2, function()
 							if shifts[player] == s then

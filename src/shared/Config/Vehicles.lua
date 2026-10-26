@@ -12,6 +12,11 @@
 -- SeatTilt: degrees the seat leans back (0-45). The ServerStorage.CarBodies templates carry the same
 -- values as attributes (tools/CAR_BODIES.md) and theirs win; these copies keep the fix when a body is
 -- re-prepared and loses its attributes. Change both together.
+-- Boats: SeatY (studs above the chassis centre: the seat's middle) and SeatZ place the driver on the deck
+-- (the passenger 2.4 behind); the template's attributes win here too. Without either, the old spot just
+-- over the chassis is kept, which on a tall hull is inside it.
+-- Every seat a car's own fit put under a roof also fits each rider to their own size as they sit down
+-- (CarBuilder.FitRider: taller avatars and hats sink in and lean back instead of poking through).
 -- Drift feel (CarPhysics, its header explains the model): Grip is the everyday sideways grip, DriftGrip
 -- the grip once the handbrake has let the tyres go, DriftSteer how much harder the car steers while it
 -- slides. The slide settles near atan(SteerRate x DriftSteer x 0.75 / DriftGrip): about 37 degrees with
@@ -93,7 +98,8 @@ Vehicles.List = {
 	car("PursuitSpecial", { DisplayName = "Pursuit Special", Class = "Police", Price = 0, Police = true, UnlockCopRank = 5, MaxSpeed = 175, AccelRating = 4, HandlingRating = 4, Toughness = 4,
 		Color = Color3.fromRGB(20, 24, 40), Size = Vector3.new(7.2, 1.7, 13.5) }),
 	car("RiotTruck", { DisplayName = "Riot Truck", Class = "Police", Price = 0, Police = true, Pass = "SWATUnit", MaxSpeed = 125, AccelRating = 2, HandlingRating = 2, Toughness = 5,
-		Color = Color3.fromRGB(30, 34, 44), Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8 }),
+		Color = Color3.fromRGB(30, 34, 44), Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8,
+		SeatDrop = -0.7, SeatZ = -0.6 }), -- up in the cab, head in the middle of the windscreen (the auto fit sat the driver low and 2 studs back, hidden in the box)
 	car("Vortex", { Class = "Hyper", Price = 0, Pass = "Hypercar", MaxSpeed = 200, AccelRating = 5, HandlingRating = 4, Toughness = 3,
 		Color = Color3.fromRGB(20, 20, 24), Size = Vector3.new(7.6, 1.4, 12.5), RestLength = 1.05, SeatTilt = 40 }), -- low roof: head clipped at 30 deg
 	-- Boats (Boat = true): CarPhysics rides the water surface and beaches on land; they spawn on the
@@ -106,7 +112,8 @@ Vehicles.List = {
 		Size = Vector3.new(8, 1.8, 20), RestLength = 1.4, WheelRadius = 0.6 }),
 	car("HarborPatrol", { DisplayName = "Harbor Patrol", Class = "Police Boat", Price = 0, Police = true, Boat = true, MaxSpeed = 140,
 		AccelRating = 3, HandlingRating = 3, Toughness = 4, Grip = 4, DriftGrip = 1.2, Color = Color3.fromRGB(245, 245, 250),
-		Size = Vector3.new(8.5, 2, 21), RestLength = 1.4, WheelRadius = 0.6 }),
+		Size = Vector3.new(8.5, 2, 21), RestLength = 1.4, WheelRadius = 0.6,
+		SeatY = 3.4, SeatZ = -0.5 }), -- on deck (42% of the 13-stud hull): the old spot sat the crew inside the hull. Estimated, not seen
 	-- Premium cars and boats (civilian, cash only). The Solana GT ($95,000) used to be the top car and a
 	-- heist pays $900-$16,000, so these take many big heists to afford. Kept at the end of the list so
 	-- the Studio test keys (first 12 entries) don't move. The top three (Riptide R, Storm Petrel,
@@ -131,7 +138,8 @@ Vehicles.List = {
 		Size = Vector3.new(8, 1.8, 20), RestLength = 1.4, WheelRadius = 0.6 }),
 	car("Moonstone", { DisplayName = "Moonstone Yacht", Class = "Luxury Yacht", Price = 300000, UnlockHeists = 4, Boat = true, MaxSpeed = 160,
 		AccelRating = 3, HandlingRating = 2, Toughness = 5, Grip = 3, DriftGrip = 1.2, Color = Color3.fromRGB(230, 236, 255),
-		Size = Vector3.new(10, 2.4, 26), RestLength = 1.4, WheelRadius = 0.6 }),
+		Size = Vector3.new(10, 2.4, 26), RestLength = 1.4, WheelRadius = 0.6,
+		SeatY = 4.5, SeatZ = 7 }), -- on the aft deck (42% of the 16-stud hull): the old spot sat the owner inside the hull. Estimated, not seen
 	-- Street cars (Hidden = true): the city's everyday traffic cars, only ever driven after a carjacking
 	-- (CarjackService). Never sold or owned, so dealerships, the phone, garages, homes and the Studio test
 	-- keys all skip Hidden entries. TrafficModel: the ReplicatedStorage.TrafficModels body CarBuilder puts
@@ -152,7 +160,8 @@ Vehicles.List = {
 	-- body is a ServerStorage.CarBodies template named "ArmoredVan" (the greybox until there is one).
 	car("ArmoredVan", { DisplayName = "Armored Van", Class = "Armored", Price = 0, Hidden = true, MaxSpeed = 112,
 		AccelRating = 2, HandlingRating = 2, Toughness = 5, Color = Color3.fromRGB(196, 190, 172),
-		Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8 }),
+		Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8,
+		SeatDrop = -0.7, SeatZ = -0.6 }), -- the Riot Truck's body: the same cab seats
 }
 
 Vehicles.ById = {}

@@ -102,6 +102,13 @@
 --     isn't holding back, so the button never asks for a hold the prompt can't start. (PromptGate is
 --     required softly: if the module is missing or doesn't load, nothing is held back, and this file
 --     neither waits for it nor fails with it.)
+--   * Next to a crewmate's or Roblox friend's car with a free passenger seat (VehicleVisuals.RideSeat: the
+--     server's rules), within K.RIDE_RANGE of that seat: a RIDE button, F or gamepad X. It asks the server
+--     (RequestRide, VehicleService checks again) and you're sat in the passenger seat at once. The car's
+--     own "Ride" bubble (E) still works too. Never offered while seated.
+--   * Boats: your own boat's "Drive" bubble is NOT held back (it reaches CarBuilder.BoatReach, 60 studs):
+--     boats wait off the end of the dock, well past GET IN's 12 studs and the server's 16, so from the
+--     dock that bubble (E, gamepad X or a tap) is the way on board. GET IN still works when you swim up.
 --   * Car alarms: a car with CarAlarmUntil (server time, set by CarjackService) rings on its chassis for
 --     everyone nearby until then.
 -- F while driving belongs to DriveController (get out); F as a passenger to VehicleVisuals.
@@ -172,6 +179,18 @@ do
 	end
 end
 local OVERLAY = VehicleFeel and VehicleFeel.Overlay or { Reach = 0, Side = 1, Duck = 0 }
+-- VehicleVisuals is soft as well: it has the riding rules (RideSeat). Without it, no RIDE button (the cars'
+-- own Ride bubbles still work).
+local VehicleVisuals = nil
+do
+	local module = script.Parent:WaitForChild("VehicleVisuals", 5)
+	if module then
+		local ok, mod = pcall(require, module)
+		if ok and type(mod) == "table" and type(mod.RideSeat) == "function" then
+			VehicleVisuals = mod
+		end
+	end
+end
 
 local player = Players.LocalPlayer
 
@@ -187,6 +206,7 @@ K.DARK = Color3.fromRGB(18, 14, 30)
 K.FONT = Enum.Font.FredokaOne
 
 K.ENTER_RANGE = 12 -- studs from the driver's seat
+K.RIDE_RANGE = 10 -- studs from a friend's passenger seat (its Ride bubble reaches 14, the server 18)
 K.STEAL_RANGE = 11 -- a little inside the Pick lock prompt's 12, so the prompt is showing too
 K.BREAKIN_RANGE = 9 -- a little inside the Break in prompt's 10
 K.JACK_DOOR_RANGE = 9 -- studs from a traffic car's driver's door...
@@ -276,7 +296,7 @@ local S = {
 	effectsGroup = nil, -- SettingsClient's "Effects" SoundGroup, found on first use (false: none)
 	seatNow = nil, -- the seat this character sat in at its last seat change (seatChanged)
 	riseAt = nil, -- os.clock() we stepped out of a car (straightening up until K.RISE_TIME later)
-	target = nil, -- { kind = "enter" | "steal" | "jack", car, prompt, breakIn, dist } while on foot
+	target = nil, -- { kind = "enter" | "steal" | "jack" | "ride", car, prompt, breakIn, dist } while on foot
 	hintText = nil, -- K.HINT_CAR / K.HINT_ROB while the seated hint should show (nil: no hint)
 	satIn = nil, satAt = 0, -- the seat we're sitting in (nil on foot) and os.clock() when we sat in it
 	satPos = nil, drove = false, -- where we were when we sat in it, and whether we've been K.HINT_DROVE away since
@@ -286,6 +306,7 @@ local S = {
 	breakInsOn = nil, -- whether the Break in prompts (breakIns) are switched on here right now
 	seatConn = nil, -- the current character's "seat changed" connection (watchSeat)
 	lastEnter = 0, lastHelp = 0,
+	leftAt = 0, -- os.clock() we last stepped out of a seat (seatChanged; then leftCar is that car)
 	lastJack = -math.huge, -- os.clock() of our last JACK: the press, then again when the server is asked (send)
 	lastTake = -math.huge, -- os.clock() of our last jack or break-in the server carried out (for the hint only)
 	accum = 0, alarmAccum = 0,
@@ -434,11 +455,14 @@ local function findTarget(pos, skipCar, enterRange, stealRange, seated)
 		return nil
 	end
 	local civilian = player:GetAttribute("Side") == "Civilian"
+	local t = Workspace:GetServerTimeNow()
+	local downed = (player:GetAttribute("StunnedUntil") or 0) > t or (player:GetAttribute("KnockedUntil") or 0) > t
 	local best, bestDist
 	for _, car in ipairs(folder:GetChildren()) do
 		local seat = car ~= skipCar and car:FindFirstChild("DriverSeat")
+		local at = seat -- what the distance is measured to (a ride: the passenger seat)
+		local kind, prompt, range
 		if seat and seat:IsA("VehicleSeat") and not seat.Occupant then
-			local kind, prompt, range
 			if car:GetAttribute("OwnerUserId") == player.UserId then
 				kind, range = "enter", enterRange
 				-- Our own car's "Drive" bubble would seat us at once, skipping the walk to the door: it's
@@ -446,8 +470,10 @@ local function findTarget(pos, skipCar, enterRange, stealRange, seated)
 				-- and E gets us in through the same steps as F (see Init). Asked of PromptGate, which owns
 				-- prompt reach here: if it hid this bubble first (the car streamed in while we sat in
 				-- another one), standing up next to it must not bring the bubble back for a moment.
+				-- Not a boat's: a boat waits off the end of the dock, out of GET IN's reach, and its bubble
+				-- (CarBuilder.BoatReach) is the way on board from there.
 				local drive = seat:FindFirstChild("DrivePrompt")
-				if drive and drive:IsA("ProximityPrompt") then
+				if drive and drive:IsA("ProximityPrompt") and car:GetAttribute("Boat") ~= true then
 					PromptGate.Hold(drive)
 				end
 			elseif car:GetAttribute("HotCar") then
@@ -462,12 +488,21 @@ local function findTarget(pos, skipCar, enterRange, stealRange, seated)
 					end
 				end
 			end
-			if kind then
-				local d = (seat.Position - pos).Magnitude
-				if d <= range and (not bestDist or d < bestDist) then
-					best = { car = car, kind = kind, prompt = prompt, dist = d }
-					bestDist = d
-				end
+		end
+		-- A crewmate's or friend's car (usually with them at the wheel): RIDE in its passenger seat. On foot
+		-- only (the seated hint leaves crews alone: they stop side by side all the time).
+		if not kind and not seated and seat and seat:IsA("VehicleSeat") and VehicleVisuals
+			and car:GetAttribute("OwnerUserId") ~= player.UserId then
+			local okRide, pseat = pcall(VehicleVisuals.RideSeat, car, downed)
+			if okRide and pseat then
+				kind, range, at = "ride", K.RIDE_RANGE, pseat
+			end
+		end
+		if kind then
+			local d = (at.Position - pos).Magnitude
+			if d <= range and (not bestDist or d < bestDist) then
+				best = { car = car, kind = kind, prompt = prompt, dist = d }
+				bestDist = d
 			end
 		end
 	end
@@ -1451,6 +1486,18 @@ local function requestJack(car)
 	end
 end
 
+-- RIDE: ask the server for a crewmate's or friend's passenger seat (VehicleService checks everything
+-- again and sits us there at once).
+local function requestRide(car)
+	if os.clock() - (S.leftAt or 0) < 1.2 or os.clock() - S.lastEnter < 0.5 then
+		return -- (just got out: the same key again mustn't put us straight back in)
+	end
+	S.lastEnter = os.clock()
+	task.spawn(function()
+		Remotes.Event("RequestRide"):FireServer(car)
+	end)
+end
+
 -- Is the get-in running right now (it walks and moves the character)? For controllers that also do.
 function InteractClient.IsEntering()
 	return S.entering ~= nil
@@ -1695,6 +1742,9 @@ local function render()
 		if t.kind == "enter" then
 			color, main = K.MINT, "GET IN"
 			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")
+		elseif t.kind == "ride" then
+			color, main = K.MINT, "RIDE"
+			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")
 		elseif t.kind == "jack" then
 			color, main = K.PINK, "JACK"
 			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")
@@ -1890,6 +1940,8 @@ function InteractClient.Init()
 			requestEnter(t.car)
 		elseif t and t.kind == "jack" then
 			requestJack(t.car)
+		elseif t and t.kind == "ride" then
+			requestRide(t.car)
 		end
 	end)
 	ui.button.InputBegan:Connect(function(input)
@@ -1954,6 +2006,8 @@ function InteractClient.Init()
 			requestEnter(t.car)
 		elseif t.kind == "jack" then
 			requestJack(t.car)
+		elseif t.kind == "ride" then
+			requestRide(t.car)
 		elseif t.kind == "steal" and key == Enum.KeyCode.F and not S.holding then
 			beginHold(t.prompt, "F")
 		end

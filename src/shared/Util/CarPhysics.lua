@@ -33,6 +33,10 @@
 --   local phys = CarPhysics.New(car, { extra instances the rays should ignore })
 --   CarPhysics.Step(phys, dt, { Throttle = -1..1, Steer = -1..1, Handbrake = bool, Nitro = bool })
 --   phys.FwdSpeed, phys.NitroOn, phys.NitroFuel (0..1), phys.Flat, phys.Hits, phys.Grounded
+--   phys.NitroEmpty nitro held (with the gas down) but nothing to burn: the tank ran dry during this press,
+--                   or the press found less than MIN_BOOST in it. The boost then stays off until nitro is
+--                   let go and pressed again (it used to flick on and off every other frame on an empty
+--                   tank, as each frame's recharge gave it a sliver: a new whoosh each time).
 --   phys.SlipAngle  degrees between the nose and the way the car really moves (0 when slow or airborne)
 --   phys.Drifting   true while sliding the way DriftService scores it: cars only, nose first, 12-80 degrees,
 --                   over 30 studs/s (a boat's ordinary turn or a car going backwards never counts)
@@ -63,6 +67,8 @@ local DRIFT_STEER, DRIFT_POWER, DRIFT_GRIP = 1.35, 0.55, 2.6 -- used when a car 
 -- of what it would take to tip a car sideways (a fifth end over end): it never rolls one. Raise it
 -- with care.
 local LEAN_ARM = 0.8
+-- Nitro: seconds of fuel a NEW boost needs to start (a boost under way burns down to empty).
+local MIN_BOOST = 0.4
 
 -- Tuning numbers the physics divides by: a live change to zero or less is ignored.
 local POSITIVE = {
@@ -124,6 +130,8 @@ function CarPhysics.New(car, ignore)
 		Fuel = cfg.NitroSeconds or 3, -- seconds of boost left
 		NitroFuel = 1,
 		NitroOn = false,
+		NitroEmpty = false,
+		NitroLock = false, -- the tank ran dry (or was nearly dry) during this press: off until nitro is let go
 		FwdSpeed = 0,
 		Steer = 0,
 		Flat = false,
@@ -172,10 +180,24 @@ function CarPhysics.Step(phys, dt, input)
 	local steer = math.clamp(input.Steer or 0, -1, 1)
 	local handbrake = input.Handbrake == true
 
-	-- Nitro fuel is in seconds of boost.
-	local nitroOn = input.Nitro == true and phys.Fuel > 0 and throttle > 0.1
+	-- Nitro fuel is in seconds of boost. A boost burns until nitro is let go or the tank is empty; a new one
+	-- needs MIN_BOOST of fuel. Empty (or nearly) under a held button: off until it is let go (NitroLock).
+	local wantNitro = input.Nitro == true
+	if not wantNitro then
+		phys.NitroLock = false
+	end
+	local canBoost = throttle > 0.1
+	local nitroOn = wantNitro and canBoost and not phys.NitroLock and phys.Fuel > 0
+		and (phys.NitroOn or phys.Fuel >= math.min(MIN_BOOST, cfg.NitroSeconds))
+	local emptyPress = wantNitro and canBoost and not nitroOn -- (before a beached boat drops the boost)
+	if emptyPress then
+		phys.NitroLock = true
+	end
 	if nitroOn then
 		phys.Fuel = math.max(0, phys.Fuel - dt)
+		if phys.Fuel <= 0 then
+			phys.NitroLock = true -- ran dry: no on-off flicker while the button stays down
+		end
 	else
 		phys.Fuel = math.min(cfg.NitroSeconds, phys.Fuel + dt * cfg.NitroSeconds / cfg.NitroRecharge)
 	end
@@ -391,6 +413,7 @@ function CarPhysics.Step(phys, dt, input)
 
 	phys.FwdSpeed = fwdSpeed
 	phys.NitroOn = nitroOn
+	phys.NitroEmpty = emptyPress
 	phys.NitroFuel = math.clamp(phys.Fuel / cfg.NitroSeconds, 0, 1)
 	phys.Steer = steer
 	phys.Flat = flat

@@ -30,7 +30,8 @@ Sounds.Effects = {
 	Horn = { Id = 9113019382, Volume = 0.7, Looped = false }, -- "... Horn Honking 7" (ProSoundEffects, 1.0 s single honk: a plain car horn; the rest of the asset's name is a real car, so it is left out here)
 	Skid = { Id = 9120397746, Volume = 0.5, Looped = true }, -- Vehicle Skid In Fast Long Skid Stop Cu 1 (ProSoundEffects, 3.7 s long tire squeal)
 	Crash = { Id = 9120389194, Volume = 0.7, Looped = false }, -- Vehicle Panel Impact 7 (ProSoundEffects, 1.1 s car body panel hit)
-	Nitro = { Id = 9120700771, Volume = 0.6, Looped = false }, -- Whoosh Bys Air Pass Bys Vehicle Passing 1 (ProSoundEffects, 3.6 s)
+	Nitro = { Id = 9120700771, Volume = 0.6, Looped = false }, -- Whoosh Bys Air Pass Bys Vehicle Passing 1 (ProSoundEffects, 3.6 s). SoundClient plays one per boost and fades it out when the boost ends
+	NitroEmpty = { Id = 9119717523, Volume = 0.3, Looped = false, Pitch = 0.7, MaxDistance = 60 }, -- nitro pressed (or held) on an empty tank: the Click below (Switch Click On Or Off Toggle Button 2, ProSoundEffects, 0.4 s) pitched down to a dull clunk, once per press
 	Door = { Id = 125094987563505, Volume = 0.6, Looped = false }, -- Open-Close-Car-Door (Roblox Resources, ~1 s)
 	Splash = { Id = 9119479417, Volume = 0.8, Looped = false }, -- Splashes Large Objects Thrown In Water 6 (ProSoundEffects, 3.9 s big plop + bubbles)
 

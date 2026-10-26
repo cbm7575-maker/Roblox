@@ -2,8 +2,12 @@
 -- Spins and bounces the wheels of cars this player is NOT driving (DriveController animates your own).
 -- Cheap on purpose: only cars within 350 studs, updated at most 30 times a second.
 -- Also shows each car's Drive / Ride prompt only to someone the server would seat (never while
--- tasered or knocked over), and lets passengers get out with F or gamepad B (RequestExitCar, the
--- same as DriveUI's EXIT button and the driver's keys).
+-- tasered or knocked over). Ride: the owner's crewmates and Roblox friends (the owner's "FriendIds"
+-- attribute, CrewService; Studio's test players count too) on the owner's side, never prisoners, while
+-- the passenger seat is free (no one, and no taxi fare: seat attribute NPCRider). The same rule for other
+-- controllers: VehicleVisuals.MayRide(owner) -> bool, VehicleVisuals.RideSeat(car) -> the free passenger
+-- seat the local player could ride in right now, or nil (InteractClient's RIDE button).
+-- (Getting out with F / B / E, for drivers and passengers alike, is DriveController's job.)
 -- Tyre smoke and skid marks: any car (yours too, never boats) that slides sideways (over 25 studs/s,
 -- about 12 degrees or more off its nose) within 220 studs puffs smoke from its rear tyres and leaves
 -- dark marks that fade after 5 s. Local-only instances on the car's chassis: two emitters and two
@@ -15,6 +19,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+local STUDIO = RunService:IsStudio()
 
 local VehicleVisuals = {}
 
@@ -186,6 +191,43 @@ end
 
 ------------------------------------------------------------------ wheels and prompts
 
+-- May the local player ride with `owner`? The server's rule (CrewService.MayRide) as far as this device
+-- can see it: the same crew, Roblox friends (the owner's FriendIds lists us), or Studio's test players.
+function VehicleVisuals.MayRide(owner)
+	if not owner or owner == player then
+		return false
+	end
+	local crew = player:GetAttribute("Crew")
+	if crew ~= nil and owner:GetAttribute("Crew") == crew then
+		return true
+	end
+	local ids = owner:GetAttribute("FriendIds")
+	if type(ids) == "string" and string.find(ids, "," .. tostring(player.UserId) .. ",", 1, true) then
+		return true
+	end
+	return STUDIO and player.UserId < 0 and owner.UserId < 0
+end
+
+-- The passenger seat of `car` the local player could ride in right now (see the header), or nil.
+-- downed: tasered or knocked over (asked once per frame by the caller; nil = work it out).
+function VehicleVisuals.RideSeat(car, downed)
+	local pseat = car:FindFirstChild("PassengerSeat")
+	if not (pseat and pseat:IsA("Seat") and pseat:FindFirstChild("RidePrompt")) then
+		return nil
+	end
+	if downed == nil then
+		local t = Workspace:GetServerTimeNow()
+		downed = (player:GetAttribute("StunnedUntil") or 0) > t or (player:GetAttribute("KnockedUntil") or 0) > t
+	end
+	local owner = Players:GetPlayerByUserId(car:GetAttribute("OwnerUserId") or 0)
+	local side = player:GetAttribute("Side")
+	if downed or pseat.Occupant ~= nil or pseat:GetAttribute("NPCRider") or not owner or side == "Prisoner"
+		or owner:GetAttribute("Side") ~= side or not VehicleVisuals.MayRide(owner) then
+		return nil
+	end
+	return pseat
+end
+
 -- downed: this player is tasered or knocked over (no prompts then; the server refuses them too).
 local function animate(car, dt, camPos, downed)
 	local chassis = car.PrimaryPart
@@ -199,16 +241,12 @@ local function animate(car, dt, camPos, downed)
 			prompt.Enabled = show
 		end
 	end
-	-- "Ride" prompt: only for the owner's crewmates on the same side (never prisoners), only while the
-	-- passenger seat is free (the server's rules).
+	-- "Ride" prompt: only for those who may ride with the owner, while the passenger seat is free (the
+	-- server's rules: VehicleVisuals.RideSeat).
 	local pseat = car:FindFirstChild("PassengerSeat")
 	local ride = pseat and pseat:FindFirstChild("RidePrompt")
 	if ride then
-		local owner = Players:GetPlayerByUserId(car:GetAttribute("OwnerUserId") or 0)
-		local crew = player:GetAttribute("Crew")
-		local side = player:GetAttribute("Side")
-		local show = not downed and pseat.Occupant == nil and owner ~= nil and owner ~= player and crew ~= nil
-			and owner:GetAttribute("Crew") == crew and side ~= "Prisoner" and owner:GetAttribute("Side") == side
+		local show = VehicleVisuals.RideSeat(car, downed) ~= nil
 		if ride.Enabled ~= show then
 			ride.Enabled = show
 		end
@@ -273,7 +311,6 @@ local function animate(car, dt, camPos, downed)
 end
 
 function VehicleVisuals.Init()
-	-- (Getting out with F / B / E, for drivers and passengers alike, is DriveController's job.)
 	RunService.RenderStepped:Connect(function(dt)
 		accum += dt
 		if accum < STEP then

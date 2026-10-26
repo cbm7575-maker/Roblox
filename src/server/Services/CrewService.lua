@@ -8,7 +8,11 @@
 --     kept for the session (CrewService.AreFriends; FriendsService's co-op bonus uses it too). Every
 --     SWEEP seconds the pairs not known to be friends are asked again: that catches a check that failed
 --     and players who became friends while playing.
---   * Crewmates can ride in each other's cars (VehicleService passenger seat checks SameCrew).
+--   * Crewmates and Roblox friends ride in each other's cars (VehicleService's passenger seat asks
+--     CrewService.MayRide: same crew, or friends; in Studio the test players count as friends, as they do
+--     for FriendsService's co-op bonus). Each player's in-server friends are published as the player
+--     attribute "FriendIds" (",id,id,": the UserIds of the Roblox friends in this server, nil for none) so
+--     every device can show the Ride bubble and the RIDE button to exactly those players.
 --   * CrewService.Invite(from, target) sends the same invite card as the phone's INVITE button
 --     (FriendsService uses it when a friend arrives through a Roblox invite).
 -- State: player attribute "Crew" = crew id (string), ReplicatedStorage attribute "Crews" = JSON
@@ -19,6 +23,7 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
@@ -195,6 +200,33 @@ function CrewService.AreFriends(a, b)
 	return set ~= nil and set[b.UserId] == true
 end
 
+-- May `rider` sit in `owner`'s passenger seat? Crewmates and Roblox friends may (VehicleService adds the
+-- side, prison and reach rules). Studio's test players (Player1, Player2: negative UserIds) count as
+-- friends, so riding together can be tried there.
+function CrewService.MayRide(rider, owner)
+	if rider == owner then
+		return false
+	end
+	if CrewService.SameCrew(rider, owner) or CrewService.AreFriends(rider, owner) then
+		return true
+	end
+	return RunService:IsStudio() and rider.UserId < 0 and owner.UserId < 0
+end
+
+-- The player attribute "FriendIds" (see the header): ",id,id," for the friends of this player in this
+-- server, or nil.
+local function publishFriends(player)
+	local set = friendsOf[player]
+	local ids = {}
+	if set then
+		for id in pairs(set) do
+			table.insert(ids, tostring(id))
+		end
+	end
+	table.sort(ids)
+	player:SetAttribute("FriendIds", #ids > 0 and ("," .. table.concat(ids, ",") .. ",") or nil)
+end
+
 -- Ask Roblox whether a and b are friends and remember a yes (both get the friend bonus). It's a web
 -- call that can fail: a failed answer counts as not friends until the next sweep asks again.
 local function askPair(a, b)
@@ -207,6 +239,8 @@ local function askPair(a, b)
 		friendsOf[b][a.UserId] = true
 		a:SetAttribute("FriendBonus", true)
 		b:SetAttribute("FriendBonus", true)
+		publishFriends(a)
+		publishFriends(b)
 	end
 end
 
@@ -266,8 +300,13 @@ function CrewService.Init()
 			end
 		end
 		friendsOf[p] = nil
-		for _, set in pairs(friendsOf) do
-			set[p.UserId] = nil
+		for other, set in pairs(friendsOf) do
+			if set[p.UserId] then
+				set[p.UserId] = nil
+				if other.Parent == Players then
+					publishFriends(other)
+				end
+			end
 		end
 		task.defer(recheckFriendBonus)
 	end)

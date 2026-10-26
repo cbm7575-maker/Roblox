@@ -7,11 +7,39 @@ header comments in `src/server/Tools/CarBuilder.lua` and `src/server/Tools/BodyP
 Rebuilt on 2026-10-19 from the MeshId / TextureID values in NeonCoast.rbxl (Sep 28 save).
 The original version of this file was lost; anything else it held is not in the place file.
 
-**Boat hulls (2026-10-25):** the Splash and HarborPatrol bodies are stored turned sideways and
-squashed in the place file (their InitialSize). Config.Vehicles now has `Hull = { Turn, Size }` for
-both, so CarBuilder turns each hull about its pivot and refits it: Splash `Turn = 90`, size 5 x 5.4 x
-10; HarborPatrol `Turn = -90`, size 9.5 x 10.2 x 22. If a boat's bow faces backwards in Studio, flip
-the sign of its Turn.
+(An earlier note here described a `Hull = { Turn, Size }` fix for sideways boat hulls. That was for an
+older place: in the current NeonCoast.rbxl every hull already lies along Z (Splash 4.6 x 4.4 x 11,
+HarborPatrol turned in its template to 9.5 x 13 x 22) and Config.Vehicles has no `Hull` field.)
+
+## Seats (2026-10-26)
+
+How the seats are placed is in the header of `src/server/Tools/CarBuilder.lua` (fitSeats). Hand-tuned
+seats live as template attributes and, as a copy, on the car's Config.Vehicles entry:
+
+| Car | Seat values | Why |
+|---|---|---|
+| Gatorback | SeatDrop -1.35, SeatTilt 6, SeatZ 0.9 (template + config) | open roll cage, was driving from the bed |
+| Sandpiper | SeatDrop -0.35 | buggy: hair under the top bar |
+| Flamingo | SeatDrop -0.5 | convertible: shoulders above the doors |
+| SolanaGT, Riptide | SeatTilt 40 (template + config) | low roofs |
+| Vortex | SeatTilt 40 (config only) | low roof |
+| RiotTruck, ArmoredVan | SeatDrop -0.7, SeatZ -0.6 (config only) | the auto fit sat the driver low and 2 studs back, hidden in the box: now up in the cab, head mid-windscreen |
+| Splash | SeatY 1, SeatZ 1.3 (template) | the saddle |
+| HarborPatrol | SeatY 3.4, SeatZ -0.5 (config only, estimated) | the old spot was inside the 13-stud hull |
+| Moonstone | SeatY 4.5, SeatZ 7 (config only, estimated) | the old spot was inside the 16-stud hull; now the aft deck |
+
+Every other closed car is fitted automatically (head mid-window, leaned back up to 30 degrees so a
+standard R15 head plus 0.9 studs of hair stays under the glass top). On top of that each rider is fitted
+to their own size when they sit down (CarBuilder.FitRider, seat attributes HeadRoom / FloorRoom /
+Recline): a taller avatar or a hat that would reach through the roof sinks into the seat and leans back
+(45 degrees at most). VehicleFeel leans the riders with the body, so the roof no longer dips onto still
+heads in a hard stop or over a kerb.
+
+Check them in Studio: Play, then in the server command bar
+`require(game.ServerStorage.Tools.CarBuilder).Showroom(Vector3.new(0, 40, 0))` (add `, 1.3` for tall
+avatars) builds every vehicle in a row with an R15 dummy in every seat. `Showroom(nil)` clears it. A seat
+that looks wrong: set SeatDrop / SeatZ / SeatTilt (boats: SeatY / SeatZ) as attributes on the template
+in ServerStorage.CarBodies, run the showroom again, then copy the numbers into Config.Vehicles.
 
 ## Flamingo
 

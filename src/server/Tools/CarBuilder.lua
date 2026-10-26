@@ -18,7 +18,15 @@
 -- worked out from its glass (fitSeats): lowered, and leaned back in very low cars, so heads stay
 -- under the roof (open tops from Config.Vehicles OpenTop keep their old height). Cars checked by eye
 -- override that with SeatDrop / SeatZ / SeatTilt (template attributes, else their Config.Vehicles copy).
--- Greybox cars and boats keep their fixed seat spots (boats: template attributes SeatY / SeatZ).
+-- Greybox cars and boats keep their fixed seat spots (boats: template attributes SeatY / SeatZ, else the
+-- same two fields on the car's Config.Vehicles entry).
+-- Each fitted seat under a roof also gets attributes for the rider fit: HeadRoom (studs along the seat's
+-- up axis from its top to the roof line), FloorRoom (how far a rider may sink below the seat top before
+-- their thighs meet the cabin floor) and Recline (degrees). CarBuilder.FitRider(seatWeld) then fits each
+-- rider as they sit down (VehicleService calls it for every SeatWeld in Workspace.Vehicles): the seats
+-- are sized for a standard R15 body with 0.9 studs of hair room, so a taller avatar, big hair or a hat
+-- that would reach through the roof sinks into the seat as far as FloorRoom allows and then leans back
+-- (to 45 degrees at most) instead. Riders who fit are left exactly where the seat puts them.
 --
 -- Street cars (Config.Vehicles TrafficModel, the carjack cars): the body is a textured traffic car from
 -- ReplicatedStorage.TrafficModels (or a given copy, e.g. a parked one: Build's opts.Body), kept at its own
@@ -49,6 +57,10 @@
 --              standing character's root height above the road, beside the seat, clear of the body's side)
 --              looking at the car (the attachment looks along its -Z). InteractClient walks you there
 --              before you get in.
+-- Boats moor off the end of the docks (25-50 studs out), so their Drive / Ride prompts reach
+-- CarBuilder.BoatReach studs (cars: 14).
+-- Other helpers: CarBuilder.PlayPose(model, "sit" | "walk") plays Roblox's stock R15 animation on a rig
+-- (taxi fares, the showroom dummies); CarBuilder.Showroom(origin) is a Studio check (see there).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -57,6 +69,9 @@ local ServerStorage = game:GetService("ServerStorage")
 local Vehicles = require(ReplicatedStorage.Shared.Config.Vehicles)
 
 local CarBuilder = {}
+
+-- Studs a boat's Drive / Ride prompt reaches (boats wait 25-50 studs off the dock ends: CityGen.BoatPads).
+CarBuilder.BoatReach = 60
 
 -- Tuning fields copied onto the model as attributes so the driving client can read them. (A field the
 -- car's config doesn't have is simply not set: CarPhysics then uses its own default for it.)
@@ -122,6 +137,8 @@ local FLOOR_GAP = 0.4 -- the cabin floor sits this far above the body's lowest p
 local OLD_SINK = 0.8 -- how far mesh-body seats used to be sunk below the greybox spot
 local MAX_RECLINE = 30 -- degrees a seat may lean back to get a head under a low roof
 local OPEN_GLASS = 0.22 -- glass shorter than this share of the body length is only a windscreen
+local ROOF_SKIN = 0.3 -- a body's top is the outside of its roof: the inside is this much lower (rider fit)
+local FLOOR_KEEP = 0.3 -- a rider sinks no closer than this to the cabin floor (rider fit)
 
 local reported = {} -- car id + overrides whose seat fit was already printed / warned about (see fitSeats)
 
@@ -328,6 +345,16 @@ local function fitSeats(model, chassis, cfg, template, centreY, minFloor)
 			end
 		end
 	end
+	-- The rider fit's numbers (see the header): only under a roof this fit worked out itself. A seat put
+	-- in place by hand (SeatDrop) or an open top has no roof line to go by, so it fits nobody.
+	local headRoom, floorRoom = nil, nil
+	if roofY and not drop then
+		-- The glass top of a closed cabin is the roof's underside; a body's own top (no glass) is the outside
+		-- of the roof, so a skin of ROOF_SKIN comes off that.
+		local skin = kind == "closed cabin" and 0 or ROOF_SKIN
+		headRoom = (roofY - skin - top) / math.max(math.cos(tilt), 0.3)
+		floorRoom = floorY and math.max(0, top - floorY - FLOOR_KEEP) or 0
+	end
 	for _, pair in ipairs({ { "DriverSeat", -x }, { "PassengerSeat", x } }) do
 		local seat = model:FindFirstChild(pair[1])
 		if seat then
@@ -340,6 +367,9 @@ local function fitSeats(model, chassis, cfg, template, centreY, minFloor)
 			if w then
 				w.Enabled = true
 			end
+			seat:SetAttribute("HeadRoom", headRoom)
+			seat:SetAttribute("FloorRoom", floorRoom)
+			seat:SetAttribute("Recline", math.deg(tilt))
 		end
 	end
 end
@@ -590,11 +620,18 @@ local function attachBoatBody(model, chassis, cfg, template)
 		end
 	end
 	chassis.Transparency = 1
-	-- Rider height on the deck (template attribute SeatY, studs above the chassis centre).
-	-- The passenger sits 2.4 studs behind the driver, at the same height.
+	-- Rider height on the deck (template attribute SeatY, studs above the chassis centre; else the
+	-- car's Config.Vehicles SeatY, a copy that survives a re-prepared body). The passenger sits 2.4 studs
+	-- behind the driver, at the same height.
 	local seatY = template:GetAttribute("SeatY")
+	if type(seatY) ~= "number" then
+		seatY = type(cfg.SeatY) == "number" and cfg.SeatY or nil
+	end
 	if seatY then
-		local z = template:GetAttribute("SeatZ") or cfg.Size.Z * 0.1
+		local z = template:GetAttribute("SeatZ")
+		if type(z) ~= "number" then
+			z = type(cfg.SeatZ) == "number" and cfg.SeatZ or cfg.Size.Z * 0.1
+		end
 		for _, pair in ipairs({ { "DriverSeat", z }, { "PassengerSeat", z + 2.4 } }) do
 			local seat = model:FindFirstChild(pair[1])
 			if seat then
@@ -902,12 +939,13 @@ function CarBuilder.Build(id, opts)
 	prompt.KeyboardKeyCode = Enum.KeyCode.E
 	prompt.GamepadKeyCode = Enum.KeyCode.ButtonX
 	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 14
+	-- (a boat waits off the end of the dock: its bubble has to reach from there)
+	prompt.MaxActivationDistance = cfg.Boat and CarBuilder.BoatReach or 14
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = seat
 
-	-- Passenger seat: crewmates ride along (VehicleService checks the crew; CanTouch off so nobody
-	-- sits by bumping into it).
+	-- Passenger seat: crewmates and Roblox friends ride along (VehicleService checks who; CanTouch off so
+	-- nobody sits by bumping into it).
 	local pseat = Instance.new("Seat")
 	pseat.Name = "PassengerSeat"
 	pseat.Size = seat.Size
@@ -925,10 +963,10 @@ function CarBuilder.Build(id, opts)
 	ride.KeyboardKeyCode = Enum.KeyCode.E
 	ride.GamepadKeyCode = Enum.KeyCode.ButtonX
 	ride.HoldDuration = 0
-	ride.MaxActivationDistance = 14
+	ride.MaxActivationDistance = cfg.Boat and CarBuilder.BoatReach or 14
 	ride.RequiresLineOfSight = false
-	-- Enabled on the server (a server-disabled prompt can't fire); each client hides it unless it's
-	-- the owner's crewmate (VehicleVisuals), and VehicleService checks the crew again.
+	-- Enabled on the server (a server-disabled prompt can't fire); each client hides it unless it may
+	-- ride with the owner (VehicleVisuals), and VehicleService checks again.
 	ride.Parent = pseat
 
 	model:SetAttribute("NCVehicle", true)
@@ -967,6 +1005,210 @@ function CarBuilder.Build(id, opts)
 		warn("[CarBuilder] " .. tostring(id) .. " body joint: " .. tostring(errJoint))
 	end
 	return model
+end
+
+------------------------------------------------------------------ riders
+
+-- Rider fit (see the header).
+local RIDER_MARGIN = 0.1 -- studs of air kept between a rider's top and the roof line
+local RIDER_HAT_CAP = 1.2 -- a hat counts this far above the head at most (a giant one would sink you through the floor)
+local RIDER_MAX_TILT = math.rad(45)
+local RIDER_HEAD_ACCESSORIES = { HatAttachment = true, HairAttachment = true } -- what sits on top of the head
+local POSES = { sit = "rbxassetid://2506281703", walk = "rbxassetid://507777826" } -- Roblox's stock R15 sit / walk
+
+-- Part1's place on Part0 with the joint at rest (no animation): a Motor6D's C0 * C1^-1, or an
+-- AnimationConstraint's attachments (the Avatar Joint Upgrade).
+local function restOffset(joint)
+	if joint:IsA("Motor6D") then
+		return joint.C0 * joint.C1:Inverse()
+	end
+	local a0, a1 = joint.Attachment0, joint.Attachment1
+	if a0 and a1 then
+		return a0.CFrame * a1.CFrame:Inverse()
+	end
+	return nil
+end
+
+-- The top of a box (in a frame whose Y is "up") placed at cf with this size.
+local function topOf(cf, size)
+	return cf.Position.Y + math.abs(cf.RightVector.Y) * size.X / 2 + math.abs(cf.UpVector.Y) * size.Y / 2
+		+ math.abs(cf.LookVector.Y) * size.Z / 2
+end
+
+-- CarBuilder.RiderTop(character) -> studs from the HumanoidRootPart's centre up to the top of the head and
+-- the hair or hat on it, with the body standing straight (the joints at rest: a seated body's chest and
+-- head stand the same way), or nil when it can't tell. A standard R15 body: 2.1.
+function CarBuilder.RiderTop(character)
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local head = character and character:FindFirstChild("Head")
+	if not (root and head and root:IsA("BasePart") and head:IsA("BasePart")) then
+		return nil
+	end
+	local cf = CFrame.identity -- the head in the root part's space, built up joint by joint
+	for _, step in ipairs({ { "LowerTorso", "Root" }, { "UpperTorso", "Waist" }, { "Head", "Neck" } }) do
+		local part = character:FindFirstChild(step[1])
+		local joint = part and part:FindFirstChild(step[2])
+		local rel = joint and (joint:IsA("Motor6D") or joint.ClassName == "AnimationConstraint") and restOffset(joint) or nil
+		if not rel then
+			cf = root.CFrame:ToObjectSpace(head.CFrame) -- not the usual R15 chain: the body as it stands now
+			break
+		end
+		cf *= rel
+	end
+	local headTop = topOf(cf, head.Size)
+	local top = headTop
+	for _, acc in ipairs(character:GetChildren()) do
+		local handle = acc:IsA("Accessory") and acc:FindFirstChild("Handle")
+		if handle and handle:IsA("BasePart") then
+			local onHead = false
+			for _, a in ipairs(handle:GetChildren()) do
+				if a:IsA("Attachment") and RIDER_HEAD_ACCESSORIES[a.Name] then
+					onHead = true
+					break
+				end
+			end
+			if onHead then
+				-- (welded to the head, so its place on the head never changes, whatever the body is doing)
+				local at = cf * head.CFrame:ToObjectSpace(handle.CFrame)
+				top = math.max(top, math.min(topOf(at, handle.Size), headTop + RIDER_HAT_CAP))
+			end
+		end
+	end
+	return top
+end
+
+-- CarBuilder.FitRider(weld): a SeatWeld has just joined a character to one of our seats. If that body
+-- (head, hair, hat) would reach through the roof, it sinks into the seat (FloorRoom at most) and then leans
+-- back (to RIDER_MAX_TILT in all), by changing the weld's C1 only (InteractClient's settle-in moves C0).
+-- Returns how far it sank and how many degrees it leaned, or nil when nothing needed to change.
+function CarBuilder.FitRider(weld)
+	if not (weld and weld:IsA("Weld")) then
+		return nil
+	end
+	local seat, root = weld.Part0, weld.Part1
+	if not (seat and root and (seat:IsA("Seat") or seat:IsA("VehicleSeat"))) then
+		return nil
+	end
+	local room = seat:GetAttribute("HeadRoom")
+	if type(room) ~= "number" or room <= 0 then
+		return nil -- an open top or a seat placed by hand: no roof line to fit under
+	end
+	local riderTop = CarBuilder.RiderTop(root.Parent)
+	if not riderTop or riderTop < 1 or riderTop > 7 then
+		return nil
+	end
+	local rel = weld.C0 * weld.C1:Inverse() -- the root part in the seat's space
+	local up = rel.Position.Y - seat.Size.Y / 2 + riderTop -- the rider's top above the seat's top, along its up
+	local over = up + RIDER_MARGIN - room
+	if over <= 0.02 then
+		return nil
+	end
+	local drop = math.clamp(over, 0, math.max(seat:GetAttribute("FloorRoom") or 0, 0))
+	local tilt = math.rad(seat:GetAttribute("Recline") or 0)
+	local lean = 0
+	if over - drop > 0.02 then
+		-- Still too tall: lean back until the top comes down to the roof (it swings about the seat's top).
+		local c = math.clamp((room - RIDER_MARGIN) * math.cos(tilt) / math.max(up - drop, 0.1), math.cos(RIDER_MAX_TILT), 1)
+		lean = math.max(0, math.acos(c) - tilt)
+	end
+	local pivot = CFrame.new(0, seat.Size.Y / 2, 0)
+	local want = pivot * CFrame.Angles(lean, 0, 0) * CFrame.new(0, -drop, 0) * pivot:Inverse() * rel
+	weld.C1 = want:Inverse() * weld.C0 -- (root = seat * C0 * C1^-1 = seat * want)
+	return drop, math.deg(lean)
+end
+
+-- CarBuilder.PlayPose(model, "sit" | "walk"): Roblox's stock R15 animation, looped, on a rig with a
+-- Humanoid or an AnimationController. Played on the server, so every player sees it. Returns the track.
+function CarBuilder.PlayPose(model, name)
+	local host = model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildOfClass("AnimationController")
+	if not host or not POSES[name] then
+		return nil
+	end
+	local animator = host:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = host
+	end
+	local ok, track = pcall(function()
+		local anim = Instance.new("Animation")
+		anim.AnimationId = POSES[name]
+		local t = animator:LoadAnimation(anim)
+		t.Looped = true
+		t.Priority = Enum.AnimationPriority.Action
+		t:Play(0)
+		return t
+	end)
+	return ok and track or nil
+end
+
+-- Studio fit check (Play mode, server command bar):
+--   require(game.ServerStorage.Tools.CarBuilder).Showroom(Vector3.new(0, 40, 0))
+--   require(game.ServerStorage.Tools.CarBuilder).Showroom(Vector3.new(0, 40, 0), 1.3)   -- tall avatars
+-- Every vehicle in a row (anchored, 18 studs apart) with an R15 dummy (height scale 1.0, or the one given)
+-- sitting in every seat the way a player does, fitted by FitRider, in Workspace.CarShowroom. The Output
+-- names each rider the fit moved. Showroom(nil) removes it.
+function CarBuilder.Showroom(origin, heightScale)
+	local Players = game:GetService("Players")
+	local old = workspace:FindFirstChild("CarShowroom")
+	if old then
+		old:Destroy()
+	end
+	if not origin then
+		return "cleared"
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "CarShowroom"
+	folder.Parent = workspace
+	local desc = Instance.new("HumanoidDescription")
+	desc.HeightScale = tonumber(heightScale) or 1
+	local count = 0
+	for _, def in ipairs(Vehicles.List) do
+		local okBuild, car = pcall(CarBuilder.Build, def.Id)
+		if okBuild and car then
+			count += 1
+			local cfg = Vehicles.Resolve(def.Id)
+			-- At its resting ride height (springs 45% in), so the wheels stand on origin's level.
+			local ride = cfg.RestLength * 0.55 + cfg.WheelRadius + cfg.Size.Y / 2 - 0.6
+			car:PivotTo(CFrame.new(origin + Vector3.new((count - 1) * 18, ride, 0)))
+			for _, d in ipairs(car:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.Anchored = true
+				elseif d:IsA("ProximityPrompt") then
+					d.Enabled = false
+				end
+			end
+			car.Parent = folder
+			for _, seat in ipairs(car:GetChildren()) do
+				if seat:IsA("Seat") or seat:IsA("VehicleSeat") then
+					local ok, dummy = pcall(Players.CreateHumanoidModelFromDescription, Players, desc, Enum.HumanoidRigType.R15)
+					if ok and dummy then
+						dummy.Name = def.Id .. "_" .. seat.Name
+						for _, d in ipairs(dummy:GetDescendants()) do
+							if d:IsA("BaseScript") then
+								d:Destroy()
+							elseif d:IsA("BasePart") then
+								d.Massless = true
+							end
+						end
+						dummy:PivotTo(seat.CFrame * CFrame.new(0, 3, 0))
+						dummy.Parent = folder
+						local hum = dummy:FindFirstChildOfClass("Humanoid")
+						if hum then
+							hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+							seat:Sit(hum)
+							CarBuilder.PlayPose(dummy, "sit")
+							local weld = seat:FindFirstChild("SeatWeld")
+							local okFit, drop, lean = pcall(CarBuilder.FitRider, weld)
+							if okFit and drop then
+								print(string.format("[CarBuilder] showroom: %s rider sank %.2f studs and leaned %.0f deg more", dummy.Name, drop, lean or 0))
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return string.format("%d vehicles in Workspace.CarShowroom", count)
 end
 
 return CarBuilder

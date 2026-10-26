@@ -22,8 +22,15 @@
 --   * Live tuning: the server can change the car's attributes while you sit in it; the physics, the
 --     camera and Status pick the new numbers up on the next step (Cfg is CarPhysics' live table).
 --   * Getting out never depends on the drive state: F (keyboard), E when no "hold E" prompt is showing,
---     B (gamepad) and DriveUI's EXIT all call DriveController.Exit() from ANY seat. If the server
---     doesn't answer, the character stands up on its own a moment later.
+--     B (gamepad) and DriveUI's EXIT all call DriveController.Exit() from ANY seat. The keys are read
+--     straight from UserInputService (not ContextActionService), so no later binding (the weapon wheel,
+--     combat, the phone) can take them over. The seat is Humanoid.SeatPart, or the seat a weld still
+--     joins to the root part when the humanoid has lost track of it (that case used to give up on the
+--     spot). Still in the same seat 0.7 s after asking: ask again and stand up here as well.
+--     Studio only: a press in a car that does nothing says why in the Output (Roblox's menu open, a text
+--     box has the keyboard, pressed again too soon, just sat down), and so does a seat that still holds
+--     you 1.6 s after asking (the server's reason if it gave one, the seat's welds, the jump state), so
+--     the next "F stopped working" explains itself.
 --   * A car can reach this device in pieces (the server may sit you in a car it spawned a moment ago):
 --     driving starts as soon as everything CarPhysics needs has arrived, and keeps trying until then.
 
@@ -57,11 +64,15 @@ DriveController.Status = {
 	MaxSpeed = 0,
 	NitroFuel = 1, -- 0..1
 	NitroActive = false,
+	NitroEmpty = false, -- nitro held with the gas down but nothing to burn (SoundClient's one click)
 	Flat = false,
 	SlipAngle = 0, -- degrees between the nose and the direction of travel (0 when slow or airborne)
 	Drifting = false, -- sliding the way the drift zone scores it (cars, nose first, 12-80 degrees, over 30 studs/s)
 	Car = nil,
 }
+-- os.clock() until which the get-out keys do nothing: InteractClient sets it for half a second when its
+-- acted get-in sits you down, so a late second press meant to skip ahead doesn't put you straight back out.
+DriveController.NoExitUntil = 0
 
 local WHEELS = CarPhysics.Wheels
 local FRONT = { FL = true, FR = true }
@@ -113,19 +124,40 @@ local WHEEL_SLIDE_LOCK = 0.6
 local state = nil
 local exitRemote = nil
 local startToken = 0 -- bumps on every seat change; a waiting start gives up when it no longer matches
-local promptsShown = {} -- [prompt] = true while it's on screen (E gets you out only when none of them uses E)
+-- [prompt] = true while it's on screen (E gets you out only when none of them uses E). Weak keys: a prompt
+-- destroyed while it showed (so its PromptHidden never came) can't stay here for the rest of the session.
+local promptsShown = setmetatable({}, { __mode = "k" })
+local STUDIO = RunService:IsStudio()
+local exitRefusal = nil -- the server's reason when it found no seat to get us out of (CarExitSpot(nil, why))
+
+-- Where a prompt is (its part or attachment), or nil.
+local function promptAt(prompt)
+	local parent = prompt.Parent
+	if parent and parent:IsA("Attachment") then
+		return parent.WorldPosition
+	elseif parent and parent:IsA("BasePart") then
+		return parent.Position
+	elseif parent and parent:IsA("Model") then
+		return parent:GetPivot().Position
+	end
+	return nil
+end
 
 -- Is a prompt that E would trigger on screen right now? Asked of the prompts themselves, not of a count
--- of PromptShown / PromptHidden: one that was destroyed or streamed out, switched off, or hidden by
--- PromptGate (MaxActivationDistance 0) is forgotten here even if its PromptHidden never came, so E can't
--- get stuck belonging to a prompt that isn't there. Prompts on another key (Cuff is Q) never block E.
+-- of PromptShown / PromptHidden: one that was destroyed or streamed out, switched off, hidden by
+-- PromptGate (MaxActivationDistance 0), or out of its own reach of us is forgotten here even if its
+-- PromptHidden never came, so E can't get stuck belonging to a prompt that isn't there. Prompts on
+-- another key (Cuff is Q) never block E.
 local function ePromptShowing()
 	if not ProximityPromptService.Enabled then
 		return false
 	end
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	local found = false
 	for prompt in pairs(promptsShown) do
-		if prompt.Enabled and prompt.MaxActivationDistance > 0 and prompt:IsDescendantOf(Workspace) then
+		local at = prompt.Parent and promptAt(prompt)
+		local near = not (root and at) or (at - root.Position).Magnitude <= prompt.MaxActivationDistance + 4
+		if prompt.Enabled and prompt.MaxActivationDistance > 0 and prompt:IsDescendantOf(Workspace) and near then
 			if prompt.KeyboardKeyCode == Enum.KeyCode.E then
 				found = true
 			end
@@ -276,6 +308,7 @@ local function physicsStep(dt)
 	status.MaxSpeed = s.Cfg.MaxSpeed
 	status.NitroFuel = phys.NitroFuel
 	status.NitroActive = phys.NitroOn
+	status.NitroEmpty = phys.NitroEmpty == true
 	status.Flat = phys.Flat
 	status.SlipAngle = phys.SlipAngle
 	status.Drifting = phys.Drifting
@@ -461,31 +494,108 @@ local function onAction(name, inputState)
 	return Enum.ContextActionResult.Sink
 end
 
+-- Studio only: a get-out press in a car that did nothing, and why (see the header).
+local function noExit(why)
+	if STUDIO then
+		warn("[DriveController] the get-out key did nothing: " .. why)
+	end
+end
+
+-- The seat holding the local character, as (humanoid, seat, welded): Humanoid.SeatPart, or when the
+-- humanoid has lost track of it while a weld still holds the body (welded = true), the seat that weld
+-- joins to the root part. (humanoid, nil) on foot.
+local function mySeat()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		return nil, nil, false
+	end
+	if hum.SeatPart then
+		return hum, hum.SeatPart, false
+	end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		for _, j in ipairs(root:GetJoints()) do
+			if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
+				local other = j.Part0 == root and j.Part1 or j.Part0
+				if other and (other:IsA("Seat") or other:IsA("VehicleSeat")) then
+					return hum, other, true
+				end
+			end
+		end
+	end
+	return hum, nil, false
+end
+
+-- Studio only: everything about a seat that still holds us after asking to get out.
+local function stuckReport(hum, seat)
+	local welds = 0
+	for _, j in ipairs(seat:GetChildren()) do
+		if j:IsA("JointInstance") and j.Name == "SeatWeld" then
+			welds += 1
+		end
+	end
+	local car = seat.Parent
+	return string.format("[DriveController] still held by %s 1.6 s after asking to get out; server: %s; SeatWelds in that seat: %d;"
+		.. " Humanoid.SeatPart = %s; state %s, jumping %s, JumpHeight %.1f; car %s%s",
+		seat:GetFullName(), exitRefusal or "no refusal (it stepped us out, or the request never arrived)", welds,
+		tostring(hum.SeatPart), tostring(hum:GetState()), hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) and "on" or "off",
+		hum.JumpHeight, tostring(car and car.Name), (car and car:GetAttribute("OwnerUserId") == player.UserId) and " (yours)" or "")
+end
+
 -- Get out of whatever seat the character is in (driver, passenger, any seat). The server steps you out
--- beside your door; if it hasn't a moment later (lag, an odd seat), the character just stands up.
+-- beside your door. Still in that seat 0.7 s later (a lost or refused request, an odd seat): ask again and
+-- stand up here as well. Returns true when it asked.
 function DriveController.Exit()
-	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	local seat = hum and hum.SeatPart
-	if not seat or os.clock() - lastExit < 0.3 then
-		return
+	local hum, seat, welded = mySeat()
+	if not hum or not seat then
+		return false
+	end
+	local now = os.clock()
+	if now - lastExit < 0.3 then
+		noExit("pressed again within 0.3 s")
+		return false
 	end
 	-- Just sat down through InteractClient's acted get-in: a second press that was meant to skip ahead
 	-- must not get us straight back out (InteractClient sets this for half a second).
-	if os.clock() < (DriveController.NoExitUntil or 0) then
-		return
+	if now < (DriveController.NoExitUntil or 0) then
+		noExit(string.format("you sat down a moment ago (the key works again in %.2f s)", DriveController.NoExitUntil - now))
+		return false
 	end
-	lastExit = os.clock()
+	lastExit = now
+	exitRefusal = nil
+	if welded and STUDIO then
+		warn("[DriveController] Humanoid.SeatPart is nil, but a weld holds you to " .. seat:GetFullName() .. ": asking the server anyway")
+	end
 	if exitRemote then
 		exitRemote:FireServer()
 	end
 	local token = startToken -- (bumps on every seat change: out and back into the same seat is not "still seated")
+	local function stillIn()
+		local h, sNow = mySeat()
+		return h == hum and sNow == seat and startToken == token and hum.Parent ~= nil and hum.Health > 0
+	end
 	task.delay(0.7, function()
-		if hum.Parent and hum.SeatPart == seat and startToken == token then
+		if not stillIn() then
+			return
+		end
+		if exitRemote then
+			exitRemote:FireServer() -- (a request can be lost, or come in behind a burst)
+		end
+		if hum.SeatPart == seat then
 			hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
 			hum.Sit = false
 			hum.Jump = true
 		end
 	end)
+	if STUDIO then
+		task.delay(1.6, function()
+			if stillIn() then
+				warn(stuckReport(hum, seat))
+			end
+		end)
+	end
+	return true
 end
 
 -- Put an upside-down or stuck car back on its wheels.
@@ -651,6 +761,7 @@ function DriveController.Stop()
 	i.Handbrake, i.Nitro = false, false
 	local status = DriveController.Status
 	status.Driving, status.Car, status.Speed, status.NitroActive, status.Flat = false, nil, 0, false, false
+	status.NitroEmpty = false
 	status.Throttle = 0
 	status.Steer = 0
 	status.SlipAngle, status.Drifting = 0, false
@@ -736,8 +847,13 @@ function DriveController.Init()
 	-- The server's answer to getting out: where to stand, beside the door. This device runs our body, so
 	-- it puts it there itself, the moment the seat has let go here. (The server's own move often lost
 	-- to the seat letting go: the body stood up where it sat and came out through the roof.)
-	Remotes.OnClient("CarExitSpot", function(spot)
+	Remotes.OnClient("CarExitSpot", function(spot, why)
 		if typeof(spot) ~= "CFrame" then
+			-- No seat to get out of, as far as the server could tell (kept for the Studio report).
+			exitRefusal = type(why) == "string" and why or "refused"
+			if STUDIO then
+				warn("[DriveController] the server didn't step you out: " .. exitRefusal)
+			end
 			return
 		end
 		local character = player.Character
@@ -746,12 +862,17 @@ function DriveController.Init()
 		if not hum or not root or not root:IsA("BasePart") then
 			return
 		end
+		-- (held: SeatPart, or a seat weld this device still has; moving the root while welded would move the car)
+		local function held()
+			local _, seat = mySeat()
+			return seat ~= nil
+		end
 		local t0 = os.clock()
-		while hum.SeatPart ~= nil and os.clock() - t0 < 0.6 do
+		while held() and os.clock() - t0 < 0.6 do
 			RunService.Heartbeat:Wait()
 		end
 		-- (only a step: never across the map on a late or stray message)
-		if hum.SeatPart == nil and hum.Health > 0 and root.Parent and (root.Position - spot.Position).Magnitude < 40 then
+		if not held() and hum.Health > 0 and root.Parent and (root.Position - spot.Position).Magnitude < 40 then
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.CFrame = spot
 		end
@@ -778,11 +899,21 @@ function DriveController.Init()
 		if key ~= Enum.KeyCode.F and key ~= Enum.KeyCode.ButtonB and key ~= Enum.KeyCode.E then
 			return
 		end
+		local _, seat = mySeat()
+		if not seat then
+			return -- on foot: these keys are InteractClient's (GET IN, JACK...)
+		end
 		if GuiService.MenuIsOpen or os.clock() - menuShutAt < 0.2 then
+			noExit("Roblox's menu is open, or shut a moment ago")
 			return
 		end
-		if UserInputService:GetFocusedTextBox() or (key == Enum.KeyCode.E and ePromptShowing()) then
+		local box = UserInputService:GetFocusedTextBox()
+		if box then
+			noExit("a text box has the keyboard (" .. box:GetFullName() .. "): click the game first")
 			return
+		end
+		if key == Enum.KeyCode.E and ePromptShowing() then
+			return -- E belongs to the bubble on screen (it did its own thing)
 		end
 		DriveController.Exit()
 	end)
