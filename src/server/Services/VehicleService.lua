@@ -17,7 +17,8 @@
 --   * Who rides with whom (Ride prompt, and RequestRide(car) from InteractClient's RIDE button / F): the
 --     owner's crewmates and Roblox friends (CrewService.MayRide; Studio's test players count as friends),
 --     on the owner's side (cops with cops, citizens with citizens), never a prisoner, from within reach
---     with no wall between, into a free passenger seat (not one a taxi fare sits in).
+--     with no wall between (boats: over the dock's rails), into a free passenger seat (not one a taxi
+--     fare sits in).
 --   * Taxi fares (JobService): VehicleService.SeatNPC(car, model) sits a non-player rider in the free
 --     passenger seat for everyone to see (a posed statue: no Humanoid, massless, parented into the car;
 --     seat attribute NPCRider = true), VehicleService.ReleaseNPC(model) lets it go again.
@@ -25,9 +26,10 @@
 --     the server has lost track of that while a weld still holds the body, the seat a weld joins to the
 --     root part. Every joint between the body and the seat goes, and any SeatWeld a rider who is gone left
 --     behind (this place keeps a dead body's joints, CharacterBreakJointsOnDeath off, so resetting in a
---     seat used to leave its weld there; the next rider's F then destroyed that old weld instead of their
---     own and stayed in). The reply is CarExitSpot(spot): the client stands the body there. With no seat
---     to find the reply is CarExitSpot(nil, reason) (the client names it in Studio's Output).
+--     seat used to leave its weld there; the likely cause of "F stops working": the next rider's F could
+--     destroy that old weld instead of their own and stay in. Not confirmed in a play test). The reply
+--     is CarExitSpot(spot): the client stands the body there. With no seat to find the reply is
+--     CarExitSpot(nil, reason) (the client reports it if you stay seated).
 --     Riders are also put out beside the car before it is removed (despawn, a new car, sinking).
 --     Leftover SeatWelds are swept from players' cars every second and when a character is removed.
 --   * Every SeatWeld in Workspace.Vehicles is fitted to its rider (CarBuilder.FitRider): an avatar too
@@ -347,15 +349,14 @@ local function seatsOf(car)
 end
 
 -- A SeatWeld whose rider is gone: the body was deleted (respawned after a reset in the seat: this place
--- keeps a dead body's joints, CharacterBreakJointsOnDeath = false, so the death itself left the weld) or is
--- dead. Seat.Occupant only clears once that weld goes.
+-- keeps a dead body's joints, CharacterBreakJointsOnDeath = false, so the death itself left the weld in
+-- the seat). A dead body that is still there keeps its weld until it goes (CharacterRemoving), so it
+-- doesn't fall loose inside the car. Not seen in a play test: whether such a leftover keeps the seat
+-- "taken" (Seat.Occupant) or lets a new rider in beside it, where the old exit then destroyed the wrong
+-- weld. Either way it goes here.
 local function staleWeld(j)
 	local p = j.Part1
-	if p == nil or not p:IsDescendantOf(Workspace) then
-		return true
-	end
-	local hum = p.Parent and p.Parent:FindFirstChildOfClass("Humanoid")
-	return hum ~= nil and hum.Health <= 0
+	return p == nil or not p:IsDescendantOf(Workspace)
 end
 
 -- Drop the leftover SeatWelds in a seat. Returns how many went.
@@ -694,21 +695,27 @@ local function tryRide(who, car, seat)
 	if (root.Position - seat.Position).Magnitude >= (boat and BOAT_REACH or RIDE_REACH) then
 		return false
 	end
-	if not boat then
-		-- No riding through walls or fences. People don't block it: a seated driver's character stays
-		-- under Workspace (not the car), right across the ray from the driver's side.
-		local los = RaycastParams.new()
-		los.FilterType = Enum.RaycastFilterType.Exclude
-		local ignore = { car }
-		for _, p in ipairs(Players:GetPlayers()) do
-			if p.Character then
-				table.insert(ignore, p.Character)
-			end
+	-- No riding through walls or fences. People don't block it: a seated driver's character stays
+	-- under Workspace (not the car), right across the ray from the driver's side.
+	local los = RaycastParams.new()
+	los.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = { car }
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then
+			table.insert(ignore, p.Character)
 		end
-		los.FilterDescendantsInstances = ignore
-		if Workspace:Raycast(root.Position, seat.Position - root.Position, los) then
-			return false
-		end
+	end
+	los.FilterDescendantsInstances = ignore
+	local from, to = root.Position, seat.Position
+	if boat then
+		-- From the dock: a level ray 3 studs over the higher end clears its rails and bollards (under
+		-- 3.5 studs) and the water, but not a wall.
+		los.IgnoreWater = true
+		local y = math.max(from.Y, to.Y) + 3
+		from, to = Vector3.new(from.X, y, from.Z), Vector3.new(to.X, y, to.Z)
+	end
+	if Workspace:Raycast(from, to - from, los) then
+		return false
 	end
 	seat:Sit(hum)
 	return true

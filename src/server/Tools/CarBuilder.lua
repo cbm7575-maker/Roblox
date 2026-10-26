@@ -214,6 +214,7 @@ local function fitSeats(model, chassis, cfg, template, centreY, minFloor)
 	local tilt = 0 -- recline in radians (positive leans the seat's back towards the car's back, +Z)
 	local reach = HEAD_ABOVE_SEAT + HAIR_ROOM
 	local roofY, floorY -- roof and cabin floor heights on the chassis (nil: none / unknown)
+	local bodyTopY -- the body's own top on the chassis, when it has a roof (rider fit of a seat placed by hand)
 	local kind, glassShare = "no body parts", 0
 	local bodyLo, bodyHi = boundsOf(template, function(d)
 		return d.Name == "Body"
@@ -256,6 +257,7 @@ local function fitSeats(model, chassis, cfg, template, centreY, minFloor)
 		end
 		if roof then
 			roofY = centreY + roof
+			bodyTopY = centreY + bodyHi.Y
 			top = math.min(top, roofY - reach)
 		end
 		-- Not below the floor, unless the floor is above the old spot: then the old spot (a deep body
@@ -345,14 +347,21 @@ local function fitSeats(model, chassis, cfg, template, centreY, minFloor)
 			end
 		end
 	end
-	-- The rider fit's numbers (see the header): only under a roof this fit worked out itself. A seat put
-	-- in place by hand (SeatDrop) or an open top has no roof line to go by, so it fits nobody.
+	-- The rider fit's numbers (see the header), under any roof. A seat put in place by hand (SeatDrop) is
+	-- measured from where it ended up; outside a closed cabin its roof line is the body's own top, as its
+	-- glass may be a windscreen the seat was put above on purpose (the Gatorback's cage, the Riot Truck's
+	-- cab): standard heads keep their place, only taller ones and hats are fitted. An open top has no roof
+	-- line to go by, so it fits nobody.
 	local headRoom, floorRoom = nil, nil
-	if roofY and not drop then
+	local roofLine = roofY
+	if roofY and drop and kind ~= "closed cabin" and bodyTopY then
+		roofLine = bodyTopY
+	end
+	if roofLine then
 		-- The glass top of a closed cabin is the roof's underside; a body's own top (no glass) is the outside
 		-- of the roof, so a skin of ROOF_SKIN comes off that.
-		local skin = kind == "closed cabin" and 0 or ROOF_SKIN
-		headRoom = (roofY - skin - top) / math.max(math.cos(tilt), 0.3)
+		local skin = (kind == "closed cabin" and roofLine == roofY) and 0 or ROOF_SKIN
+		headRoom = (roofLine - skin - top) / math.max(math.cos(tilt), 0.3)
 		floorRoom = floorY and math.max(0, top - floorY - FLOOR_KEEP) or 0
 	end
 	for _, pair in ipairs({ { "DriverSeat", -x }, { "PassengerSeat", x } }) do
@@ -1091,7 +1100,7 @@ function CarBuilder.FitRider(weld)
 	end
 	local room = seat:GetAttribute("HeadRoom")
 	if type(room) ~= "number" or room <= 0 then
-		return nil -- an open top or a seat placed by hand: no roof line to fit under
+		return nil -- an open top: no roof line to fit under
 	end
 	local riderTop = CarBuilder.RiderTop(root.Parent)
 	if not riderTop or riderTop < 1 or riderTop > 7 then

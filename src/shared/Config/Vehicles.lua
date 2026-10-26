@@ -15,7 +15,7 @@
 -- Boats: SeatY (studs above the chassis centre: the seat's middle) and SeatZ place the driver on the deck
 -- (the passenger 2.4 behind); the template's attributes win here too. Without either, the old spot just
 -- over the chassis is kept, which on a tall hull is inside it.
--- Every seat a car's own fit put under a roof also fits each rider to their own size as they sit down
+-- Every seat under a roof (a hand-placed one too) also fits each rider to their own size as they sit down
 -- (CarBuilder.FitRider: taller avatars and hats sink in and lean back instead of poking through).
 -- Drift feel (CarPhysics, its header explains the model): Grip is the everyday sideways grip, DriftGrip
 -- the grip once the handbrake has let the tyres go, DriftSteer how much harder the car steers while it

@@ -28,9 +28,10 @@
 --     joins to the root part when the humanoid has lost track of it (that case used to give up on the
 --     spot). Still in the same seat 0.7 s after asking: ask again and stand up here as well.
 --     Studio only: a press in a car that does nothing says why in the Output (Roblox's menu open, a text
---     box has the keyboard, pressed again too soon, just sat down), and so does a seat that still holds
---     you 1.6 s after asking (the server's reason if it gave one, the seat's welds, the jump state), so
---     the next "F stopped working" explains itself.
+--     box has the keyboard, pressed again too soon, just sat down). A seat that still holds you 1.6 s
+--     after asking is reported in Studio and in a live game alike (Output / the /console Developer
+--     Console: the server's reason if it gave one, the seat's welds, the jump state), so the next "F
+--     stopped working" explains itself.
 --   * A car can reach this device in pieces (the server may sit you in a car it spawned a moment ago):
 --     driving starts as soon as everything CarPhysics needs has arrived, and keeps trying until then.
 
@@ -527,7 +528,8 @@ local function mySeat()
 	return hum, nil, false
 end
 
--- Studio only: everything about a seat that still holds us after asking to get out.
+-- Everything about a seat that still holds us after asking to get out (Studio's Output; in a live game
+-- the Developer Console, /console, so a player can send it).
 local function stuckReport(hum, seat)
 	local welds = 0
 	for _, j in ipairs(seat:GetChildren()) do
@@ -588,13 +590,11 @@ function DriveController.Exit()
 			hum.Jump = true
 		end
 	end)
-	if STUDIO then
-		task.delay(1.6, function()
-			if stillIn() then
-				warn(stuckReport(hum, seat))
-			end
-		end)
-	end
+	task.delay(1.6, function()
+		if stillIn() then
+			warn(stuckReport(hum, seat))
+		end
+	end)
 	return true
 end
 
@@ -849,7 +849,7 @@ function DriveController.Init()
 	-- to the seat letting go: the body stood up where it sat and came out through the roof.)
 	Remotes.OnClient("CarExitSpot", function(spot, why)
 		if typeof(spot) ~= "CFrame" then
-			-- No seat to get out of, as far as the server could tell (kept for the Studio report).
+			-- No seat to get out of, as far as the server could tell (kept for the stuck report).
 			exitRefusal = type(why) == "string" and why or "refused"
 			if STUDIO then
 				warn("[DriveController] the server didn't step you out: " .. exitRefusal)
