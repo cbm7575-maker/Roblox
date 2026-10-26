@@ -1,6 +1,7 @@
-# Neon Coast
+# Theft Miami Coast
 
-Open-world free-roam driving game set in Port Solana (heists, police chases, homes, guns). Plan, build steps and changelog:
+Open-world free-roam driving game set in Port Solana (heists, police chases, homes, guns). It started
+as Neon Coast, which is why the place file and some folders still carry that name. Plan, build steps and changelog:
 `DesignDoc.lua` (also `ServerStorage.DesignDoc` in the place).
 
 ## Layout
@@ -39,4 +40,4 @@ DevSync stamps in Studio.
 
 `launch/` holds the step-by-step launch kit, in order: private publish and phone test, Creator Hub
 passes and cash packs (with icons in `launch/icons/`), the friends test plan, store page copy, and
-maturity questionnaire answers, and the playtest list for the Oct 19 update (6).
+maturity questionnaire answers, and the playtest list for the latest update (6).

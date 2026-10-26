@@ -27,7 +27,8 @@ so leaving it on is harmless; turn it off if you prefer.
 
 ## Publish
 
-File > **Publish to Roblox** > create a new experience named **Neon Coast**. Keep it **Private**.
+File > **Publish to Roblox** > create a new experience named **THEFT MIAMI COAST**. Keep it **Private**.
+(If you already published it under another name, rename it in the Creator Hub instead.)
 Then copy the experience's link from the Creator Hub; you'll play it from your phone.
 
 ## Phone driving test (about 20 minutes)
