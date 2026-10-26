@@ -1,11 +1,11 @@
 -- DisguiseService (ModuleScript, ServerScriptService.Services.DisguiseService)
--- Shaking the cops, GTA 6 style:
---   * Wardrobe (inside a hideout, on foot): RequestDisguise(hatId, maskId) puts on a hat and mask
---     built from parts. If you're wanted and no cop can see you, a new look drops 1 star and wipes
---     the outfit clue from your Suspect Card.
---   * Spray & Go (drive onto the pad while unseen): $500 repaints your car a new colour, fixes all its
---     damage (VehicleDamageService.Repair), drops 1 star and wipes the car clue. 30-second cooldown
---     per car.
+-- Shaking the cops:
+--   * Wardrobe (on foot, inside a hideout or your own home): RequestDisguise(hatId, maskId) puts on a
+--     hat and mask built from parts. Only at a hideout: if you're wanted and no cop can see you, a new
+--     look drops 1 star and wipes the outfit clue from your Suspect Card. At home (HousingService's
+--     InHome, with a closet inside) it's just a change of clothes: homes turn wanted players away.
+--   * Spray & Go (drive onto the pad while unseen): $500 repaints your car a new colour, drops 1 star
+--     and wipes the car clue. 30-second cooldown per car.
 -- Your look is kept in attributes LookHat / LookMask and re-applied when you respawn.
 
 local Players = game:GetService("Players")
@@ -20,13 +20,11 @@ local HeatService = require(ServerScriptService.Services.HeatService)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local HideoutService = require(ServerScriptService.Services.HideoutService)
 local CarBuilder = require(game:GetService("ServerStorage").Tools.CarBuilder)
-local VehicleDamageService = require(ServerScriptService.Services.VehicleDamageService)
 
 local DisguiseService = {}
 
 local SPRAY_COST = 500
 local SPRAY_COOLDOWN = 30
-local REPAIR_COST = 250 -- no heat: repair only (a wanted respray includes the repair)
 local PAINTS = {
 	Color3.fromRGB(255, 62, 165), Color3.fromRGB(34, 225, 255), Color3.fromRGB(123, 47, 255),
 	Color3.fromRGB(255, 138, 61), Color3.fromRGB(255, 214, 10), Color3.fromRGB(110, 242, 196),
@@ -89,6 +87,19 @@ local function apply(player)
 	end
 end
 
+-- Inside their own home right now (HousingService)? Looked up when needed, with a pcall: it starts
+-- after this service, and a problem there mustn't stop the hideout wardrobe or Spray & Go.
+local function atHome(player)
+	local module = script.Parent:FindFirstChild("HousingService")
+	if not module then
+		return false
+	end
+	local ok, inside = pcall(function()
+		return require(module).IsInside(player)
+	end)
+	return ok and inside == true
+end
+
 local function onDisguise(player, hatId, maskId)
 	if not RateLimit.Allow(player, "Disguise", 1, 2) then
 		return
@@ -102,14 +113,19 @@ local function onDisguise(player, hatId, maskId)
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local root = char and char:FindFirstChild("HumanoidRootPart")
-	if not hum or hum.Health <= 0 or hum.SeatPart or not root or not HideoutService.IsInside(root.Position) then
+	if not hum or hum.Health <= 0 or hum.SeatPart or not root then
+		return
+	end
+	local atHideout = HideoutService.IsInside(root.Position)
+	if not atHideout and not atHome(player) then
 		return
 	end
 	local changed = hatId ~= (player:GetAttribute("LookHat") or "none") or maskId ~= (player:GetAttribute("LookMask") or "none")
 	player:SetAttribute("LookHat", hatId)
 	player:SetAttribute("LookMask", maskId)
 	apply(player)
-	if changed and HeatService.GetHeat(player) > 0 and not player:GetAttribute("HeatSpotted") then
+	-- The star drop is the hideout's alone (a look changed at home never touches heat).
+	if atHideout and changed and HeatService.GetHeat(player) > 0 and not player:GetAttribute("HeatSpotted") then
 		player:SetAttribute("SuspectOutfit", nil)
 		HeatService.Reduce(player, 1, "disguise")
 		notify:FireClient(player, "Disguised")
@@ -131,26 +147,9 @@ local function sprayTick()
 		local seat = hum and hum.SeatPart
 		local car = seat and seat.Parent
 		local chassis = car and car.PrimaryPart
-		local onPad = false
-		if chassis and car:GetAttribute("NCVehicle") then
+		if chassis and car:GetAttribute("NCVehicle") and HeatService.GetHeat(player) > 0 then
 			local rel = pad.CFrame:PointToObjectSpace(chassis.Position)
-			onPad = math.abs(rel.X) <= pad.Size.X / 2 and math.abs(rel.Z) <= pad.Size.Z / 2 and rel.Y < 12
-		end
-		if onPad and HeatService.GetHeat(player) <= 0 and seat.Name == "DriverSeat" and (car:GetAttribute("Health") or 100) < 100 then
-			-- No heat: a plain repair for whoever drives (no respray, the cops aren't looking).
-			local t = os.clock()
-			if not sprayedAt[car] or t - sprayedAt[car] > SPRAY_COOLDOWN then
-				if EconomyService.Spend(player, REPAIR_COST, "repair") then
-					sprayedAt[car] = t
-					VehicleDamageService.Repair(car)
-					notify:FireClient(player, "Repaired")
-				elseif not lastWarn[player] or t - lastWarn[player] > 6 then
-					lastWarn[player] = t
-					notify:FireClient(player, "RepairNoCash")
-				end
-			end
-		elseif onPad and HeatService.GetHeat(player) > 0 then
-			do
+			if math.abs(rel.X) <= pad.Size.X / 2 and math.abs(rel.Z) <= pad.Size.Z / 2 and rel.Y < 12 then
 				local t = os.clock()
 				if player:GetAttribute("HeatSpotted") then
 					if not lastWarn[player] or t - lastWarn[player] > 6 then
@@ -166,7 +165,6 @@ local function sprayTick()
 							new = PAINTS[rng:NextInteger(1, #PAINTS)]
 						end
 						CarBuilder.Paint(car, new)
-						VehicleDamageService.Repair(car)
 						player:SetAttribute("SuspectCar", nil)
 						HeatService.Reduce(player, 1, "spray")
 						notify:FireClient(player, "Resprayed")

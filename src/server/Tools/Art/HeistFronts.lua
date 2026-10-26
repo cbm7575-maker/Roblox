@@ -72,6 +72,11 @@ local function light(part, color, range, brightness)
 	end
 end
 
+-- A light inside a room. With Lighting.LightingStyle = Realistic and the night look's exposure, a ceiling
+-- light as bright as an outdoor sign needs whites the whole room out (seen in play: Fuel Stop and Glow
+-- Mart at night were a white haze), so indoor lights get this share of the brightness asked for.
+local INDOOR = 0.3
+
 -- True if no other module's (queryable) art is within r of pos. Our own parts don't count.
 local function artFree(pos, r)
 	local city = Workspace:FindFirstChild("City")
@@ -299,7 +304,7 @@ local function buildGlowMart(root, Layout)
 	for _, x in ipairs({ -8, 8 }) do
 		local strip = glow(m, V(1.5, 0.3, 44), cf * CF(x, s.h - 0.2, -4), Color3.fromRGB(235, 255, 245))
 		if x < 0 then
-			light(strip, Color3.fromRGB(220, 255, 240), 40, 1.2)
+			light(strip, Color3.fromRGB(220, 255, 240), 40, 1.2 * INDOOR)
 		end
 	end
 
@@ -346,7 +351,7 @@ local function buildFuelStop(root, Layout)
 	deco(m, V(21, 1, 0.4), cf * CF(0, 2.5, s.zb - 3.1), GOODS[1][1], nil, { Name = "Goods" })
 	deco(m, V(21, 1, 0.4), cf * CF(0, 5, s.zb - 3.1), GOODS[3][2], nil, { Name = "Goods" })
 	local strip = glow(m, V(1.5, 0.3, 36), cf * CF(0, s.h - 0.2, -2), Color3.fromRGB(255, 245, 230))
-	light(strip, Color3.fromRGB(255, 235, 210), 36, 1.2)
+	light(strip, Color3.fromRGB(255, 235, 210), 36, 1.2 * INDOOR)
 	box(m, V(4, 3, 2.5), cf * CF(16, 1.5, s.zf - 2), C.White, nil, { Name = "IceChest" })
 	glow(m, V(4.1, 0.4, 2.6), cf * CF(16, 2.4, s.zf - 2), N.Cyan)
 
@@ -361,7 +366,7 @@ local function buildFuelStop(root, Layout)
 		glow(m, V(56.6, 0.5, 0.5), cf * CF(0, 16.2, cz + z), N.Orange)
 	end
 	local panel = glow(m, V(44, 0.2, 18), cf * CF(0, 15.9, cz), Color3.fromRGB(255, 250, 235))
-	light(panel, Color3.fromRGB(255, 240, 220), 40, 1.3)
+	light(panel, Color3.fromRGB(255, 240, 220), 40, 1.3 * INDOOR)
 	Kit.Sign(m, cf * CF(0, 17.2, cz - 14.45), "FUEL STOP", N.Orange, 26, 2)
 	for _, x in ipairs({ -12, 12 }) do
 		box(m, V(3, 0.5, 16), cf * CF(x, 0.25, cz), C.Concrete, Enum.Material.Concrete, { Name = "Island" })
@@ -440,7 +445,7 @@ local function buildSparkleCo(root, Layout)
 	-- The main case: the RobPoint is its plinth, with a glass hood and a giant gem on top
 	deco(m, V(2.8, 2.6, 2.8), cf * CF(0, 5.7, 0), CASE_GLASS, Enum.Material.Glass, { Transparency = 0.6, Name = "CaseGlass" })
 	local gem = ball(m, cf * CF(0, 5.4, 0), 1.5, N.Cyan, Enum.Material.Neon)
-	light(gem, N.Cyan, 24, 1.2)
+	light(gem, N.Cyan, 24, 1.2 * INDOOR)
 	-- Velvet ropes either side of it (the approach from the door stays open)
 	for _, sx in ipairs({ -1, 1 }) do
 		for _, z in ipairs({ -4, 3 }) do
@@ -467,7 +472,7 @@ local function buildSparkleCo(root, Layout)
 	local top = cf * CF(0, s.h, -14)
 	deco(m, V(0.3, 3, 0.3), top * CF(0, -1.5, 0), GOLD, Enum.Material.Metal, { Name = "Chain" })
 	local hub = ball(m, top * CF(0, -4, 0), 2, Color3.fromRGB(255, 245, 250), Enum.Material.Neon)
-	light(hub, Color3.fromRGB(255, 220, 240), 45, 1.4)
+	light(hub, Color3.fromRGB(255, 220, 240), 45, 1.4 * INDOOR)
 	for i = 1, 8 do
 		local a = math.rad(i * 45)
 		glow(m, V(0.5, 2.6, 0.5), top * CF(math.cos(a) * 4.5, -5.4, math.sin(a) * 4.5), i % 2 == 0 and N.Pink or C.White)
@@ -536,7 +541,7 @@ local function buildClubNova(root, Layout)
 	box(m, V(8, 1.8, 3), cf * CF(-15, 0.9, -1), N.Purple, Enum.Material.Fabric, { Name = "Couch" })
 	box(m, V(8, 2, 0.8), cf * CF(-15, 2.4, 0.2), N.Purple, Enum.Material.Fabric, { Name = "Couch" })
 	local lamp = glow(m, V(8, 0.3, 1), cf * CF(0, s.h - 0.2, -6), N.Purple)
-	light(lamp, N.Purple, 24, 1)
+	light(lamp, N.Purple, 24, 1 * INDOOR)
 
 	-- Dance floor: 5 x 4 neon tiles, alternating colours
 	local tiles = { N.Pink, N.Cyan, N.Purple, N.Yellow }
@@ -567,7 +572,7 @@ local function buildClubNova(root, Layout)
 	for i, x in ipairs({ -12, 0, 12 }) do
 		local strip = glow(m, V(0.5, 0.4, 40), cf * CF(x, s.h - 0.3, -36), tiles[i])
 		if x ~= 0 then
-			light(strip, tiles[i], 45, 1.3)
+			light(strip, tiles[i], 45, 1.3 * INDOOR)
 		end
 	end
 
@@ -623,7 +628,7 @@ local function buildCoastalBank(root, Layout)
 	for _, a in ipairs({ 0, 60, 120 }) do
 		deco(m, V(0.6, 11, 0.5), door * CF(0, 0, -2.1) * CFrame.Angles(0, 0, math.rad(a)), GOLD, Enum.Material.Metal, { Name = "Spoke" })
 	end
-	light(rim, N.Cyan, 30, 1.2)
+	light(rim, N.Cyan, 30, 1.2 * INDOOR)
 	-- Console dressing on the RobPoint
 	glow(m, V(2.8, 1.6, 0.2), cf * CF(0, 5.3, math.min(0.4, hd - 0.2)) * CFrame.Angles(math.rad(-20), 0, 0), N.Cyan)
 	deco(m, V(2.4, 0.2, 1), cf * CF(0, 4.5, -0.9), DARK, nil, { Name = "Keypad" })
@@ -636,7 +641,7 @@ local function buildCoastalBank(root, Layout)
 		column(m, cf * CF(sx * 16, 0, 3), s.h, 3, C.White, Enum.Material.Marble)
 		local strip = glow(m, V(1, 0.4, 50), cf * CF(sx * 10, s.h - 0.3, -20), Color3.fromRGB(255, 244, 220))
 		if sx < 0 then
-			light(strip, Color3.fromRGB(255, 236, 200), 55, 1.3)
+			light(strip, Color3.fromRGB(255, 236, 200), 55, 1.3 * INDOOR)
 		end
 	end
 
@@ -803,7 +808,7 @@ local function buildChopShop(root, Layout)
 	for _, x in ipairs({ -8, 8 }) do
 		local strip = glow(m, V(1, 0.3, 34), cf * CF(x, H - 0.2, 0), Color3.fromRGB(255, 240, 220))
 		if x < 0 then
-			light(strip, Color3.fromRGB(255, 225, 190), 36, 1.2)
+			light(strip, Color3.fromRGB(255, 225, 190), 36, 1.2 * INDOOR)
 		end
 	end
 	reserve(cf, -W / 2 - 5, W / 2 + 1, -D / 2 - 1, D / 2 + 1)

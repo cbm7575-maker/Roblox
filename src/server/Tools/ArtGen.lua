@@ -64,6 +64,18 @@ local function buildLayout()
 			end
 		end
 	end
+	-- Lots built at run time (not in the place, so nothing above can see them): the two dealerships
+	-- (DealershipService), the Zap Shack (CombatService), the Car Meet and Courier Depot, and every home
+	-- for sale (Config.Housing: a 110 x 70 lot plus its front verge). Keep in step with Restyle.RUNTIME_LOTS.
+	for _, r in ipairs({ { -210, -90, -543, -457 }, { 1668, 1700, 975, 1110 }, { -278, -218, -354, -306 },
+		{ 545, 695, 725, 835 }, { 537, 583, 617, 663 } }) do
+		table.insert(reserved, { x = (r[1] + r[2]) / 2, z = (r[3] + r[4]) / 2, hx = (r[2] - r[1]) / 2, hz = (r[4] - r[3]) / 2 })
+	end
+	local okH, Housing = pcall(require, game:GetService("ReplicatedStorage").Shared.Config.Housing:Clone())
+	for _, h in ipairs(okH and Housing.List or {}) do
+		local sideways = math.abs(h.Facing.X) > math.abs(h.Facing.Z)
+		table.insert(reserved, { x = h.Position.X, z = h.Position.Z, hx = sideways and 50 or 57, hz = sideways and 57 or 50 })
+	end
 	function Layout.IsFree(pos, radius)
 		radius = radius or 6
 		for _, r in ipairs(reserved) do

@@ -197,7 +197,7 @@ function ArtKit.Sign(parent, cf, text, color, width, height)
 	local label = Instance.new("TextLabel")
 	label.Size = UDim2.fromScale(1, 1)
 	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.FredokaOne
+	label.Font = Enum.Font.Oswald
 	label.TextScaled = true
 	label.TextColor3 = color
 	label.Text = text

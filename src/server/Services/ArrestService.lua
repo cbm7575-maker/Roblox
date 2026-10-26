@@ -2,19 +2,18 @@
 -- Police tools and arrests. Only WANTED citizens (heat > 0) can be tased, spiked or arrested, so
 -- cops can't grief innocent players.
 --   Taser  (RequestTaser): cop on foot, target on foot within 32 studs with line of sight -> 3 s stun.
---   Cuffs  (CuffPrompt on each character, CuffDriver on each car seat; hold 1.5 s, only cops see them):
---          target stunned, or on foot and slow (< 10 studs/s), or in a car going < 5 studs/s.
---   Spikes (RequestSpike): drops a strip 28 studs ahead; 2 charges, +1 every 30 s; a car carrying a
---          wanted player (driver or passenger) that crosses it gets flat tyres for 12 s (tougher cars
---          recover sooner). The check sweeps each car's path since the last check, so fast cars can't
---          skip over a strip. ArrestService.PlaceSpike(cf, width, owner, lifetime) lays one for
---          other services (roadblocks: no owner).
---   Arrest: robber loses the bag; cop earns $500 per star + 25% of the bag; robber goes to prison.
---   Dying while wanted (reset, falling off the map, shot down) counts as an arrest: the bounty goes to
---          the cop whose Duty Pistol hit them in the last Config.Weapons.TakedownMemory seconds
---          (WeaponService calls CreditTakedown), else the nearest cop who saw them in the last 20 s and
---          is within 300 studs (if any).
---   Patrol pay: $80 per minute to cops who moved 150+ studs that minute or were near a wanted player.
+--   Cuffs  (CuffPrompt on each character, CuffDriver on each car seat; hold 1.5 s, timed on the server
+--          too, only cops see them): target stunned, or on foot and slow (< 10 studs/s), or in a car
+--          going < 5 studs/s. A cop told "no" gets a toast saying why (too fast, or still dazed).
+--   Spikes (RequestSpike): drops a strip 28 studs ahead; 2 charges, +1 every 30 s; wanted drivers
+--          who cross it get flat tyres for 12 s (tougher cars recover sooner).
+--   Arrest: robber loses the bag; cop earns HeatService.Bounty ($500 per paid star + 25% of the bag);
+--          robber goes to prison. Arrest XP needs a paid star, or else counts once per 10 minutes
+--          for the same cop and player (stops friends staging arrests).
+--   Giving up: Reset Character is no way out. A wanted player whose body goes down by itself with a
+--          cop or an AI patrol within 120 studs is arrested on the spot (GaveUp); with nobody that
+--          close the heat stays and the chase carries on against the new body.
+--   Patrol pay: every cop earns $80 per minute on duty.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,8 +22,6 @@ local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Shop = require(ReplicatedStorage.Shared.Config.Shop)
-local Police = require(ReplicatedStorage.Shared.Config.Police)
-local Weapons = require(ReplicatedStorage.Shared.Config.Weapons)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 local HeatService = require(ServerScriptService.Services.HeatService)
@@ -34,15 +31,19 @@ local ArrestService = {}
 local TASER_RANGE = 32
 local STUN_SECONDS = 3
 local CUFF_RANGE = 12
+local CUFF_HOLD = 1.5
 local SPIKE_AHEAD = 28
 local SPIKE_LIFETIME = 25
 local SPIKE_RECHARGE = 30
 local FLAT_SECONDS = 12
-local PATROL_PAY = Police.PatrolPay
+local PATROL_PAY = 80
+local FREE_ARREST_GAP = 600 -- seconds: see freeArrestRewarded
+local GIVE_UP_RANGE = 120 -- studs: police this close when a wanted player resets = an arrest (about a second behind a fast car)
 
 local notify, feed, caught, bountyEarned, taserFx
 local spikes = {} -- { part, owner, hit = {[car]=true} }
 local stunRestore = {} -- [humanoid] = { WalkSpeed, JumpHeight }
+local lastFreeArrest = {} -- ["copId:targetId"] = os.clock()
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -69,35 +70,27 @@ local function prison()
 	return require(ServerScriptService.Services.PrisonService)
 end
 
--- The arrest itself: bag gone, heat cleared, bounty to the cop (if any), off to prison.
-local function jail(target, cop)
-	local heat = HeatService.GetHeat(target)
-	local bounty = HeatService.Bounty(target)
-	EconomyService.TakeCarried(target, "arrested")
-	HeatService.Clear(target, "arrested")
-	if cop then
-		if cop:GetAttribute("Pass_VIP") then
-			bounty = math.floor(bounty * (1 + Shop.VIPCashBonus))
-		end
-		EconomyService.AddCash(cop, bounty, "bounty")
-		require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "Arrest", heat)
-		require(ServerScriptService.Services.Telemetry).Custom(cop, "Arrest", heat)
-		cop:SetAttribute("Arrests", (cop:GetAttribute("Arrests") or 0) + 1)
-		bountyEarned:FireClient(cop, { Amount = bounty, Name = target.DisplayName })
+-- An arrest with no paid stars (only fight, breakout or hot-car stars) is easy for friends to stage,
+-- so the same cop earns XP for arresting the same player that way at most once per FREE_ARREST_GAP.
+local function freeArrestRewarded(cop, target)
+	local key = cop.UserId .. ":" .. target.UserId
+	local t = lastFreeArrest[key]
+	if t and os.clock() - t < FREE_ARREST_GAP then
+		return false
 	end
-	target:SetAttribute("TimesCaught", (target:GetAttribute("TimesCaught") or 0) + 1)
-	caught:FireClient(target, { Heat = heat, By = cop and cop.DisplayName or "Police" })
-	feed:FireAllClients("Arrest", { Name = target.DisplayName, Cop = cop and cop.DisplayName or "an AI patrol" })
-	prison().Jail(target, heat)
+	lastFreeArrest[key] = os.clock()
+	return true
 end
 
-function ArrestService.Arrest(target, cop)
+-- gaveUp: their body already went down with police right there (GaveUp below), so there is no live
+-- body to ask for; everything else about the arrest is the same.
+function ArrestService.Arrest(target, cop, gaveUp)
 	local root, hum = aliveRoot(target)
-	if not root or not isWanted(target) then
+	if not (root or gaveUp) or not isWanted(target) then
 		return
 	end
 	-- Out of the car first.
-	local seat = hum.SeatPart
+	local seat = hum and hum.SeatPart
 	if seat then
 		local sw = seat:FindFirstChild("SeatWeld")
 		if sw then
@@ -105,48 +98,94 @@ function ArrestService.Arrest(target, cop)
 		end
 		hum.Sit = false
 	end
-	jail(target, cop)
+	local heat = HeatService.GetHeat(target)
+	local bounty = HeatService.Bounty(target)
+	local paidStars = HeatService.PaidStars(target) -- fight, breakout and hot-car stars earn no XP
+	EconomyService.TakeCarried(target, "arrested")
+	HeatService.Clear(target, "arrested")
+	if cop then
+		if cop:GetAttribute("Pass_VIP") then
+			bounty = math.floor(bounty * (1 + Shop.VIPCashBonus))
+		end
+		EconomyService.AddCash(cop, bounty, "bounty")
+		if paidStars > 0 or freeArrestRewarded(cop, target) then
+			require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "Arrest", paidStars)
+			cop:SetAttribute("Arrests", (cop:GetAttribute("Arrests") or 0) + 1)
+		end
+		require(ServerScriptService.Services.Telemetry).Custom(cop, "Arrest", paidStars)
+		bountyEarned:FireClient(cop, { Amount = bounty, Name = target.DisplayName })
+	end
+	target:SetAttribute("TimesCaught", (target:GetAttribute("TimesCaught") or 0) + 1)
+	caught:FireClient(target, { Heat = heat, By = cop and cop.DisplayName or "Police" })
+	feed:FireAllClients("Arrest", { Name = target.DisplayName, Cop = cop and cop.DisplayName or "an AI patrol" })
+	-- The taser stun and a knock-out belong to the body that was caught. Left running, the new prisoner
+	-- dropped flat in the yard (LawClient holds a stunned body down) or kept the grey knocked-out screen.
+	target:SetAttribute("StunnedUntil", nil)
+	target:SetAttribute("KnockedUntil", nil)
+	prison().Jail(target, heat)
 end
 
--- A wanted player's character died or vanished (reset, fell off the map): that's an arrest too, or
--- resetting would shake the cops and keep the bag. The bounty goes to the nearest cop who saw them
--- in the last 20 s and is within 300 studs.
-local leaving = setmetatable({}, { __mode = "k" }) -- [player] = true once they're leaving the game
-local takedowns = setmetatable({}, { __mode = "k" }) -- [suspect] = { cop = Player, at = os.clock() }
-
--- WeaponService: a cop's shot hit this wanted suspect (if they go down soon, that cop gets the bounty).
-function ArrestService.CreditTakedown(suspect, cop)
-	takedowns[suspect] = { cop = cop, at = os.clock() }
-end
-
-local function caughtDown(player, where)
-	local shot = takedowns[player]
-	takedowns[player] = nil
-	if leaving[player] or player.Parent ~= Players or not isWanted(player) then
+-- Reset Character (or the body going down by itself any other way) must not be a way out of a chase:
+-- it used to delete every AI patrol on you and dodge the cuffs with the bag intact. With a cop or an
+-- AI patrol within GIVE_UP_RANGE of the body it counts as giving up: an arrest on the spot (bag lost,
+-- prison), the nearest player cop earning the bounty. With nobody that close nothing happens here: the
+-- heat stays and the chase carries on against the new body.
+-- Called when a body goes down (onCharacter) and by AIPoliceService just before it takes its cars away
+-- (whichever notices first; the second call finds nobody wanted and does nothing).
+function ArrestService.GaveUp(target)
+	local char = target.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or hum.Health > 0 or not root or not root:IsA("BasePart") then
+		return -- still standing, or no body left to measure from
+	end
+	if target.Parent ~= Players or not isWanted(target) then
 		return
 	end
-	if shot and os.clock() - shot.at <= Weapons.TakedownMemory and shot.cop.Parent == Players and isCop(shot.cop) then
-		jail(player, shot.cop)
-		return
+	local cop, near = nil, GIVE_UP_RANGE
+	for _, p in ipairs(Players:GetPlayers()) do
+		local copRoot = isCop(p) and aliveRoot(p)
+		local d = copRoot and (copRoot.Position - root.Position).Magnitude
+		if d and d < near then
+			cop, near = p, d
+		end
 	end
-	where = where or player:GetAttribute("LastSeen")
-	local best, bestD
-	for _, cop in ipairs(Players:GetPlayers()) do
-		local copRoot = isCop(cop) and aliveRoot(cop)
-		if copRoot and HeatService.SeenAgo(player, cop) <= Police.DeathBountyMemory then
-			local d = typeof(where) == "Vector3" and (copRoot.Position - where).Magnitude or math.huge
-			if d <= Police.DeathBountyRange and (not bestD or d < bestD) then
-				best, bestD = cop, d
+	local patrol = false
+	if not cop then
+		local folder = Workspace:FindFirstChild("Vehicles")
+		for _, car in ipairs(folder and folder:GetChildren() or {}) do
+			local chassis = car:GetAttribute("AIPolice") and car.PrimaryPart
+			if chassis and (chassis.Position - root.Position).Magnitude < GIVE_UP_RANGE then
+				patrol = true
+				break
 			end
 		end
 	end
-	jail(player, best)
+	if cop or patrol then
+		notify:FireClient(target, "ResetCuffed")
+		ArrestService.Arrest(target, cop, true)
+	end
 end
 
--- Can `cop` cuff `target` right now?
+local function seeingStars(cop)
+	return (cop:GetAttribute("KnockedUntil") or 0) > now() or (cop:GetAttribute("StunnedUntil") or 0) > now()
+end
+
+-- Tell a cop why nothing happened (at most one toast every 4 s).
+local function tellCop(cop, key)
+	if RateLimit.Allow(cop, "CuffWhy", 0.25, 1) then
+		notify:FireClient(cop, key)
+	end
+end
+
+-- Can `cop` cuff `target` right now? If not, the second value is a Notify key worth telling the cop
+-- (nil when the reason is plain to see, like being out of range).
 local function canCuff(cop, target)
 	if not isCop(cop) or not isWanted(target) or cop == target then
 		return false
+	end
+	if seeingStars(cop) then
+		return false, "CopDazed" -- a knocked-down cop is seeing stars
 	end
 	local copRoot = aliveRoot(cop)
 	local root, hum = aliveRoot(target)
@@ -159,9 +198,18 @@ local function canCuff(cop, target)
 	if hum.SeatPart then
 		local car = hum.SeatPart.Parent
 		local chassis = car and car.PrimaryPart
-		return chassis ~= nil and chassis.AssemblyLinearVelocity.Magnitude < 5
+		if not chassis then
+			return false
+		end
+		if chassis.AssemblyLinearVelocity.Magnitude < 5 then
+			return true
+		end
+		return false, "CuffTooFast"
 	end
-	return root.AssemblyLinearVelocity.Magnitude < 10
+	if root.AssemblyLinearVelocity.Magnitude < 10 then
+		return true
+	end
+	return false, "CuffTooFast"
 end
 
 local function addCuffPrompt(parent, name, objectText)
@@ -169,7 +217,7 @@ local function addCuffPrompt(parent, name, objectText)
 	prompt.Name = name
 	prompt.ActionText = "Cuff"
 	prompt.ObjectText = objectText
-	prompt.HoldDuration = 1.5
+	prompt.HoldDuration = CUFF_HOLD
 	prompt.MaxActivationDistance = CUFF_RANGE
 	prompt.RequiresLineOfSight = false
 	prompt.KeyboardKeyCode = Enum.KeyCode.Q
@@ -178,24 +226,69 @@ local function addCuffPrompt(parent, name, objectText)
 	return prompt
 end
 
+-- The server times the cuff hold itself (a hacked client could skip it). Returns a check for
+-- Triggered: did this cop really start holding at least CUFF_HOLD seconds ago?
+local function timeHolds(prompt)
+	local began = {} -- [userId] = os.clock()
+	prompt.PromptButtonHoldBegan:Connect(function(cop)
+		began[cop.UserId] = os.clock()
+	end)
+	return function(cop)
+		local t = began[cop.UserId]
+		began[cop.UserId] = nil
+		return t ~= nil and os.clock() - t >= CUFF_HOLD - 0.4
+	end
+end
+
+local function tryCuff(cop, target)
+	local ok, why = canCuff(cop, target)
+	if ok then
+		ArrestService.Arrest(target, cop)
+	elseif why then
+		tellCop(cop, why)
+	end
+end
+
+-- A pose everyone sees on this player (RagdollService's "Pose" attribute; looks only, nil clears it).
+-- Guarded: without that service nothing changes.
+local function setPose(player, pose)
+	pcall(function()
+		require(ServerScriptService.Services:FindFirstChild("RagdollService")).SetPose(player, pose)
+	end)
+end
+
 local function onCharacter(player, char)
 	local root = char:WaitForChild("HumanoidRootPart", 10)
 	if not root then
 		return
 	end
-	local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
-	if hum and hum:IsA("Humanoid") then
-		hum.Died:Connect(function()
-			local r = char:FindFirstChild("HumanoidRootPart")
-			caughtDown(player, r and r:IsA("BasePart") and r.Position or nil)
-		end)
-	end
 	local prompt = addCuffPrompt(root, "CuffPrompt", player.DisplayName)
-	prompt.Triggered:Connect(function(cop)
+	local heldLongEnough = timeHolds(prompt)
+	-- While a cop holds the cuffs on them, the suspect's hands go up.
+	prompt.PromptButtonHoldBegan:Connect(function(cop)
 		if canCuff(cop, player) then
-			ArrestService.Arrest(player, cop)
+			setPose(player, "HandsUp")
 		end
 	end)
+	prompt.PromptButtonHoldEnded:Connect(function()
+		-- Only take back the hands-up this prompt put there. Clearing whatever pose was showing made a
+		-- cop's tap on the cuff key (even a refused one) pull the phone or gun pose off the suspect.
+		if player:GetAttribute("Pose") == "HandsUp" then
+			setPose(player, nil)
+		end
+	end)
+	prompt.Triggered:Connect(function(cop)
+		if heldLongEnough(cop) then
+			tryCuff(cop, player)
+		end
+	end)
+	-- Resetting with police right there is giving up, not a way out (GaveUp).
+	local hum = char:WaitForChild("Humanoid", 10)
+	if hum and hum:IsA("Humanoid") then
+		hum.Died:Connect(function()
+			ArrestService.GaveUp(player)
+		end)
+	end
 end
 
 local function onCar(car)
@@ -204,11 +297,15 @@ local function onCar(car)
 		return
 	end
 	local prompt = addCuffPrompt(seat, "CuffDriver", "Driver")
+	local heldLongEnough = timeHolds(prompt)
 	prompt.Triggered:Connect(function(cop)
+		if not heldLongEnough(cop) then
+			return
+		end
 		local occupant = seat.Occupant
 		local target = occupant and Players:GetPlayerFromCharacter(occupant.Parent)
-		if target and canCuff(cop, target) then
-			ArrestService.Arrest(target, cop)
+		if target then
+			tryCuff(cop, target)
 		end
 	end)
 end
@@ -226,6 +323,12 @@ local function stun(target)
 	hum.JumpHeight = 0
 	task.delay(STUN_SECONDS, function()
 		local saved = stunRestore[hum]
+		if saved and not hum:IsDescendantOf(Workspace) then
+			-- Cuffed (or respawned) inside the stun: that body is gone, so there is nothing to give
+			-- back. Without this every taser arrest left its old humanoid in the table for good.
+			stunRestore[hum] = nil
+			return
+		end
 		if saved and hum.Parent and (target:GetAttribute("StunnedUntil") or 0) <= now() + 0.05 then
 			hum.WalkSpeed, hum.JumpHeight = saved[1], saved[2]
 			stunRestore[hum] = nil
@@ -245,6 +348,10 @@ local function onTaser(cop, target)
 	end
 	if not isCop(cop) or not isWanted(target) then
 		return
+	end
+	if seeingStars(cop) then
+		tellCop(cop, "CopDazed")
+		return -- seeing stars: no tasering from the ground
 	end
 	local copRoot, copHum = aliveRoot(cop)
 	local root, hum = aliveRoot(target)
@@ -272,42 +379,6 @@ local function groundBelow(pos)
 	return Workspace:Raycast(pos + Vector3.new(0, 15, 0), Vector3.new(0, -40, 0), params)
 end
 
-local spikeFolder
-
--- Lay a spike strip: `cf` is its centre on the road, facing along the road; `width` across it.
--- owner (a cop Player) may be nil (roadblocks). The strip lasts `lifetime` seconds (or until destroyed).
-function ArrestService.PlaceSpike(cf, width, owner, lifetime)
-	if not spikeFolder or not spikeFolder.Parent then
-		spikeFolder = Workspace:FindFirstChild("Spikes") or Instance.new("Folder")
-		spikeFolder.Name = "Spikes"
-		spikeFolder.Parent = Workspace
-	end
-	local strip = Instance.new("Part")
-	strip.Name = "SpikeStrip"
-	strip.Anchored = true
-	strip.CanCollide = false
-	strip.CanQuery = false
-	strip.CanTouch = false
-	strip.Size = Vector3.new(width, 0.4, 3)
-	strip.CFrame = cf
-	strip.Color = Color3.fromRGB(40, 40, 48)
-	strip.Material = Enum.Material.DiamondPlate
-	local teeth = Instance.new("Part")
-	teeth.Name = "Teeth"
-	teeth.Anchored = true
-	teeth.CanCollide = false
-	teeth.CanQuery = false
-	teeth.CanTouch = false
-	teeth.Size = Vector3.new(width - 0.4, 0.3, 0.6)
-	teeth.CFrame = cf * CFrame.new(0, 0.3, 0)
-	teeth.Color = Color3.fromRGB(34, 225, 255)
-	teeth.Material = Enum.Material.Neon
-	teeth.Parent = strip
-	strip.Parent = spikeFolder
-	table.insert(spikes, { part = strip, owner = owner, hit = setmetatable({}, { __mode = "k" }), expires = os.clock() + (lifetime or SPIKE_LIFETIME) })
-	return strip
-end
-
 local function onSpike(cop)
 	if not RateLimit.Allow(cop, "Spike", 1, 1) or not isCop(cop) then
 		return
@@ -329,6 +400,31 @@ local function onSpike(cop)
 		return
 	end
 	cop:SetAttribute("SpikeCharges", charges - 1)
+	local folder = Workspace:FindFirstChild("Spikes") or Instance.new("Folder")
+	folder.Name = "Spikes"
+	folder.Parent = Workspace
+	local strip = Instance.new("Part")
+	strip.Name = "SpikeStrip"
+	strip.Anchored = true
+	strip.CanCollide = false
+	strip.CanQuery = false
+	strip.CanTouch = false
+	strip.Size = Vector3.new(20, 0.4, 3)
+	strip.CFrame = CFrame.lookAt(hit.Position + Vector3.new(0, 0.2, 0), hit.Position + Vector3.new(0, 0.2, 0) + look)
+	strip.Color = Color3.fromRGB(40, 40, 48)
+	strip.Material = Enum.Material.DiamondPlate
+	local teeth = Instance.new("Part")
+	teeth.Name = "Teeth"
+	teeth.Anchored = true
+	teeth.CanCollide = false
+	teeth.CanQuery = false
+	teeth.CanTouch = false
+	teeth.Size = Vector3.new(19.6, 0.3, 0.6)
+	teeth.CFrame = strip.CFrame * CFrame.new(0, 0.3, 0)
+	teeth.Color = Color3.fromRGB(34, 225, 255)
+	teeth.Material = Enum.Material.Neon
+	teeth.Parent = strip
+	strip.Parent = folder
 	-- At most 2 strips per cop at a time: the oldest goes first.
 	local mine = {}
 	for i, s in ipairs(spikes) do
@@ -340,66 +436,10 @@ local function onSpike(cop)
 		local old = table.remove(spikes, mine[1])
 		old.part:Destroy()
 	end
-	local at = hit.Position + Vector3.new(0, 0.2, 0)
-	ArrestService.PlaceSpike(CFrame.lookAt(at, at + look), 20, cop, SPIKE_LIFETIME)
+	table.insert(spikes, { part = strip, owner = cop, hit = setmetatable({}, { __mode = "k" }), expires = os.clock() + SPIKE_LIFETIME })
 end
 
--- Does the segment a -> b (in the box's own space) touch a box of half-size hx, hy, hz at the origin?
--- (Slab test; pure maths, so fast cars that jump past a strip between checks still hit it.)
-function ArrestService._SegmentHitsBox(a, b, hx, hy, hz)
-	local t0, t1 = 0, 1
-	for axis = 1, 3 do
-		local p0 = axis == 1 and a.X or axis == 2 and a.Y or a.Z
-		local p1 = axis == 1 and b.X or axis == 2 and b.Y or b.Z
-		local h = axis == 1 and hx or axis == 2 and hy or hz
-		local d = p1 - p0
-		if math.abs(d) < 1e-6 then
-			if math.abs(p0) > h then
-				return false
-			end
-		else
-			local u0, u1 = (-h - p0) / d, (h - p0) / d
-			if u0 > u1 then
-				u0, u1 = u1, u0
-			end
-			t0 = math.max(t0, u0)
-			t1 = math.min(t1, u1)
-			if t0 > t1 then
-				return false
-			end
-		end
-	end
-	return true
-end
-
-local lastSpikePos = setmetatable({}, { __mode = "k" }) -- [car] = { pos, clock }
-local seatsOf = setmetatable({}, { __mode = "k" }) -- [car] = { seats }
-
--- Wanted players riding in a car (driver or passengers).
-local function wantedRiders(car)
-	local seats = seatsOf[car]
-	if not seats then
-		seats = {}
-		for _, d in ipairs(car:GetChildren()) do
-			if d:IsA("Seat") or d:IsA("VehicleSeat") then
-				table.insert(seats, d)
-			end
-		end
-		seatsOf[car] = seats
-	end
-	local list
-	for _, seat in ipairs(seats) do
-		local occupant = seat.Occupant
-		local p = occupant and Players:GetPlayerFromCharacter(occupant.Parent)
-		if p and isWanted(p) then
-			list = list or {}
-			table.insert(list, p)
-		end
-	end
-	return list
-end
-
--- Check cars carrying wanted players against every strip, 10 times a second.
+-- Check wanted drivers against every strip, 10 times a second.
 local function spikeTick()
 	local t = os.clock()
 	for i = #spikes, 1, -1 do
@@ -410,7 +450,6 @@ local function spikeTick()
 		end
 	end
 	if #spikes == 0 then
-		table.clear(lastSpikePos)
 		return
 	end
 	local folder = Workspace:FindFirstChild("Vehicles")
@@ -418,35 +457,22 @@ local function spikeTick()
 		return
 	end
 	for _, car in ipairs(folder:GetChildren()) do
+		local driverId = car:GetAttribute("DriverUserId")
+		local driver = driverId and Players:GetPlayerByUserId(driverId)
 		local chassis = car.PrimaryPart
-		if chassis and not car:GetAttribute("Police") then
-			local pos = chassis.Position
-			local prev = lastSpikePos[car]
-			lastSpikePos[car] = { pos = pos, clock = t }
-			-- The path since the last check (just this spot after a gap or a teleport).
-			local from = pos
-			if prev and t - prev.clock < 0.5 and (pos - prev.pos).Magnitude < 150 then
-				from = prev.pos
-			end
-			local riders = wantedRiders(car)
-			if riders then
-				for _, s in ipairs(spikes) do
-					if not s.hit[car] then
-						local cf = s.part.CFrame
-						local hx = s.part.Size.X / 2 + chassis.Size.X / 2
-						local hz = 1.5 + chassis.Size.Z / 2
-						if ArrestService._SegmentHitsBox(cf:PointToObjectSpace(from), cf:PointToObjectSpace(pos), hx, 6, hz) then
-							s.hit[car] = true
-							if s.owner and s.owner.Parent then
-								require(game:GetService("ServerScriptService").Services.ProgressService).Event(s.owner, "SpikeHit")
-							end
-							local toughness = car:GetAttribute("Toughness") or 2
-							local seconds = FLAT_SECONDS - (toughness - 1) * 1.5
-							car:SetAttribute("FlatUntil", now() + seconds)
-							for _, p in ipairs(riders) do
-								notify:FireClient(p, "TiresPopped")
-							end
+		if driver and chassis and isWanted(driver) then
+			for _, s in ipairs(spikes) do
+				if not s.hit[car] then
+					local rel = s.part.CFrame:PointToObjectSpace(chassis.Position)
+					if math.abs(rel.X) <= 10 + chassis.Size.X / 2 and math.abs(rel.Z) <= 1.5 + chassis.Size.Z / 2 and math.abs(rel.Y) < 6 then
+						s.hit[car] = true
+						if s.owner and s.owner.Parent then
+							require(game:GetService("ServerScriptService").Services.ProgressService).Event(s.owner, "SpikeHit")
 						end
+						local toughness = car:GetAttribute("Toughness") or 2
+						local seconds = FLAT_SECONDS - (toughness - 1) * 1.5
+						car:SetAttribute("FlatUntil", now() + seconds)
+						notify:FireClient(driver, "TiresPopped")
 					end
 				end
 			end
@@ -467,13 +493,6 @@ function ArrestService.Init()
 		player.CharacterAdded:Connect(function(char)
 			onCharacter(player, char)
 		end)
-		-- Backup for deaths the server never saw as Died (the character just went away while wanted).
-		-- Our own arrests clear the heat before the respawn, so they never land here.
-		player.CharacterRemoving:Connect(function(char)
-			local r = char:FindFirstChild("HumanoidRootPart")
-			local where = r and r:IsA("BasePart") and r.Position or nil
-			task.defer(caughtDown, player, where)
-		end)
 		if player.Character then
 			task.spawn(onCharacter, player, player.Character)
 		end
@@ -487,9 +506,6 @@ function ArrestService.Init()
 	for _, p in ipairs(Players:GetPlayers()) do
 		onPlayer(p)
 	end
-	Players.PlayerRemoving:Connect(function(p)
-		leaving[p] = true
-	end)
 
 	local vehicles = Workspace:WaitForChild("Vehicles")
 	vehicles.ChildAdded:Connect(function(car)
@@ -508,71 +524,24 @@ function ArrestService.Init()
 			end
 		end
 	end)
-	-- Spike recharge (every 30 s) and patrol pay (every minute, for cops actually on patrol: moved
-	-- 150+ studs that minute or were near a wanted player). Sampled every 5 s.
-	local moved = {} -- [cop] = studs this minute
-	local nearWanted = {} -- [cop] = true
-	local lastPos = {} -- [cop] = Vector3
-	Players.PlayerRemoving:Connect(function(p)
-		moved[p], nearWanted[p], lastPos[p] = nil, nil, nil
-	end)
-	local function sample()
-		local wantedRoots = {}
-		for _, q in ipairs(Players:GetPlayers()) do
-			local r = isWanted(q) and aliveRoot(q)
-			if r then
-				table.insert(wantedRoots, r.Position)
-			end
-		end
-		for _, p in ipairs(Players:GetPlayers()) do
-			local root = isCop(p) and aliveRoot(p)
-			if root then
-				local pos = root.Position
-				if lastPos[p] then
-					moved[p] = (moved[p] or 0) + math.min((pos - lastPos[p]).Magnitude, 400)
-				end
-				lastPos[p] = pos
-				if not nearWanted[p] then
-					for _, w in ipairs(wantedRoots) do
-						if (w - pos).Magnitude <= Police.PatrolPayNearWanted then
-							nearWanted[p] = true
-							break
-						end
-					end
-				end
-			elseif not isCop(p) then
-				moved[p], nearWanted[p], lastPos[p] = nil, nil, nil
-			end
-		end
-	end
+	-- Spike recharge and patrol pay.
 	task.spawn(function()
-		local elapsed = 0
+		local minute = 0
 		while true do
-			task.wait(5)
-			elapsed += 5
-			local ok, err = pcall(function()
-				sample()
-				if elapsed % SPIKE_RECHARGE == 0 then
-					for _, p in ipairs(Players:GetPlayers()) do
-						if isCop(p) then
-							local max = p:GetAttribute("SpikeMax") or 2
-							p:SetAttribute("SpikeCharges", math.min(max, (p:GetAttribute("SpikeCharges") or 0) + 1))
-						end
+			task.wait(SPIKE_RECHARGE)
+			minute += SPIKE_RECHARGE
+			for _, p in ipairs(Players:GetPlayers()) do
+				if isCop(p) then
+					local max = p:GetAttribute("SpikeMax") or 2
+					p:SetAttribute("SpikeCharges", math.min(max, (p:GetAttribute("SpikeCharges") or 0) + 1))
+					if minute >= 60 then
+						EconomyService.AddCash(p, PATROL_PAY, "patrol")
+						require(game:GetService("ServerScriptService").Services.ProgressService).Event(p, "PatrolMinute")
 					end
 				end
-				if elapsed % 60 == 0 then
-					for _, p in ipairs(Players:GetPlayers()) do
-						if isCop(p) and ((moved[p] or 0) >= Police.PatrolPayMinMove or nearWanted[p]) then
-							EconomyService.AddCash(p, PATROL_PAY, "patrol")
-							require(game:GetService("ServerScriptService").Services.ProgressService).Event(p, "PatrolMinute")
-						end
-					end
-					table.clear(moved)
-					table.clear(nearWanted)
-				end
-			end)
-			if not ok then
-				warn("[ArrestService] " .. tostring(err))
+			end
+			if minute >= 60 then
+				minute = 0
 			end
 		end
 	end)

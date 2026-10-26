@@ -5,22 +5,33 @@
 -- wheel visuals and the drive actions (handbrake, nitro, exit, flip).
 -- Input: the VehicleSeat's ThrottleFloat/SteerFloat (keyboard, gamepad and touch through Roblox's
 -- default controls) unless DriveController.Input overrides them (phone pedals, DriveUI).
--- Crashes (a sudden loss of horizontal speed the brakes and tyres can't explain; landings only lose
--- vertical speed) give a crash sound, a short camera shake and gamepad rumble. The damage itself is
--- the server's (VehicleDamageService); Status.Health / Stalled / Limp mirror the car's state.
--- Getting out: F, gamepad B or EXIT (DriveUI), the same for drivers and passengers. F has two routes on
--- purpose: a ContextActionService action while you sit in any car seat, and a raw keyboard fallback
--- that fires even if something else already handled the key (only a focused text box, i.e. typing in
--- chat, stops it). Each press asks the server (RequestExitCar), once more after 0.8 s if you're still in
--- the same seat; the server answers ExitedCar and this device lets go of the seat as well.
--- Status.Riding = true while you sit as a passenger (DriveUI shows EXIT). A half-second check re-arms
--- driving / riding if a seat change was ever missed (a slow-streaming car, a respawn mid-ride).
+--   * Keyboard steering is eased: A / D give -1 / 0 / 1, so the wheel is turned toward that at a
+--     speed-sensitive rate (quick when slow, calmer when fast, quickest back to centre and while the
+--     handbrake is held). Sticks and the phone thumbstick are already smooth and pass straight through.
+--   * Drifting (CarPhysics has the model): handbrake + steer swings the tail out, then throttle +
+--     steering into the turn holds the slide; counter-steering or letting go ends it.
+--     Status.SlipAngle / Status.Drifting say how it's going.
+--   * Chase camera: low and close at rest (further back and higher behind a tall body: a van, a truck),
+--     backs off with speed, looks into corners (and along the slide in a drift), stays out of walls and
+--     out of the car. Near top speed and on nitro it hums a little (a small wobble, CAM_HUM). Free look:
+--     hold the right mouse button, use the right stick, or drag on the right-hand side of a touch screen;
+--     1.5 s after you let go it eases back behind the car. Stunt jumps (player attribute InStunt) get a
+--     lazier, wider camera with no hum.
+--   * Wheels (looks only): they ride the suspension and spin; the front ones show the steering, and
+--     in a slide they swing round toward where the car is really going (the counter-steer look).
+--   * Live tuning: the server can change the car's attributes while you sit in it; the physics, the
+--     camera and Status pick the new numbers up on the next step (Cfg is CarPhysics' live table).
+--   * Getting out never depends on the drive state: F (keyboard), E when no "hold E" prompt is showing,
+--     B (gamepad) and DriveUI's EXIT all call DriveController.Exit() from ANY seat. If the server
+--     doesn't answer, the character stands up on its own a moment later.
+--   * A car can reach this device in pieces (the server may sit you in a car it spawned a moment ago):
+--     driving starts as soon as everything CarPhysics needs has arrived, and keeps trying until then.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local ContextActionService = game:GetService("ContextActionService")
-local HapticService = game:GetService("HapticService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
@@ -40,93 +51,195 @@ DriveController.Input = {
 }
 DriveController.Status = {
 	Driving = false,
-	Riding = false, -- in a passenger seat (or a driver seat whose car hasn't fully arrived yet)
 	Speed = 0, -- studs/s, forward
+	Throttle = 0, -- -1..1: the gas pedal the physics used this step (SoundClient: engine load and launch revs)
+	Steer = 0, -- -1..1: the eased steering the physics used this step (VehicleFeel: the driver's hands)
 	MaxSpeed = 0,
 	NitroFuel = 1, -- 0..1
 	NitroActive = false,
-	NitroEmpty = false, -- nitro held but the tank has nothing to give
 	Flat = false,
-	Health = 100, -- the car's Health attribute (0-100)
-	Stalled = false,
-	Limp = false,
+	SlipAngle = 0, -- degrees between the nose and the direction of travel (0 when slow or airborne)
+	Drifting = false, -- sliding the way the drift zone scores it (cars, nose first, 12-80 degrees, over 30 studs/s)
 	Car = nil,
 }
 
 local WHEELS = CarPhysics.Wheels
 local FRONT = { FL = true, FR = true }
-local ACTIONS = { "NC_Handbrake", "NC_Nitro", "NC_Exit", "NC_Flip" }
+local ACTIONS = { "NC_Handbrake", "NC_Nitro", "NC_Flip" }
 local CAMERA_STEP = "NC_DriveCamera"
 
-local CRASH_MIN = 8 -- studs/s of unexplained speed loss that counts as a crash
-local CRASH_GAP = 0.35 -- seconds between crash effects
-local JUMP_STUDS = 5 -- moved this far off its predicted path: a teleport (flip, race reset), not a crash
+-- Keyboard steering: how fast the wheel turns (full lock = 1), per second.
+local STEER_IN_SLOW = 8 -- at a standstill: full lock in about 0.12 s
+local STEER_IN_FAST = 3.5 -- at top speed: about 0.3 s, so a tap is a lane change, not a swerve
+local STEER_BACK = 10 -- back to centre, the other way, or flicking into a drift
+
+-- Chase camera
+local CAM_DIST = 13.5 -- studs from the car at rest (a long car or boat: its half diagonal + 3.5; a tall one: CAM_TALL_*)
+-- A tall body (a van's roof): the rest view clears CAM_ROOF studs over the chassis centre at a car's tail
+-- (every car is under it, the boxiest SUV only just). Each stud of roof above that (up to CAM_TALL_MAX)
+-- lifts the camera and the point it looks at by CAM_TALL_LIFT and backs it off by CAM_TALL_BACK.
+-- (Estimated from the mesh proportions: if an ordinary car's camera moves, raise CAM_ROOF.)
+local CAM_ROOF = 5
+local CAM_TALL_LIFT = 1
+local CAM_TALL_BACK = 2.5
+local CAM_TALL_MAX = 3
+local CAM_DIST_SPEED = 5.5 -- more at top speed
+local CAM_ELEVATION = math.rad(18) -- how far above the car's level the camera sits (the road must show over the roof)
+local CAM_ANCHOR_UP = 1.6 -- the point the camera circles, above the chassis centre
+local CAM_LOOK_UP = 2.6 -- the camera looks at a point this high...
+local CAM_LOOK_AHEAD = 8 -- ...and this far past the car
+local CAM_TURN = 6 -- per second: how fast the camera swings round behind the car
+local CAM_LEAD = 0.3 -- seconds of turning the camera looks ahead in a corner
+local CAM_LEAD_MAX = 0.45 -- radians
+local CAM_FOLLOW = 24 -- per second: how tightly the camera's position follows (stunt jumps: 2)
+local LOOK_HOLD = 1.5 -- seconds after free look stops before the camera eases back
+local LOOK_RETURN = 4 -- per second
+local MOUSE_SENS = 0.0045 -- radians per pixel
+local TOUCH_SENS = 0.006
+local STICK_YAW, STICK_PITCH = 2.6, 1.6 -- radians per second at full stick
+local LOOK_PITCH_MIN = math.rad(3) - CAM_ELEVATION -- never under the road
+local LOOK_PITCH_MAX = math.rad(65) - CAM_ELEVATION
+-- Speed hum: past this share of top speed the camera starts to wobble, up to CAM_HUM studs flat out,
+-- plus CAM_HUM_NITRO while the nitro burns (math.noise swings about half of that either way).
+local CAM_HUM_FROM = 0.7
+local CAM_HUM = 0.1
+local CAM_HUM_NITRO = 0.08
+
+-- Front wheels (looks only): full steering lock, and how far they may swing toward the travel
+-- direction in a slide (radians).
+local WHEEL_LOCK = 0.45
+local WHEEL_SLIDE_LOCK = 0.6
 
 local state = nil
 local exitRemote = nil
-local rumbleToken = 0
-local ridingSeat = nil -- the seat while Status.Riding
-local exitAt, exitSeat = 0, nil -- the last exit request and the seat it was for
+local startToken = 0 -- bumps on every seat change; a waiting start gives up when it no longer matches
+local promptsShown = {} -- [prompt] = true while it's on screen (E gets you out only when none of them uses E)
 
-local function setRumble(strength)
-	local pad = Enum.UserInputType.Gamepad1
-	pcall(function()
-		if not UserInputService:GetGamepadConnected(pad) or not HapticService:IsMotorSupported(pad, Enum.VibrationMotor.Large) then
-			return
+-- Is a prompt that E would trigger on screen right now? Asked of the prompts themselves, not of a count
+-- of PromptShown / PromptHidden: one that was destroyed or streamed out, switched off, or hidden by
+-- PromptGate (MaxActivationDistance 0) is forgotten here even if its PromptHidden never came, so E can't
+-- get stuck belonging to a prompt that isn't there. Prompts on another key (Cuff is Q) never block E.
+local function ePromptShowing()
+	if not ProximityPromptService.Enabled then
+		return false
+	end
+	local found = false
+	for prompt in pairs(promptsShown) do
+		if prompt.Enabled and prompt.MaxActivationDistance > 0 and prompt:IsDescendantOf(Workspace) then
+			if prompt.KeyboardKeyCode == Enum.KeyCode.E then
+				found = true
+			end
+		else
+			promptsShown[prompt] = nil
 		end
-		HapticService:SetMotor(pad, Enum.VibrationMotor.Large, strength)
-		HapticService:SetMotor(pad, Enum.VibrationMotor.Small, strength * 0.6)
-	end)
+	end
+	return found
 end
+local lastExit = 0
 
-local function rumble(strength)
-	rumbleToken += 1
-	local token = rumbleToken
-	setRumble(strength)
-	task.delay(0.12 + 0.25 * strength, function()
-		if token == rumbleToken then
-			setRumble(0)
+-- Everything CarPhysics and the wheel visuals read. A car spawned a moment ago may still be arriving.
+local NEEDED = { "NCVehicle", "MaxSpeed", "Accel", "SpringHz", "RestLength", "WheelRadius" }
+local function carReady(car)
+	local chassis = car and car:IsA("Model") and car.PrimaryPart
+	if not chassis then
+		return false
+	end
+	for _, a in ipairs(NEEDED) do
+		if car:GetAttribute(a) == nil then
+			return false
 		end
-	end)
+	end
+	if not chassis:FindFirstChild("DriveForce") or not chassis:FindFirstChild("BodyTorque") then
+		return false
+	end
+	for _, name in ipairs(WHEELS) do
+		if not chassis:FindFirstChild("Wheel" .. name) or not chassis:FindFirstChild("Force" .. name) then
+			return false
+		end
+	end
+	return true
 end
 
--- Sound, shake and rumble for a crash of `hit` studs/s.
-local function crash(s, hit)
-	s.LastCrash = os.clock()
-	local strength = math.clamp(hit / 60, 0.2, 1)
-	s.Shake = math.max(s.Shake, strength)
-	pcall(function()
-		require(script.Parent.SoundClient).Play("Crash", s.Chassis, 0.4 + 0.8 * strength)
-	end)
-	rumble(strength)
+-- The seat's ThrottleFloat / SteerFloat come from Roblox's control scripts, and those can miss a seat
+-- the server put you in (the car that "won't drive until you get out and back in"). So whenever the
+-- seat reads zero, the keys, triggers and sticks are read directly.
+local K = Enum.KeyCode
+local controls = nil -- Roblox's ControlModule (the phone thumbstick), found on first use
+local function rawInput()
+	if UserInputService:GetFocusedTextBox() then
+		return 0, 0
+	end
+	local t, st = 0, 0
+	if UserInputService:IsKeyDown(K.W) or UserInputService:IsKeyDown(K.Up) then
+		t += 1
+	end
+	if UserInputService:IsKeyDown(K.S) or UserInputService:IsKeyDown(K.Down) then
+		t -= 1
+	end
+	if UserInputService:IsKeyDown(K.D) or UserInputService:IsKeyDown(K.Right) then
+		st += 1
+	end
+	if UserInputService:IsKeyDown(K.A) or UserInputService:IsKeyDown(K.Left) then
+		st -= 1
+	end
+	if UserInputService.GamepadEnabled then
+		for _, input in ipairs(UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1)) do
+			if input.KeyCode == K.ButtonR2 then
+				t += input.Position.Z
+			elseif input.KeyCode == K.ButtonL2 then
+				t -= input.Position.Z
+			elseif input.KeyCode == K.Thumbstick1 and math.abs(input.Position.X) > 0.15 then
+				st += input.Position.X
+			end
+		end
+	end
+	if st == 0 and UserInputService.TouchEnabled then
+		if controls == nil then
+			local ok, c = pcall(function()
+				return require(player.PlayerScripts:WaitForChild("PlayerModule", 1)):GetControls()
+			end)
+			controls = ok and c or false
+		end
+		if controls then
+			local x = controls:GetMoveVector().X
+			if math.abs(x) > 0.15 then
+				st = x
+			end
+		end
+	end
+	return math.clamp(t, -1, 1), math.clamp(st, -1, 1)
 end
 
--- Did the car just hit something? Compares this step's velocity with the last one.
-local function detectCrash(s, phys, dt)
-	local chassis = s.Chassis
-	local vel = chassis.AssemblyLinearVelocity
-	local pos = chassis.Position
-	local prevVel, prevPos = s.LastVel, s.LastPos
-	s.LastVel, s.LastPos = vel, pos
-	if not prevVel or chassis.Anchored then
-		return
+local function steerKeyDown()
+	return UserInputService:IsKeyDown(K.A) or UserInputService:IsKeyDown(K.D)
+		or UserInputService:IsKeyDown(K.Left) or UserInputService:IsKeyDown(K.Right)
+end
+
+-- Keys steer in jumps (-1, 0, 1), which made the car twitch: turn the wheel toward the key instead.
+-- A stick or the phone thumbstick (anything that isn't a held steering key) passes through untouched.
+local function easeSteer(s, raw, dt, handbrake)
+	if raw ~= 0 then
+		s.KeySteer = math.abs(raw) == 1 and steerKeyDown()
 	end
-	if (pos - (prevPos + (prevVel + vel) * (dt / 2))).Magnitude > JUMP_STUDS then
-		return -- moved by a script
+	if not s.KeySteer then
+		s.SteerOut = raw
+		return raw
 	end
-	local h0 = Vector3.new(prevVel.X, 0, prevVel.Z)
-	local h1 = Vector3.new(vel.X, 0, vel.Z)
-	local look = chassis.CFrame.LookVector
-	local fwd = Vector3.new(look.X, 0, look.Z)
-	local slide = fwd.Magnitude > 0.2 and math.abs(h0:Dot(fwd.Unit:Cross(Vector3.yAxis))) or h0.Magnitude
-	local excess = CarPhysics.ImpactExcess(h0.Magnitude, h1.Magnitude, prevVel.Magnitude, vel.Magnitude, slide, dt,
-		s.Cfg.Brake or 120, s.Cfg.TireFriction or 1.7, phys.Flat, 2)
-	-- A crash can spread over a few steps: add them up, fading fast.
-	s.CrashAcc = s.CrashAcc * math.exp(-dt * 10) + excess
-	if s.CrashAcc > CRASH_MIN and os.clock() - s.LastCrash > CRASH_GAP then
-		crash(s, s.CrashAcc)
-		s.CrashAcc = 0
+	local cur = s.SteerOut
+	local rate
+	if raw == 0 or raw * cur < 0 or handbrake then
+		rate = STEER_BACK
+	else
+		local frac = math.clamp(math.abs(s.Phys.FwdSpeed) / s.Cfg.MaxSpeed, 0, 1)
+		rate = STEER_IN_SLOW + (STEER_IN_FAST - STEER_IN_SLOW) * frac
 	end
+	if cur < raw then
+		cur = math.min(raw, cur + rate * dt)
+	else
+		cur = math.max(raw, cur - rate * dt)
+	end
+	s.SteerOut = cur
+	return cur
 end
 
 local function physicsStep(dt)
@@ -136,28 +249,41 @@ local function physicsStep(dt)
 	end
 	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	if not s.Chassis:IsDescendantOf(Workspace) or not hum or hum.SeatPart ~= s.Seat then
+		-- (why, for the Output window: when the seat is still ours, watchCharacter's safety net starts again)
+		DriveController.LastStop = not hum and "no humanoid"
+			or (hum.SeatPart ~= s.Seat and ("seat is now " .. tostring(hum.SeatPart)) or "chassis left the Workspace")
 		DriveController.Stop()
 		return
 	end
 	local i = DriveController.Input
 	local phys = s.Phys
-	CarPhysics.Step(phys, dt, {
-		Throttle = i.Throttle or s.Seat.ThrottleFloat,
-		Steer = i.Steer or s.Seat.SteerFloat,
-		Handbrake = i.Handbrake,
-		Nitro = i.Nitro,
-	})
-	detectCrash(s, phys, dt)
+	local throttle, steer = i.Throttle or s.Seat.ThrottleFloat, i.Steer or s.Seat.SteerFloat
+	if throttle == 0 or steer == 0 then
+		local rt, rs = rawInput()
+		throttle = (throttle == 0 and i.Throttle == nil) and rt or throttle
+		steer = (steer == 0 and i.Steer == nil) and rs or steer
+	end
+	if i.Steer == nil then
+		steer = easeSteer(s, steer, dt, i.Handbrake)
+	end
+	local step = s.StepInput -- one table for the whole drive: nothing new to collect every step
+	step.Throttle, step.Steer, step.Handbrake, step.Nitro = throttle, steer, i.Handbrake, i.Nitro
+	CarPhysics.Step(phys, dt, step)
 	local status = DriveController.Status
 	status.Speed = phys.FwdSpeed
+	status.Throttle = throttle
+	status.Steer = steer
 	status.MaxSpeed = s.Cfg.MaxSpeed
 	status.NitroFuel = phys.NitroFuel
 	status.NitroActive = phys.NitroOn
-	status.NitroEmpty = phys.NitroEmpty == true
 	status.Flat = phys.Flat
-	status.Health = phys.Health
-	status.Stalled = phys.Stalled
-	status.Limp = phys.Limp
+	status.SlipAngle = phys.SlipAngle
+	status.Drifting = phys.Drifting
+end
+
+-- a - b, the short way round (-pi..pi)
+local function angleDiff(a, b)
+	return (a - b + math.pi) % (2 * math.pi) - math.pi
 end
 
 -- Camera and wheel visuals (every frame)
@@ -172,59 +298,140 @@ local function renderStep(dt)
 	local camera = Workspace.CurrentCamera
 	local cf = chassis.CFrame
 	local pos = cf.Position
-	local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-	flat = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, -1)
+	local look = cf.LookVector
 	local vel = chassis.AssemblyLinearVelocity
-	local velFlat = Vector3.new(vel.X, 0, vel.Z)
-	local speedFrac = math.clamp(velFlat.Magnitude / cfg.MaxSpeed, 0, 1.2)
-
-	-- Look slightly along the direction of travel so drifts show the car sliding.
-	local dir = flat
-	if velFlat.Magnitude > 20 and velFlat.Unit:Dot(flat) > 0.2 then
-		dir = (flat * 0.7 + velFlat.Unit * 0.3).Unit
-	end
-	local dist = 13.5 + speedFrac * 5
-	local height = 5.2 + speedFrac * 1.2
-	local target = pos - dir * dist + Vector3.new(0, height, 0)
-	local lookAt = pos + flat * 8 + Vector3.new(0, 2.2, 0)
-	-- Keep the camera out of walls (never people: the ignore list picks up riders who sat down later).
-	if os.clock() - (s.CamListAt or 0) > 1 then
-		s.CamListAt = os.clock()
-		local ignore = { s.Car, Workspace:FindFirstChild("Vehicles"), Workspace:FindFirstChild("Smoke") }
-		for _, p in ipairs(Players:GetPlayers()) do
-			if p.Character then
-				table.insert(ignore, p.Character)
-			end
-		end
-		s.CamParams.FilterDescendantsInstances = ignore
-	end
-	local toCam = target - lookAt
-	local hit = Workspace:Raycast(lookAt, toCam, s.CamParams)
-	if hit then
-		target = hit.Position - toCam.Unit * 1.2
-	end
+	local flatSpeed = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
+	local speedFrac = math.clamp(flatSpeed / cfg.MaxSpeed, 0, 1.2)
 	-- Stunt jumps: a lazier, wider camera while airborne feels like slow motion.
 	local inStunt = player:GetAttribute("InStunt") == true
-	local alpha = 1 - math.exp(-dt * (inStunt and 2 or 8))
-	s.CamPos = s.CamPos and s.CamPos:Lerp(target, alpha) or target
-	camera.CameraType = Enum.CameraType.Scriptable
-	-- Crash shake: a short jolt that dies away (never fed back into the camera's own smoothing).
-	local shake = CFrame.identity
-	if s.Shake > 0.02 then
-		s.Shake *= math.exp(-dt * 7)
-		local a, t = s.Shake, os.clock() * 37
-		shake = CFrame.new(math.noise(t, 0.31) * a * 1.4, math.noise(t, 7.13) * a * 1.1, 0)
-			* CFrame.Angles(0, 0, math.noise(t, 13.7) * a * 0.06)
-	else
-		s.Shake = 0
+
+	-- Which way the camera faces (a heading: 0 looks along -Z, growing to the left). Mostly the car's
+	-- nose, plus part of the way toward where the car is really going (so a drift shows the car
+	-- sideways), plus a little ahead of the turn so you see into the corner.
+	local carYaw = s.CarYaw
+	if look.X * look.X + look.Z * look.Z > 0.01 then
+		carYaw = math.atan2(-look.X, -look.Z)
+		s.CarYaw = carYaw
 	end
-	camera.CFrame = CFrame.lookAt(s.CamPos, lookAt) * shake
-	local fov = 70 + 14 * math.min(speedFrac, 1) + (phys.NitroOn and 8 or 0) + (inStunt and 12 or 0)
+	local travel, sliding = 0, 0
+	if flatSpeed > 20 then
+		local off = angleDiff(math.atan2(-vel.X, -vel.Z), carYaw)
+		if math.abs(off) < 1.37 then -- moving nose first (within about 78 degrees of it)
+			sliding = math.clamp((math.deg(math.abs(off)) - 8) / 20, 0, 1)
+			travel = off * (0.3 + 0.3 * sliding)
+		end
+	end
+	local lead = math.clamp(chassis.AssemblyAngularVelocity.Y * (CAM_LEAD - 0.2 * sliding), -CAM_LEAD_MAX, CAM_LEAD_MAX)
+		* math.clamp(phys.FwdSpeed / 30, 0, 1)
+	s.CamYaw += angleDiff(carYaw + travel + lead, s.CamYaw) * (1 - math.exp(-dt * (inStunt and 2 or CAM_TURN)))
+
+	-- Free look: right mouse button, right stick, or a finger dragged on the right of the screen
+	-- (the stick and the finger are tracked by the connections made in Start).
+	local looking = false
+	if UserInputService.MouseEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+		and not UserInputService:GetFocusedTextBox() then
+		s.MouseLocked = true
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCurrentPosition then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		end
+		local delta = UserInputService:GetMouseDelta()
+		s.LookYaw -= delta.X * MOUSE_SENS
+		s.LookPitch += delta.Y * MOUSE_SENS
+		looking = true
+	elseif s.MouseLocked then
+		s.MouseLocked = false
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	end
+	if s.StickX ~= 0 or s.StickY ~= 0 then
+		s.LookYaw -= s.StickX * STICK_YAW * dt
+		s.LookPitch -= s.StickY * STICK_PITCH * dt
+		looking = true
+	end
+	local finger = s.LookTouch
+	if finger then
+		local st = finger.UserInputState
+		if st == Enum.UserInputState.End or st == Enum.UserInputState.Cancel then
+			s.LookTouch = nil -- the lift was missed (app switch): don't hold the view forever
+		else
+			looking = true
+		end
+	end
+	if looking then
+		s.LookIdle = 0
+	else
+		s.LookIdle += dt
+		if s.LookIdle > LOOK_HOLD then
+			local back = 1 - math.exp(-dt * LOOK_RETURN)
+			s.LookYaw -= s.LookYaw * back
+			s.LookPitch -= s.LookPitch * back
+		end
+	end
+	s.LookYaw = angleDiff(s.LookYaw, 0)
+	s.LookPitch = math.clamp(s.LookPitch, LOOK_PITCH_MIN, LOOK_PITCH_MAX)
+
+	-- Where the camera sits: on a circle round the car, further out the faster it goes. The height
+	-- follows the body softly so the suspension's bounce doesn't shake the picture.
+	local yaw = s.CamYaw + s.LookYaw
+	local elevation = CAM_ELEVATION + s.LookPitch
+	local dirX, dirZ = -math.sin(yaw), -math.cos(yaw)
+	local distWant = s.DistRest + CAM_DIST_SPEED * speedFrac + (inStunt and 3 or 0)
+	s.CamDist += (distWant - s.CamDist) * (1 - math.exp(-dt * 3))
+	s.CamY += (pos.Y - s.CamY) * (1 - math.exp(-dt * 10))
+	local baseY = s.CamY
+	local dist = s.CamDist
+	local back = dist * math.cos(elevation)
+	local origin = Vector3.new(pos.X, baseY + CAM_LOOK_UP + s.Lift, pos.Z)
+	local target = Vector3.new(pos.X - dirX * back, baseY + CAM_ANCHOR_UP + s.Lift + dist * math.sin(elevation), pos.Z - dirZ * back)
+	-- Keep the camera out of walls.
+	local toCam = target - origin
+	local hit = Workspace:Raycast(origin, toCam, s.CamParams)
+	if hit then
+		target = origin + toCam.Unit * math.max(hit.Distance - 1.2, 0.5)
+		-- A wall right behind the car would push the camera into the cabin: go over the roof instead.
+		local hx, hz = target.X - pos.X, target.Z - pos.Z
+		local inside = s.Radius + 1 - math.sqrt(hx * hx + hz * hz)
+		if inside > 0 then
+			target = Vector3.new(target.X, math.max(target.Y, baseY + s.RoofUp + 1 + inside * 0.3), target.Z)
+		end
+	end
+	-- Lazy at once when a stunt starts, back to tight over about a second after the landing.
+	if inStunt then
+		s.CamRate = 2
+	else
+		s.CamRate += (CAM_FOLLOW - s.CamRate) * (1 - math.exp(-dt * 3))
+	end
+	s.CamPos = s.CamPos and s.CamPos:Lerp(target, 1 - math.exp(-dt * s.CamRate)) or target
+	-- Look past the car along the camera's own heading (less far when looking down from above).
+	local ahead = CAM_LOOK_AHEAD * math.clamp(1 - s.LookPitch / 0.7, 0.2, 1)
+	local lookAt = Vector3.new(pos.X + dirX * ahead, baseY + CAM_LOOK_UP + s.Lift, pos.Z + dirZ * ahead)
+	-- Near top speed and on nitro the picture hums a little, so flat out feels fast: a small wobble of
+	-- the camera itself (s.CamPos stays smooth, and the wall check's 1.2 stud margin covers it).
+	local camAt = s.CamPos
+	local buzz = math.clamp((speedFrac - CAM_HUM_FROM) / (1 - CAM_HUM_FROM), 0, 1) * CAM_HUM
+		+ (phys.NitroOn and CAM_HUM_NITRO or 0)
+	if buzz > 0 and not inStunt then
+		local t = os.clock() * 23
+		camAt += Vector3.new(math.noise(t, 1.7) * buzz, math.noise(t, 5.3) * buzz, math.noise(t, 9.1) * buzz)
+	end
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.lookAt(camAt, lookAt)
+	local fov = 70 + 12 * math.min(speedFrac, 1) + (phys.NitroOn and 8 or 0) + (inStunt and 12 or 0)
 	camera.FieldOfView += (fov - camera.FieldOfView) * (1 - math.exp(-dt * 4))
 
 	-- Wheels: follow the suspension, steer, spin. Mesh bodies can have bigger or smaller wheels than
 	-- the physics radius, so each wheel uses its own size (s.WheelR).
 	s.Spin = (s.Spin + phys.FwdSpeed / (s.WheelR or cfg.WheelRadius) * dt) % (math.pi * 2)
+	-- The front wheels show the steering, except in a slide: as the tyres let go (phys.Slide) they swing
+	-- round to point where the car is really going, the counter-steer look of a real drift.
+	local wheelSteer = -phys.Steer * WHEEL_LOCK
+	if phys.Slide > 0 then
+		local along = vel:Dot(look)
+		if along > 5 then
+			-- (positive = left, like wheelSteer: in a slide to the right the car moves left of its nose)
+			local aim = math.clamp(math.atan2(-vel:Dot(cf.RightVector), along), -WHEEL_SLIDE_LOCK, WHEEL_SLIDE_LOCK)
+			wheelSteer += (aim - wheelSteer) * phys.Slide
+		end
+	end
 	for _, name in ipairs(WHEELS) do
 		local hub = s.Hubs[name]
 		if hub then
@@ -232,7 +439,7 @@ local function renderStep(dt)
 			local hitW = phys.Hits[name]
 			local r = s.WheelR or cfg.WheelRadius
 			local drop = hitW and (hitW.Distance - r) or (cfg.RestLength + cfg.WheelRadius - r)
-			local steerAng = FRONT[name] and -phys.Steer * 0.45 or 0
+			local steerAng = FRONT[name] and wheelSteer or 0
 			-- Hub.C0 holds the rest position; Transform adds suspension travel, steering and spin.
 			hub.Transform = CFrame.new(0, (s.AttY - drop) - base.Y, 0) * CFrame.Angles(0, steerAng, 0) * CFrame.Angles(-s.Spin, 0, 0)
 		end
@@ -240,13 +447,6 @@ local function renderStep(dt)
 end
 
 local function onAction(name, inputState)
-	if name == "NC_Exit" then
-		-- Drivers and passengers alike.
-		if inputState == Enum.UserInputState.Begin then
-			DriveController.Exit()
-		end
-		return Enum.ContextActionResult.Sink
-	end
 	if not state then
 		return Enum.ContextActionResult.Pass
 	end
@@ -261,55 +461,31 @@ local function onAction(name, inputState)
 	return Enum.ContextActionResult.Sink
 end
 
--- Is this one of our cars' seats (driver or passenger)?
-local function carSeat(seat)
-	local car = seat and seat.Parent
-	return car ~= nil and car:GetAttribute("NCVehicle") == true and (seat:IsA("VehicleSeat") or seat:IsA("Seat"))
-end
-
-local function myHumanoid()
-	return player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-end
-
--- Get out (F / B / EXIT). The server finds the seat, puts you beside the car and answers ExitedCar.
+-- Get out of whatever seat the character is in (driver, passenger, any seat). The server steps you out
+-- beside your door; if it hasn't a moment later (lag, an odd seat), the character just stands up.
 function DriveController.Exit()
-	local hum = myHumanoid()
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	local seat = hum and hum.SeatPart
-	if not hum or not seat or not exitRemote then
+	if not seat or os.clock() - lastExit < 0.3 then
 		return
 	end
-	local now = os.clock()
-	if now - exitAt < 0.25 then
-		return -- one press, two routes (CAS and the keyboard fallback)
+	-- Just sat down through InteractClient's acted get-in: a second press that was meant to skip ahead
+	-- must not get us straight back out (InteractClient sets this for half a second).
+	if os.clock() < (DriveController.NoExitUntil or 0) then
+		return
 	end
-	exitAt, exitSeat = now, seat
-	exitRemote:FireServer()
-	task.delay(0.8, function()
-		if exitAt == now and hum.Parent and hum.SeatPart == seat then
-			if RunService:IsStudio() then
-				warn("[DriveController] still in " .. seat:GetFullName() .. " 0.8 s after asking to get out; asking again")
-			end
-			exitAt = os.clock()
-			exitRemote:FireServer() -- still in the same seat: ask once more
+	lastExit = os.clock()
+	if exitRemote then
+		exitRemote:FireServer()
+	end
+	local token = startToken -- (bumps on every seat change: out and back into the same seat is not "still seated")
+	task.delay(0.7, function()
+		if hum.Parent and hum.SeatPart == seat and startToken == token then
+			hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+			hum.Sit = false
+			hum.Jump = true
 		end
 	end)
-end
-
-local function startRiding(seat)
-	ridingSeat = seat
-	DriveController.Status.Riding = true
-	ContextActionService:BindActionAtPriority("NC_Exit", onAction, false, 3000, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
-end
-
-local function stopRiding()
-	if not ridingSeat then
-		return
-	end
-	ridingSeat = nil
-	DriveController.Status.Riding = false
-	if not state then
-		ContextActionService:UnbindAction("NC_Exit")
-	end
 end
 
 -- Put an upside-down or stuck car back on its wheels.
@@ -328,18 +504,14 @@ function DriveController.Flip()
 	s.Car:PivotTo(CFrame.lookAt(p, p + flat))
 	chassis.AssemblyLinearVelocity = Vector3.zero
 	chassis.AssemblyAngularVelocity = Vector3.zero
-	s.LastVel = nil -- not a crash
 end
 
 function DriveController.Start(seat)
 	local car = seat.Parent
-	if state or not car or not car:GetAttribute("NCVehicle") or not car.PrimaryPart then
-		return false
+	if state or not carReady(car) then
+		return
 	end
 	local chassis = car.PrimaryPart
-	if not chassis:FindFirstChild("WheelFL") or not chassis:FindFirstChild("DriveForce") then
-		return false -- not all here yet (streaming): refresh() tries again
-	end
 	local camParams = RaycastParams.new()
 	camParams.FilterType = Enum.RaycastFilterType.Exclude
 	local ignore = { car, player.Character, Workspace.Vehicles, Workspace:FindFirstChild("Smoke") }
@@ -351,22 +523,50 @@ function DriveController.Start(seat)
 	camParams.FilterDescendantsInstances = ignore
 	camParams.IgnoreWater = true
 
+	-- The car's footprint, for a camera that never ends up inside it. A mesh body can be bigger than
+	-- the chassis (never trust it past 1.5 x, in case something odd is welded on).
+	local size = chassis.Size
+	local extents = car:GetExtentsSize()
+	local width = math.clamp(extents.X, size.X, size.X * 1.5)
+	local length = math.clamp(extents.Z, size.Z, size.Z * 1.5)
+	local radius = math.sqrt(width * width + length * length) / 2
+	-- The real roof (the top of the car's box, over the chassis centre): a tall body lifts the camera.
+	local box = car:GetBoundingBox()
+	local roof = chassis.CFrame:PointToObjectSpace(box.Position).Y + extents.Y / 2
+	local tall = math.clamp(roof - CAM_ROOF, 0, CAM_TALL_MAX)
+	local distRest = math.max(CAM_DIST, radius + 3.5) + tall * CAM_TALL_BACK
+	local look = chassis.CFrame.LookVector
+	local yaw = math.atan2(-look.X, -look.Z)
 	local s = {
 		Car = car,
 		Seat = seat,
 		Chassis = chassis,
-		Cfg = car:GetAttributes(),
-		Phys = CarPhysics.New(car, { player.Character }),
+		Cfg = nil, -- set below, with Phys
+		Phys = nil,
+		StepInput = {},
+		SteerOut = 0, -- the eased steering sent to the physics
+		KeySteer = false, -- is a key (not a stick) steering right now?
 		CamParams = camParams,
 		Hubs = {},
 		WheelBase = {},
 		Spin = 0,
 		CamPos = nil,
-		LastVel = nil,
-		LastPos = nil,
-		CrashAcc = 0,
-		LastCrash = 0,
-		Shake = 0,
+		CamYaw = yaw,
+		CarYaw = yaw,
+		CamY = chassis.Position.Y,
+		CamRate = CAM_FOLLOW,
+		Radius = radius,
+		RoofUp = math.max(size.Y / 2 + 2.8, extents.Y * 0.6, roof), -- roof height above the chassis centre
+		Lift = tall * CAM_TALL_LIFT, -- camera and look point raised over a tall body (0 for a car)
+		DistRest = distRest,
+		CamDist = distRest,
+		LookYaw = 0, -- free look, on top of the chase heading
+		LookPitch = 0,
+		LookIdle = LOOK_HOLD,
+		StickX = 0,
+		StickY = 0,
+		LookTouch = nil, -- the finger that is dragging the view
+		MouseLocked = false,
 	}
 	for _, name in ipairs(WHEELS) do
 		local wheel = car:FindFirstChild("Wheel" .. name)
@@ -378,13 +578,44 @@ function DriveController.Start(seat)
 		end
 	end
 	s.AttY = chassis:FindFirstChild("WheelFL").Position.Y
+	-- Made last, once nothing above can fail any more: it listens to the car's attributes until Stop.
+	s.Phys = CarPhysics.New(car, { player.Character })
+	s.Cfg = s.Phys.Cfg -- CarPhysics' own table: it follows the car's attributes live (tune-ups)
 	state = s
+
+	-- Free look from the right stick and from a finger on the right-hand side of the screen (the left is
+	-- Roblox's thumbstick; taps on buttons arrive as "processed" and are left alone).
+	s.InputConns = {
+		UserInputService.InputChanged:Connect(function(input)
+			if input.KeyCode == K.Thumbstick2 then
+				local p = input.Position
+				s.StickX = math.abs(p.X) > 0.2 and p.X or 0
+				s.StickY = math.abs(p.Y) > 0.2 and p.Y or 0
+			elseif input == s.LookTouch then
+				local d = input.Delta
+				s.LookYaw -= d.X * TOUCH_SENS
+				s.LookPitch += d.Y * TOUCH_SENS
+			end
+		end),
+		UserInputService.InputBegan:Connect(function(input, processed)
+			if input.UserInputType == Enum.UserInputType.Touch and not processed and not s.LookTouch
+				and input.Position.X > Workspace.CurrentCamera.ViewportSize.X * 0.4 then
+				s.LookTouch = input
+			end
+		end),
+		UserInputService.InputEnded:Connect(function(input)
+			if input == s.LookTouch then
+				s.LookTouch = nil
+			elseif input.KeyCode == K.Thumbstick2 then
+				s.StickX, s.StickY = 0, 0
+			end
+		end),
+	}
 
 	s.PhysicsConn = RunService.PreSimulation:Connect(physicsStep)
 	RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, renderStep)
 	ContextActionService:BindActionAtPriority("NC_Handbrake", onAction, false, 3000, Enum.KeyCode.Space, Enum.KeyCode.ButtonX)
 	ContextActionService:BindActionAtPriority("NC_Nitro", onAction, false, 3000, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonY)
-	ContextActionService:BindActionAtPriority("NC_Exit", onAction, false, 3000, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
 	ContextActionService:BindActionAtPriority("NC_Flip", onAction, false, 3000, Enum.KeyCode.R, Enum.KeyCode.DPadUp)
 	-- No jumping while seated: jumping throws the driver out (gamepad A, the phone jump button).
 	-- Roblox hides its own jump button when the Jumping state is off. Exit uses F / B / EXIT.
@@ -394,7 +625,6 @@ function DriveController.Start(seat)
 	end
 	DriveController.Status.Driving = true
 	DriveController.Status.Car = car
-	return true
 end
 
 function DriveController.Stop()
@@ -406,6 +636,12 @@ function DriveController.Stop()
 	if s.PhysicsConn then
 		s.PhysicsConn:Disconnect()
 	end
+	for _, conn in ipairs(s.InputConns or {}) do
+		conn:Disconnect()
+	end
+	if s.MouseLocked then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default -- free look was on: give the mouse back
+	end
 	RunService:UnbindFromRenderStep(CAMERA_STEP)
 	for _, a in ipairs(ACTIONS) do
 		ContextActionService:UnbindAction(a)
@@ -415,10 +651,9 @@ function DriveController.Stop()
 	i.Handbrake, i.Nitro = false, false
 	local status = DriveController.Status
 	status.Driving, status.Car, status.Speed, status.NitroActive, status.Flat = false, nil, 0, false, false
-	status.NitroEmpty = false
-	status.Health, status.Stalled, status.Limp = 100, false, false
-	rumbleToken += 1
-	setRumble(0)
+	status.Throttle = 0
+	status.Steer = 0
+	status.SlipAngle, status.Drifting = 0, false
 	local camera = Workspace.CurrentCamera
 	camera.CameraType = Enum.CameraType.Custom
 	camera.FieldOfView = 70
@@ -429,109 +664,132 @@ function DriveController.Stop()
 	end
 end
 
--- Match driving / riding to the seat the character is in now. Always stop first, so switching straight
--- from one seat to another (or a respawn) can't leave stale state.
-local function refresh()
-	local hum = myHumanoid()
-	local seat = hum and hum.Health > 0 and hum.SeatPart or nil
-	if state and seat == state.Seat then
-		return
-	end
-	if ridingSeat and seat == ridingSeat and not (seat:IsA("VehicleSeat") and seat.Name == "DriverSeat") then
-		return
-	end
-	DriveController.Stop()
-	stopRiding()
-	if seat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat" then
-		if DriveController.Start(seat) then
-			return
-		end
-		if RunService:IsStudio() then
-			warn("[DriveController] driver seat of " .. tostring(seat.Parent) .. " but the car isn't ready to drive yet; F / EXIT still work")
-		end
-	end
-	if seat and carSeat(seat) then
-		startRiding(seat) -- a passenger (or a driver whose car is still streaming in): F / EXIT still work
-	end
-end
-
--- The server let go of us (any seat): make sure this device does too.
-local function onExited(spot)
-	local hum = myHumanoid()
-	if not hum then
-		return
-	end
-	local seat = hum.SeatPart
-	local asked = seat ~= nil and seat == exitSeat
-	if seat and not asked then
-		return -- already in another seat (put out of one car, straight into the next)
-	end
-	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	if seat and root and root:IsA("BasePart") then
-		for _, j in ipairs(root:GetJoints()) do
-			if j:IsA("JointInstance") and j.Name == "SeatWeld" then
-				j:Destroy()
-			end
-		end
-	end
-	hum.Sit = false
-	if hum:GetState() == Enum.HumanoidStateType.Seated then
-		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-	end
-	if asked and root and root:IsA("BasePart") and typeof(spot) == "CFrame" and (root.Position - spot.Position).Magnitude > 4 then
-		root.CFrame = spot
-	end
-	exitSeat = nil
-	refresh()
-end
-
 local function watchCharacter(character)
 	local hum = character:WaitForChild("Humanoid")
-	hum:GetPropertyChangedSignal("SeatPart"):Connect(refresh)
-	hum.Died:Connect(function()
+	hum:GetPropertyChangedSignal("SeatPart"):Connect(function()
+		-- Always stop first, so switching straight from one seat to another can't leave stale state.
 		DriveController.Stop()
-		stopRiding()
+		startToken += 1
+		local token = startToken
+		local seat = hum.SeatPart
+		-- No jumping out of any seat of a car, the passenger's as well as the driver's (Space, gamepad A,
+		-- the phone jump button): a jump let go of a passenger inside the body, and they left through the
+		-- roof of a car that might be moving instead of stepping out beside their door (F / E / B / EXIT).
+		-- A passenger never reaches Start, and Stop does nothing for one, so it is set here on every seat
+		-- change, after the Stop above (which switches jumping back on): off in a car, on again the moment
+		-- the seat clears. A bench or a couch is no car and keeps its jump.
+		local seatCar = seat and seat.Parent
+		hum:SetStateEnabled(Enum.HumanoidStateType.Jumping,
+			not (seatCar and seatCar:IsA("Model") and seatCar:GetAttribute("NCVehicle") == true))
+		if not (seat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat") then
+			return
+		end
+		-- Start now, or as soon as the whole car has reached this device (give up after 20 s).
+		local t0 = os.clock()
+		while token == startToken and hum.SeatPart == seat and seat.Parent do
+			if carReady(seat.Parent) then
+				local ok, err = pcall(DriveController.Start, seat)
+				if ok and state then
+					return
+				elseif not ok then
+					warn("[DriveController] start failed, retrying: " .. tostring(err))
+				end
+			end
+			if os.clock() - t0 > 20 then
+				warn("[DriveController] the car never finished loading")
+				return
+			end
+			task.wait(0.1)
+		end
 	end)
-	refresh()
+	hum.Died:Connect(DriveController.Stop)
+	-- The safety net. Driving is meant to be on exactly while this character sits at the wheel, but the
+	-- start above only runs when the seat CHANGES: if driving stops for any other reason while the seat
+	-- stays the same (the car reached this device in pieces and a part blinked out, the 20 s above ran
+	-- out, something stopped it for one frame), nothing would ever start it again and the car would sit
+	-- dead until the player got out and back in. So a few times a second: at the wheel of a whole car and
+	-- not driving means start.
+	task.spawn(function()
+		local said = false
+		while hum.Parent do
+			task.wait(0.25)
+			local seat = hum.SeatPart
+			if not state and hum.Health > 0 and seat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat"
+				and carReady(seat.Parent) then
+				task.wait(0.15) -- (the start above gets the first go: it is on a 0.1 s beat)
+				if not state and hum.SeatPart == seat and hum.Health > 0 and carReady(seat.Parent) then
+					local ok, err = pcall(DriveController.Start, seat)
+					if not said then
+						said = true
+						warn("[DriveController] driving was off at the wheel of " .. seat.Parent.Name .. ": started again"
+							.. (ok and "" or (" (failed: " .. tostring(err) .. ")"))
+							.. " | last stop: " .. tostring(DriveController.LastStop or "not by the physics step"))
+					end
+				end
+			end
+		end
+	end)
 end
 
 function DriveController.Init()
 	exitRemote = Remotes.Event("RequestExitCar")
-	Remotes.OnClient("ExitedCar", onExited)
+	-- The server's answer to getting out: where to stand, beside the door. This device runs our body, so
+	-- it puts it there itself, the moment the seat has let go here. (The server's own move often lost
+	-- to the seat letting go: the body stood up where it sat and came out through the roof.)
+	Remotes.OnClient("CarExitSpot", function(spot)
+		if typeof(spot) ~= "CFrame" then
+			return
+		end
+		local character = player.Character
+		local hum = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not hum or not root or not root:IsA("BasePart") then
+			return
+		end
+		local t0 = os.clock()
+		while hum.SeatPart ~= nil and os.clock() - t0 < 0.6 do
+			RunService.Heartbeat:Wait()
+		end
+		-- (only a step: never across the map on a late or stray message)
+		if hum.SeatPart == nil and hum.Health > 0 and root.Parent and (root.Position - spot.Position).Magnitude < 40 then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.CFrame = spot
+		end
+	end)
+	-- Getting out, from any seat, whatever the drive state: F / gamepad B, and E when no prompt is up.
+	ProximityPromptService.PromptShown:Connect(function(prompt)
+		promptsShown[prompt] = true
+	end)
+	ProximityPromptService.PromptHidden:Connect(function(prompt)
+		promptsShown[prompt] = nil
+	end)
+	-- Roblox's own menu (Esc / Start): the gamepad B that backs out of it, or an F or E pressed behind it,
+	-- also reached us and put you out of a car that then rolled on without you. So no getting out by key
+	-- while that menu is up, nor in the moment after it shuts (it can shut on the press itself, before the
+	-- press gets here). Not by the "processed" flag: PhoneUI counts on B still getting you out of the car
+	-- while the phone has the selection. EXIT on screen is not a key and is never held back.
+	local GuiService = game:GetService("GuiService")
+	local menuShutAt = 0
+	GuiService.MenuClosed:Connect(function()
+		menuShutAt = os.clock()
+	end)
+	UserInputService.InputBegan:Connect(function(input)
+		local key = input.KeyCode
+		if key ~= Enum.KeyCode.F and key ~= Enum.KeyCode.ButtonB and key ~= Enum.KeyCode.E then
+			return
+		end
+		if GuiService.MenuIsOpen or os.clock() - menuShutAt < 0.2 then
+			return
+		end
+		if UserInputService:GetFocusedTextBox() or (key == Enum.KeyCode.E and ePromptShowing()) then
+			return
+		end
+		DriveController.Exit()
+	end)
 	if player.Character then
 		task.spawn(watchCharacter, player.Character)
 	end
 	player.CharacterAdded:Connect(watchCharacter)
-	-- Keyboard fallback for F: fires even when another binding or a prompt already took the key; not
-	-- while typing in a text box (chat).
-	UserInputService.InputBegan:Connect(function(input)
-		if input.KeyCode ~= Enum.KeyCode.F or UserInputService:GetFocusedTextBox() then
-			return
-		end
-		local hum = myHumanoid()
-		if hum and carSeat(hum.SeatPart) then
-			DriveController.Exit()
-		end
-	end)
-	-- Safety net: twice a second, re-arm driving / riding if a seat change was missed.
-	local nextCheck = 0
-	RunService.Heartbeat:Connect(function()
-		local now = os.clock()
-		if now < nextCheck then
-			return
-		end
-		nextCheck = now + 0.5
-		local hum = myHumanoid()
-		local seat = hum and hum.Health > 0 and hum.SeatPart or nil
-		local want = seat ~= nil and carSeat(seat)
-		local have = (state ~= nil and state.Seat == seat) or (ridingSeat ~= nil and ridingSeat == seat)
-		if want ~= have or (ridingSeat and seat == ridingSeat and seat:IsA("VehicleSeat") and seat.Name == "DriverSeat") then
-			local ok, err = pcall(refresh)
-			if not ok then
-				warn("[DriveController] " .. tostring(err))
-			end
-		end
-	end)
 end
 
 return DriveController

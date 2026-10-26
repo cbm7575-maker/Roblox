@@ -1,178 +1,334 @@
 -- PhoneUI (ModuleScript, StarterPlayerScripts.Controllers.PhoneUI)
--- The in-game phone (PHONE button, P, or D-pad down on a gamepad; tap anywhere around it to put it
--- away). Apps:
---   GARAGE    your cars for your current role (bought, starter, pass and cop-rank cars): DELIVER
---             (spawn) and STYLE. Paint and rims are owned per car: a new colour $500 / rim style
---             $1,500 once, then switching back is free; stock paint and chrome rims always owned.
---             Underglow $3,000 once per car, then free colour swaps (boats: paint only). Every swatch
---             shows its price, OWNED, ON or what unlocks it; buying takes a second tap.
---   AUTONEON  the car dealer: stats, prices, BUY (tap twice to confirm)
+-- The in-game phone (the PHONE tile or P), drawn as a modern smartphone in the flat "street" look
+-- (Shared.Util.Theme): a slim dark body with a thin bezel and small corners, a status bar (the game's
+-- clock from Lighting.ClockTime, your cash in a small island, signal bars and a battery drawn from
+-- frames), a home screen (a dark wallpaper, a big clock when the screen is tall enough, and a grid of
+-- flat square app icons: a white glyph drawn from frames on a coloured tile, a small label under it),
+-- app pages with a clean header (back chevron, the title in the Display font) and list rows separated
+-- by thin lines, flat buttons, and a home bar at the bottom (on a page: back to the home screen; on the
+-- home screen: puts the phone away).
+-- Raising it: the phone comes up from the lower right, tilted like a phone in a hand, and settles
+-- upright in K.Raise seconds; putting it away is the reverse (K.Lower). A turned frame can't clip what
+-- is inside it, so the page is hidden and the glass stays dark while the phone moves, and the screen
+-- lights up once it is upright. While it is up your character holds a phone and looks down at it, legs
+-- still walking (PoseClient's "PhoneLook", shown to everyone; not while seated, and nothing happens if
+-- that controller isn't there).
+-- Sizes: the phone is laid out at a fixed design width (K.W) and a UIScale ("Fit") shrinks it on small
+-- screens (0.7 on a phone). Tap targets are at least Theme.Touch REAL pixels tall after that scale
+-- (touchHeight) and text at least K.MinText real pixels (textPx), so pages measure their rows from those
+-- two instead of fixed numbers, and rows with sentences in them size themselves to their words. A new
+-- screen size draws the open page again.
+-- Its right edge stays left of the HUD's Buttons zone (bodyRight), so the PHONE / CAR tiles stay usable.
+-- Apps:
+--   GARAGE    your cars for your current role (bought, starter, game-pass and cop-rank cars): DELIVER
+--             (spawn), STYLE (paint $500, rims $1,500, underglow $3,000 once per car, then free colour
+--             swaps; thumb-sized swatches, a white ring on the one fitted, a padlock on locked ones);
+--             boats have no STYLE (their hulls keep the factory colours).
+--             TUNE (a strip on every land car that isn't a police car, so the page is two taps from
+--             the home screen; it reads SPEED + SOUND on a stock car): AUTO TUNE on top (shows its
+--             total and what it buys, second tap confirms), bars for top speed / acceleration /
+--             braking / grip / nitro (white = stock, pink = tuned; each bar is scaled to THIS car,
+--             from 70% of stock to fully tuned, so every stage is a step you can see; the numbers on
+--             the right stay absolute), the exhaust picker right under them so both halves of
+--             "faster and better sounding" are on the first screen (sound only: bought once per car,
+--             then free swaps), then the five upgrade tracks with stage pips, the next gain and its
+--             price.
+--             Exhausts: tapping a chip only ever plays its rev (the fitted one too, to compare), as
+--             often as you like, and never costs anything. A chip that isn't bought yet is then
+--             offered on the BUY button in the picker's head row ("BUY $8,000" over "RACE", for
+--             EXHAUST_PICK_TIME seconds; the chip gets a thin pink line): that button is the only
+--             thing that pays for an exhaust, so listening again can't buy one by mistake. A chip
+--             bought earlier fits with one tap (free).
+--             Buying an upgrade works like a tuning shop: the first tap turns the button green (TAP
+--             AGAIN) and shows the gain before you pay, as a see-through pink piece on the bars and
+--             the new number in pink; the second tap sends it and the button reads FITTING... until
+--             the server answers (a refusal or no answer puts it back). Then the engine revs in the
+--             car's own exhaust note (SoundClient.PreviewExhaust), a toast shows, the row flashes
+--             and the bars glide to their new length. Prices, gains and the plan AUTO TUNE shows
+--             come from Config.Garage, the same helpers GarageService charges with. Each request
+--             says what the button showed (the stage, or the stages AUTO TUNE started from), so a
+--             second try after a slow answer never buys the next, dearer thing (GarageService).
+--             Theme's see-through black can't be seen on the phone's near-black screen, so the page's
+--             quiet buttons and its stat panel use Theme's lighter panel colour (lift / tuneButton;
+--             every other page's quiet buttons get the same look from flat) and a bar's empty part is
+--             dim grey, like an empty stage pip. The page's code sits in one block between the "TUNE
+--             page" banner and placePos and keeps its own constants and state as locals, so it can be
+--             worked on by itself. Its text floor is K.TuneMinText real pixels, not K.MinText: its
+--             chips and columns were measured for that.
+--   AUTONEON  browse every car and boat (class, four small stat bars, price or lock); buying happens in
+--             person, so each row's button routes you to AutoNeon Motors (cars) or Marina Boat Sales
+--   HOME      homes for sale (HouseClient): price, garage size, distance, GPS to the door, GO HOME
 --   GPS       races, stunts, jobs, services and heist sites (open ones marked): sets a road route
---   JOBS      police duty (GO ON DUTY / GO OFF DUTY via RequestTeam), jobs, phone missions for your side
---   HOMES     homes (Config.Properties): features, price or OWNED / HOME, rent waiting, rank needed,
---             SHOW ME and SET HOME (RequestProperty "SetHome"). Buying and rent happen at the door.
---   GOALS     ranks, Gus figurines found, today's challenges
---   FEED      every Coast Feed post (FeedController.History); the tile shows how many are new
---   SHOP      every game pass and cash pack with its price (live from Roblox once the Id is real,
---             else Config.Shop's). FREE buttons in Studio and for the game's owner ("ShopFree").
--- The server decides everything (GarageService, VehicleService, PropertyService, ShopService,
--- TeamService); this only asks and shows what the server mirrors into attributes.
+--   JOBS      switch between free roam and police, the three street jobs, and the phone missions
+--   SHOP      game passes and cash packs (prices read live from the Creator Hub); cash packs add cash
+--             only (they can't skip heist locks, cop ranks or passes)
+--   GOALS     both ranks with their XP bars and next unlock, and today's challenges
+--   CREW      INVITE FRIENDS (Roblox's own invite pop-up, hidden when Roblox says this player can't send
+--             invites), THE BIG SCORE (the crew heist, BigScoreService: one line on whether you could
+--             start it right now, worked out here from your crew, rank, cooldown and whether another
+--             crew is on it, its countdown kept fresh in place; START, or QUIT with a second tap while
+--             you're on it), crew invites for players here, friends in other servers of the game with JOIN
+--             (FriendsService teleports), and the play-together bonus and Squad paint progress
+--   SETTINGS  radio and sound volume, performance mode, passive mode (and the key list on a keyboard)
+-- Under the apps, HOW TO PLAY opens a guide to every feature: topic chips at the top jump to short
+-- sections with GPS and OPEN buttons (a page opened from it goes Back to it; put away on it, it reopens
+-- there for a while). Touch players see their on-screen buttons instead of keys, and the street-car lines
+-- only show once CarjackService runs. The button pulses the first time the home screen shows each
+-- session. Where a number the guide quotes lives in a shared config, it's read from there.
+-- Hidden vehicles (Config.Vehicles Hidden = true: street-only cars) never show in any list here.
+-- The server decides everything (GarageService, VehicleService); this only sends requests.
+-- Gamepad / keyboard UI navigation: a redraw keeps the selection on the same button (show finds its
+-- twin on the new page), and a new page, or the phone opening while something else is selected,
+-- moves it to the page's first button; Close lets go of it. Two-press buys (TUNE) need that: the first
+-- press redraws the page. Gamepad B, while a phone button is selected and you aren't seated, goes Back
+-- (or puts the phone away on the home screen). Gamepad D-pad down raises the phone, and puts it away
+-- while none of its buttons is selected; raised that way on foot, the selection goes to the page's first
+-- button (not in a car: B gets out there). Never while the dressing room is open (WardrobeUI).
+-- PhoneUI.Open(pageName?, arg?): pageName is one of PAGES' keys ("Garage", "Shop", "Goals"...; none =
+-- the home screen). "Tune" and "Custom" open on one car's page: arg = its vehicle id (the dealer's
+-- TUNE IT button uses PhoneUI.Open("Tune", id)). On a phone that is already up, Open just changes the
+-- page. PhoneUI.Close(), Toggle(), IsOpen() (false from the moment it is put away; "Body" stays Visible
+-- a moment longer while it slides out).
+-- Names other code and the Studio test tools use (keep them): ScreenGui "Phone" > "PhoneButton" (the
+-- HUD tile, HUDController.ZoneButton) and "Body" (OfferClient, MinimapClient, AmbienceClient,
+-- DealerClient and TutorialClient watch its Visible) > "Fit", "Back", "HomeBar" and "Screen" > the page.
+-- Home screen: "Apps".<page key>, "Guide", "GuideHint". Pages: "List".<row>.<button>: Garage
+-- List.<carId>.Deliver / Style / Tune; STYLE List.Paint / Rims / Underglow > Frame.Swatch<n>; TUNE
+-- List.AutoTune, List.Stats, List.ExhaustHead.BuyExhaust, List.Exhausts.<key>, List.<track>; AUTONEON
+-- and SHOP List.<id>.Buy; HOME List.MyHome.GoHome, List.<homeId>.Go; GPS "Tabs".<Activity|Heist|Service>,
+-- List.<place>.Go; JOBS List.<missionId>.Start; CREW List.InviteFriends, List.BigScore.Start / Quit, List.<UserId>.Invite,
+-- List.Friend<UserId>.Join, List.Leave, List.PlayTogether; SETTINGS List.Music.Music<1-5>,
+-- List.Effects.Effects<1-5>, List.Performance.Toggle, List.Passive.Toggle; guide List.Topics.<section>,
+-- List.<section>.
+-- This file is big: a Luau function (the top of a file counts as one) may hold 200 locals at most, so
+-- constants live in K, widget references in ui, state in S and crew, widget builders in W and pages in
+-- PAGES (the TUNE block keeps its own locals). Count the top-level locals before adding one.
 
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
+local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local SocialService = game:GetService("SocialService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-
-local MarketplaceService = game:GetService("MarketplaceService")
 
 local Vehicles = require(ReplicatedStorage.Shared.Config.Vehicles)
 local Shop = require(ReplicatedStorage.Shared.Config.Shop)
 local Progression = require(ReplicatedStorage.Shared.Config.Progression)
 local Missions = require(ReplicatedStorage.Shared.Config.Missions)
 local Garage = require(ReplicatedStorage.Shared.Config.Garage)
-local TeamsConfig = require(ReplicatedStorage.Shared.Config.Teams)
+local Heists = require(ReplicatedStorage.Shared.Config.Heists)
+local Housing = require(ReplicatedStorage.Shared.Config.Housing)
+local Combat = require(ReplicatedStorage.Shared.Config.Combat)
+local Activities = require(ReplicatedStorage.Shared.Config.Activities)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
+local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 local GPSClient = require(script.Parent:WaitForChild("GPSClient"))
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
-local FeedController = require(script.Parent:WaitForChild("FeedController"))
 
 local player = Players.LocalPlayer
 
 local PhoneUI = {}
 
-local PINK = Color3.fromRGB(255, 62, 165)
-local CYAN = Color3.fromRGB(34, 225, 255)
-local GOLD = Color3.fromRGB(255, 214, 10)
-local MINT = Color3.fromRGB(110, 242, 196)
-local PURPLE = Color3.fromRGB(123, 47, 255)
-local ORANGE = Color3.fromRGB(255, 138, 61)
-local LAVENDER = Color3.fromRGB(200, 190, 230)
-local DARK = Color3.fromRGB(18, 14, 30)
-local PANEL = Color3.fromRGB(34, 26, 56)
-local WHITE = Color3.new(1, 1, 1)
-local FONT = Enum.Font.FredokaOne
-local DESIGN_W = 360
-
-local gui, phone, screen, titleLabel, backButton, clockLabel, cashLabel, openButton, fit, homeBar, backdrop
-local current = "Home" -- page on screen (a PAGES key)
-local back -- function to go back, or nil on the home screen
-local detailId -- car shown on the Garage detail page
-local gpsTab = "Activity"
-local confirmBuy = { id = nil, at = 0 }
-local pendingBuy = { key = nil, at = 0 } -- the swatch armed by a first tap (customPage)
-local dutyAskedAt = -math.huge -- when JOBS last asked to go on / off duty
-local phoneTouchAt = -math.huge -- last tap that began on the phone itself (never closes it)
-
+local C = Theme.Color
 local money = HUDController.Money
 
------------------------------------------------------------------- small UI helpers
+-- Every number and colour the phone is built from.
+local K = {
+	W = 360, -- the phone's design width (the UIScale "Fit" fits it to the screen)
+	Bezel = 7, -- from the body's edge to the glass
+	Inset = 20, -- from the body's edge to the page ("Screen": 320 design pixels wide)
+	Status = 30, -- height of the status bar
+	MinText = 13, -- smallest text, in real pixels (textPx)
+	TuneMinText = 12, -- ...on the TUNE page (see the header)
+	Raise = 0.25, -- seconds the phone takes to come up
+	Lower = 0.18, -- ...and to go away
+	Tilt = 7, -- degrees it leans (clockwise) on its way
+	Drop = 0.85, -- how far below its resting place it starts, as a share of the screen's height
+	Slip = 36, -- ...and how far to the right of it, in pixels
+	Round = 22, -- the body's corner radius
+	Wake = 0.15, -- seconds the dark screen takes to light up once the phone is upright
+	ResumeFor = 600, -- seconds HOW TO PLAY reopens where it was put away (BACK or the home bar on the guide forget it)
 
-local function corner(obj, r)
-	local c = Instance.new("UICorner")
-	c.CornerRadius = r or UDim.new(0, 12)
-	c.Parent = obj
-	return c
+	-- The phone's own colours (Theme has no names for them).
+	Case = Color3.fromRGB(18, 19, 23),
+	Edge = Color3.fromRGB(72, 76, 86),
+	Glass = Color3.fromRGB(9, 11, 15),
+	WallTop = Color3.fromRGB(34, 22, 54), -- the home screen's wallpaper, top...
+	WallFoot = Color3.fromRGB(8, 34, 44), -- ...and foot
+	Card = Color3.fromRGB(21, 24, 30),
+	Ink = Color3.fromRGB(12, 14, 18), -- dark words on a white or gold button
+
+	StudsToMph = 0.626, -- same as the speed gauge (DriveUI)
+
+	-- CREW page
+	FriendsFresh = 30, -- seconds a friends list is reused (Roblox caches it about that long too)
+	MaxFriendRows = 8,
+	JoinWait = 8, -- seconds a JOIN button shows JOINING... (the teleport or the server's refusal comes first)
+
+	GpsTabs = { { "Activity", "FUN" }, { "Heist", "HEISTS" }, { "Service", "PLACES" } },
+	-- GPS fallbacks for the dealerships until DealershipService's entries reach the Places list.
+	Dealers = {
+		Cars = { Name = "AutoNeon Motors", Pos = Vector3.new(-150, 0, -537) },
+		Boats = { Name = "Marina Boat Sales", Pos = Vector3.new(1678, 0, 1096) },
+	},
+	-- The home screen, in order: the label, the PAGES key (also the tile's Name and its glyph in W.glyph)
+	-- and the tile's colour.
+	Apps = {
+		{ Name = "GARAGE", Page = "Garage", Color = Color3.fromRGB(226, 62, 110) },
+		{ Name = "AUTONEON", Page = "Dealer", Color = Color3.fromRGB(38, 140, 210) },
+		{ Name = "GPS", Page = "GPS", Color = Color3.fromRGB(46, 160, 96) },
+		{ Name = "JOBS", Page = "Jobs", Color = Color3.fromRGB(208, 132, 38) },
+		{ Name = "SHOP", Page = "Shop", Color = Color3.fromRGB(136, 98, 222) },
+		{ Name = "GOALS", Page = "Goals", Color = Color3.fromRGB(200, 150, 32) },
+		{ Name = "CREW", Page = "Crew", Color = Color3.fromRGB(30, 160, 150) },
+		{ Name = "HOME", Page = "Home_", Color = Color3.fromRGB(224, 104, 58) },
+		{ Name = "SETTINGS", Page = "Settings", Color = Color3.fromRGB(98, 106, 120) },
+	},
+}
+
+-- The phone's lasting pieces (build): gui, openButton, fit, glass, wall, clock, island, cash, icons and
+-- chevron (the UIScales of the status glyphs and the back chevron), back, title, titleCap, headRule,
+-- screen, homeBar, cover.
+local ui = {}
+local phone -- the phone's body (frame "Body"): Visible while it is up or sliding
+
+-- What the phone is doing.
+local S = {
+	open = false, -- up (or on its way up): what IsOpen answers
+	anim = 0, -- counts raises and lowers, so a finished slide knows if it is still the latest
+	sliding = false, -- on its way up or down right now
+	tweens = {}, -- the tweens of that slide (stopSlide)
+	back = nil, -- the PAGES key Back goes to, or nil on the home screen
+	minText = K.MinText, -- the text floor of the page being drawn (show sets it)
+	gpsTab = "Activity",
+	fromGuide = false, -- the page on screen was opened from HOW TO PLAY: its Back goes to the guide
+	guideScroll = nil, -- the guide's scroll position while one of its OPEN pages is showing
+	guideResume = nil, -- { Pos, At = os.clock() }: where the guide was when the phone was put away on it
+	guideHinted = false, -- the HOW TO PLAY button has had its once-a-session pulse
+	posed = false, -- the character is holding its phone (PoseClient)
+}
+
+local current = "Home" -- the PAGES key on screen (show keeps it)
+local detailId -- car shown on the Garage detail pages (STYLE and TUNE)
+
+local W = {} -- the phone's widget builders
+local PAGES = {} -- [page key] = the function that draws that page into ui.screen
+local show -- forward declaration: show(pageKey) draws a page
+
+------------------------------------------------------------------ small helpers
+
+local function sfx(name)
+	pcall(function()
+		require(script.Parent:WaitForChild("SoundClient")).Play(name)
+	end)
 end
 
-local function stroke(obj, color, thick)
-	local s = Instance.new("UIStroke")
-	s.Color = color
-	s.Thickness = thick or 2
-	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	s.Parent = obj
-	return s
+-- The phone is drawn at a fixed design size and shrunk by a UIScale on small screens, so a tap target
+-- needs this many design pixels to still be Theme.Touch real pixels tall.
+local function touchHeight()
+	return math.ceil(Theme.Touch / math.max(ui.fit.Scale, 0.5))
 end
 
-local function label(parent, text, size, pos, color, align)
+-- Text needs the same care: at the phone's 0.7 scale a 13 px label would be 9 real pixels. Every label
+-- is at least K.MinText real pixels (S.minText: the page being drawn may have its own floor); sizes
+-- already bigger than that stay as they are, so a PC (scale 1-1.1) sees exactly the sizes asked for.
+local function textPx(px)
+	return math.max(px, math.ceil(S.minText / math.max(ui.fit.Scale, 0.5)))
+end
+
+-- A label in the Theme fonts at a fixed size (px, raised by textPx on small screens: lay out with
+-- textPx(px) too). onPanel = true adds Theme's soft shadow (text over the wallpaper or a see-through
+-- panel); text on the page's dark screen or on a button goes without.
+local function themeText(parent, text, size, pos, px, kind, color, align, onPanel)
+	px = textPx(px)
 	local l = Instance.new("TextLabel")
-	l.BackgroundTransparency = 1
 	l.Size = size
 	l.Position = pos or UDim2.new()
-	l.Font = FONT
-	l.TextScaled = true
-	l.TextColor3 = color or WHITE
+	l.BackgroundTransparency = 1
+	l.FontFace = Theme.Font[kind or "Body"]
+	l.TextSize = px
 	l.TextXAlignment = align or Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
 	l.Text = text
+	if onPanel then
+		Theme.Text(l, px, kind)
+	end
+	l.TextColor3 = color or C.Text
 	l.Parent = parent
 	return l
 end
 
-local function button(parent, text, size, pos, color, onClick)
-	local b = Instance.new("TextButton")
-	b.AutoButtonColor = true
-	b.Size = size
-	b.Position = pos or UDim2.new()
-	b.BackgroundColor3 = color or PINK
-	b.Font = FONT
-	b.TextScaled = true
-	b.TextColor3 = WHITE
-	b.Text = text
-	b.Parent = parent
-	corner(b, UDim.new(0.3, 0))
-	local p = Instance.new("UIPadding")
-	p.PaddingTop, p.PaddingBottom = UDim.new(0.18, 0), UDim.new(0.18, 0)
-	p.PaddingLeft, p.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
-	p.Parent = b
-	b.Activated:Connect(function()
-		require(script.Parent:WaitForChild("SoundClient")).Play("Click")
-	end)
-	if onClick then
-		b.Activated:Connect(onClick)
+-- Theme.Button as it looks on the phone's own screen. kind: "Primary" (white), "Quiet", "Danger", or
+-- "Confirm" (a buy button waiting for its second tap: cash green). Theme's quiet button is see-through
+-- black, made to sit over the street; on the phone's near-black screen it couldn't be told from the
+-- page, so here it is Theme's lighter panel colour (the same look as the TUNE page's lift).
+local function flat(b, kind)
+	Theme.Button(b, kind == "Confirm" and "Primary" or kind)
+	if kind == "Confirm" then
+		b.BackgroundColor3 = C.Cash
+	elseif kind == nil or kind == "Quiet" then
+		b.BackgroundColor3 = C.PanelLight
+		b.BackgroundTransparency = 0.2
 	end
 	return b
 end
 
-local function clear()
-	for _, c in ipairs(screen:GetChildren()) do
-		c:Destroy()
-	end
+-- A flat button as wide as its parent. Its words are labels laid on top (taps pass through them),
+-- coloured with the button's own TextColor3.
+local function themeButton(parent, name, height, order, kind, onTap)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	b.Size = UDim2.new(1, 0, 0, height)
+	b.LayoutOrder = order
+	b.Text = ""
+	flat(b, kind)
+	b.Parent = parent
+	b.Activated:Connect(function()
+		sfx("Click")
+		onTap()
+	end)
+	return b
 end
 
--- A vertical scrolling list filling the screen below `top` (fraction of the screen).
-local function list(top)
-	local s = Instance.new("ScrollingFrame")
-	s.Name = "List"
-	s.Size = UDim2.fromScale(1, 1 - top)
-	s.Position = UDim2.fromScale(0, top)
-	s.BackgroundTransparency = 1
-	s.BorderSizePixel = 0
-	s.ScrollBarThickness = 4
-	s.ScrollBarImageColor3 = PINK
-	s.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	s.CanvasSize = UDim2.new()
-	s.Parent = screen
-	local l = Instance.new("UIListLayout")
-	l.Padding = UDim.new(0, 8)
-	l.SortOrder = Enum.SortOrder.LayoutOrder
-	l.Parent = s
-	local p = Instance.new("UIPadding")
-	p.PaddingRight = UDim.new(0, 6)
-	p.Parent = s
-	return s
-end
-
-local function row(parent, height, order)
+-- Stage pips: `have` of `max` little squares filled.
+local function pips(parent, pos, have, max, color)
 	local f = Instance.new("Frame")
-	f.Size = UDim2.new(1, 0, 0, height)
-	f.BackgroundColor3 = PANEL
-	f.LayoutOrder = order or 0
+	f.Name = "Pips"
+	f.BackgroundTransparency = 1
+	f.Position = pos
+	f.Size = UDim2.fromOffset(max * 14 - 4, 10)
 	f.Parent = parent
-	corner(f)
+	for i = 1, max do
+		local p = Instance.new("Frame")
+		p.Name = "Pip" .. i
+		p.Size = UDim2.fromOffset(10, 10)
+		p.Position = UDim2.fromOffset((i - 1) * 14, 0)
+		p.BorderSizePixel = 0
+		p.BackgroundColor3 = i <= have and color or C.Dim
+		p.BackgroundTransparency = i <= have and 0 or 0.75
+		Theme.Corners(p, 2)
+		p.Parent = f
+	end
 	return f
 end
 
+-- Same rules as GarageService.Owns: the saved list ("OwnedCars"), a game pass, or a high enough cop rank.
 local function owned()
 	local set = {}
 	for id in string.gmatch(player:GetAttribute("OwnedCars") or "", "[^,]+") do
 		set[id] = true
 	end
-	-- Pass cars and cop-rank cars are yours while the pass / rank holds (GarageService.Owns).
 	local copRank = player:GetAttribute("CopRank") or 0
 	for _, def in ipairs(Vehicles.List) do
+		if def.Hidden then
+			continue -- street-only cars are never owned
+		end
 		if (def.Pass and player:GetAttribute("Pass_" .. def.Pass)) or (def.UnlockCopRank and copRank >= def.UnlockCopRank) then
 			set[def.Id] = true
 		end
@@ -189,669 +345,1550 @@ local function customOf(id)
 	return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
 end
 
--- Paints and rims bought for this car (GarageService mirrors "Style_<id>" = "3,5;2"), as sets with
--- string keys, the same shape Garage.StyleCost takes.
-local function styleOf(id)
-	local s = player:GetAttribute("Style_" .. id)
-	local paints, rims = {}, {}
-	if type(s) == "string" then
-		local p, r = string.match(s, "^([%d,]*);([%d,]*)$")
-		for n in string.gmatch(p or "", "%d+") do
-			paints[n] = true
-		end
-		for n in string.gmatch(r or "", "%d+") do
-			rims[n] = true
-		end
-	end
-	return paints, rims
-end
-
--- Player-facing role names (the Side values stay "Civilian" / "Cop" / "Prisoner").
-local ROLE = { Civilian = "CITIZEN", Cop = "POLICE", Prisoner = "IN PRISON" }
-
--- An optional module (another feature may not be in this place yet): nil if missing or broken.
-local function optional(parent, name)
-	local m = parent:FindFirstChild(name)
-	if not m or not m:IsA("ModuleScript") then
-		return nil
-	end
-	local ok, mod = pcall(require, m)
-	return ok and type(mod) == "table" and mod or nil
-end
-
 local function canDrive(def)
 	local side = player:GetAttribute("Side") or "Civilian"
 	return (def.Police == true) == (side == "Cop")
 end
 
------------------------------------------------------------------- pages
+------------------------------------------------------------------ widgets (the phone's flat look)
 
-local show -- forward declaration
-
-local function setHeader(title, backTo)
-	titleLabel.Text = title
-	back = backTo
-	backButton.Visible = backTo ~= nil
+-- A see-through frame to hold other pieces.
+function W.frame(parent, name, order)
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.BackgroundTransparency = 1
+	f.BorderSizePixel = 0
+	f.LayoutOrder = order or 0
+	f.Parent = parent
+	return f
 end
 
-local APPS = {
-	{ Name = "GARAGE", Icon = "🚗", Color = PINK, Page = "Garage" },
-	{ Name = "AUTONEON", Icon = "🏁", Color = CYAN, Page = "Dealer" },
-	{ Name = "GPS", Icon = "📍", Color = MINT, Page = "GPS" },
-	{ Name = "JOBS", Icon = "💼", Color = GOLD, Page = "Jobs" },
-	{ Name = "HOMES", Icon = "🏠", Color = ORANGE, Page = "Homes" },
-	{ Name = "GOALS", Icon = "🏆", Color = GOLD, Page = "Goals" },
-	{ Name = "FEED", Icon = "📰", Color = CYAN, Page = "Feed" },
-	{ Name = "CREW", Icon = "👥", Color = MINT, Page = "Crew" },
-	{ Name = "SHOP", Icon = "🛍️", Color = PURPLE, Page = "Shop" },
-	{ Name = "SETTINGS", Icon = "⚙️", Color = LAVENDER, Page = "Settings" },
-}
+-- A solid block (a line, a tile, one piece of a glyph): pixels from its parent's corner, r = corner radius.
+function W.block(parent, name, x, y, w, h, color, r, z)
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.Position = UDim2.fromOffset(x, y)
+	f.Size = UDim2.fromOffset(w, h)
+	f.BackgroundColor3 = color or C.Text
+	f.BorderSizePixel = 0
+	f.ZIndex = z or 1
+	if r and r > 0 then
+		Theme.Corners(f, r)
+	end
+	f.Parent = parent
+	return f
+end
 
-local function homePage()
-	setHeader("NEON PHONE", nil)
-	local grid = Instance.new("Frame")
-	grid.Name = "Apps"
-	grid.Size = UDim2.fromScale(1, 0.8)
-	grid.Position = UDim2.fromScale(0, 0.04)
-	grid.BackgroundTransparency = 1
-	grid.Parent = screen
-	local layout = Instance.new("UIGridLayout")
-	layout.CellSize = UDim2.fromScale(0.3, 0.215) -- 3 across, 4 rows
-	layout.CellPadding = UDim2.fromScale(0.035, 0.03)
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	layout.SortOrder = Enum.SortOrder.LayoutOrder
-	layout.Parent = grid
-	for i, app in ipairs(APPS) do
-		local tile = Instance.new("TextButton")
-		tile.Name = app.Page
-		tile.LayoutOrder = i
-		tile.BackgroundColor3 = PANEL
-		tile.Text = ""
-		tile.Parent = grid
-		corner(tile, UDim.new(0.2, 0))
-		stroke(tile, app.Color, 2)
-		label(tile, app.Icon, UDim2.fromScale(1, 0.55), UDim2.fromScale(0, 0.08), WHITE, Enum.TextXAlignment.Center)
-		label(tile, app.Name, UDim2.fromScale(0.9, 0.22), UDim2.fromScale(0.05, 0.68), app.Color, Enum.TextXAlignment.Center)
-		tile.Activated:Connect(function()
-			show(app.Page)
-		end)
-		if app.Page == "Feed" and FeedController.Unread > 0 then
-			local badge = label(tile, tostring(math.min(FeedController.Unread, 99)), UDim2.fromOffset(28, 28),
-				UDim2.new(1, -24, 0, -6), WHITE, Enum.TextXAlignment.Center)
-			badge.Name = "Unread"
-			badge.BackgroundTransparency = 0
-			badge.BackgroundColor3 = PINK
-			corner(badge, UDim.new(0.5, 0))
+-- A thin outline round a frame.
+function W.ring(obj, color, thick)
+	local s = Instance.new("UIStroke")
+	s.Color = color or C.Text
+	s.Thickness = thick or 1
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = obj
+	return s
+end
+
+-- The thin line that separates list rows (along the top of a row).
+function W.rule(parent)
+	local f = W.block(parent, "Rule", 0, 0, 1, 1)
+	f.Size = UDim2.new(1, 0, 0, 1)
+	f.BackgroundTransparency = 0.88
+	return f
+end
+
+-- A flat button with its own words in the Display font (DELIVER, GO, BUY...). The caller places it.
+function W.button(parent, name, text, kind, onTap)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	b.Text = text
+	flat(b, kind)
+	b.FontFace = Theme.Font.Display
+	b.TextSize = textPx(15)
+	b.TextTruncate = Enum.TextTruncate.AtEnd
+	b.Parent = parent
+	b.Activated:Connect(function()
+		sfx("Click")
+		if onTap then
+			onTap()
 		end
+	end)
+	return b
+end
+
+-- The page's scrolling list ("List": show keeps its scroll position across redraws), filling the page
+-- below `top` pixels. Rows sit `gap` pixels apart (none: they draw their own thin lines).
+function W.list(top, gap)
+	top = top or 0
+	local s = Instance.new("ScrollingFrame")
+	s.Name = "List"
+	s.Position = UDim2.fromOffset(0, top)
+	s.Size = UDim2.new(1, 0, 1, -top)
+	s.BackgroundTransparency = 1
+	s.BorderSizePixel = 0
+	s.ScrollBarThickness = 3
+	s.ScrollBarImageColor3 = C.Dim
+	s.ScrollBarImageTransparency = 0.4
+	s.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	s.CanvasSize = UDim2.new()
+	s.ScrollingDirection = Enum.ScrollingDirection.Y
+	s.Parent = ui.screen
+	local l = Instance.new("UIListLayout")
+	l.Padding = UDim.new(0, gap or 0)
+	l.SortOrder = Enum.SortOrder.LayoutOrder
+	l.Parent = s
+	local p = Instance.new("UIPadding")
+	p.PaddingRight = UDim.new(0, 6)
+	p.Parent = s
+	return s
+end
+
+-- The TUNE page's list: below `top` (a share of the page's height), its buttons 8 pixels apart.
+local function list(top)
+	return W.list(math.floor(ui.screen.Size.Y.Offset * top + 0.5), 8)
+end
+
+-- A list row of a fixed height: see-through, a thin line along its top.
+function W.row(parent, name, height, order)
+	local f = W.frame(parent, name or "Frame", order)
+	f.Size = UDim2.new(1, 0, 0, height)
+	W.rule(f)
+	return f
+end
+
+-- Empty room between two things in a list.
+function W.gap(parent, order, px)
+	local f = W.frame(parent, "Gap", order)
+	f.Size = UDim2.new(1, 0, 0, px)
+	return f
+end
+
+-- A section head: small dim capitals over the rows that follow (as tall as its words need).
+function W.head(parent, text, order, color)
+	local l = themeText(parent, text, UDim2.fromScale(1, 0), nil, 13, "Bold", color or C.Dim)
+	l.Name = "Head"
+	l.LayoutOrder = order or 0
+	l.AutomaticSize = Enum.AutomaticSize.Y
+	l.TextWrapped = true
+	l.TextTruncate = Enum.TextTruncate.None
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 16), UDim.new(0, 6)
+	pad.Parent = l
+	return l
+end
+
+-- A few dim lines of help text, as tall as its words need.
+function W.note(parent, text, order, color, align)
+	local l = themeText(parent, text, UDim2.fromScale(1, 0), nil, 13, "Body", color or C.Dim, align)
+	l.Name = "Note"
+	l.LayoutOrder = order or 0
+	l.AutomaticSize = Enum.AutomaticSize.Y
+	l.TextWrapped = true
+	l.TextTruncate = Enum.TextTruncate.None
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 8), UDim.new(0, 8)
+	pad.Parent = l
+	return l
+end
+
+-- One list row: a bold title over dim lines on the left (each line wraps, so the row is as tall as its
+-- words need) and, if asked for, one flat thumb-sized button on the right. A thin line along the top
+-- separates it from the row above. Every piece is placed in pixels from the row's top, so the row can
+-- size itself (AutomaticSize).
+-- o = { Name, Order, Title, TitleColor, Sub, SubColor, Meta, MetaColor, Button (its words), ButtonName,
+--       Kind, Width, OnTap }
+-- Returns the row, the button (or nil) and the words' column: its lines have LayoutOrder 10 (title), 20
+-- (sub) and 30 (meta), so a caller can slip a bar in between (W.meter).
+function W.item(parent, o)
+	local touch = touchHeight()
+	local r = W.frame(parent, o.Name or "Frame", o.Order)
+	r.Size = UDim2.fromScale(1, 0)
+	r.AutomaticSize = Enum.AutomaticSize.Y
+	W.rule(r)
+	local pad = Instance.new("UIPadding")
+	pad.PaddingBottom = UDim.new(0, 9)
+	pad.Parent = r
+	local width = o.Button and (o.Width or 96) or 0
+	local words = W.frame(r, "Words")
+	words.Position = UDim2.fromOffset(0, 9)
+	words.Size = UDim2.new(1, -(width > 0 and width + 10 or 0), 0, 0)
+	words.AutomaticSize = Enum.AutomaticSize.Y
+	local stack = Instance.new("UIListLayout")
+	stack.SortOrder = Enum.SortOrder.LayoutOrder
+	stack.VerticalAlignment = Enum.VerticalAlignment.Center
+	stack.Padding = UDim.new(0, 3)
+	stack.Parent = words
+	if o.Button then
+		-- At least as tall as the button, so a short row's words sit centred beside it.
+		local min = Instance.new("UISizeConstraint")
+		min.MinSize = Vector2.new(0, touch)
+		min.Parent = words
 	end
-	local tip = label(screen, "Tip: robbing stores makes you Wanted. Lose the cops, then bank your bag at the Hideout!",
-		UDim2.fromScale(0.94, 0.12), UDim2.fromScale(0.03, 0.86), Color3.fromRGB(200, 190, 230), Enum.TextXAlignment.Center)
-	tip.TextWrapped = true
-end
-
-local function statBar(parent, name, value, y, color)
-	label(parent, name, UDim2.fromScale(0.3, 0.13), UDim2.fromScale(0.04, y), Color3.fromRGB(200, 190, 230))
-	local bg = Instance.new("Frame")
-	bg.Size = UDim2.fromScale(0.58, 0.07)
-	bg.Position = UDim2.fromScale(0.36, y + 0.03)
-	bg.BackgroundColor3 = DARK
-	bg.Parent = parent
-	corner(bg, UDim.new(0.5, 0))
-	local fill = Instance.new("Frame")
-	fill.Size = UDim2.fromScale(math.clamp(value, 0.05, 1), 1)
-	fill.BackgroundColor3 = color
-	fill.Parent = bg
-	corner(fill, UDim.new(0.5, 0))
-end
-
-local function garagePage()
-	setHeader("GARAGE", "Home")
-	local mine = owned()
-	local s = list(0.02)
-	local n = 0
-	for i, def in ipairs(Vehicles.List) do
-		if mine[def.Id] and canDrive(def) then
-			n += 1
-			local r = row(s, 74, i)
-			r.Name = def.Id
-			local paint = customOf(def.Id)
-			local swatch = Instance.new("Frame")
-			swatch.Size = UDim2.fromOffset(14, 50)
-			swatch.Position = UDim2.fromOffset(10, 12)
-			swatch.BackgroundColor3 = paint > 0 and Garage.Paints[paint].Color or def.Color
-			swatch.Parent = r
-			corner(swatch, UDim.new(0.5, 0))
-			label(r, def.DisplayName or def.Id, UDim2.new(0.52, 0, 0, 30), UDim2.fromOffset(32, 8))
-			label(r, def.Class, UDim2.new(0.5, 0, 0, 20), UDim2.fromOffset(32, 42), Color3.fromRGB(200, 190, 230))
-			button(r, def.Boat and "LAUNCH" or "DELIVER", UDim2.new(0.3, 0, 0, 30), UDim2.new(0.68, 0, 0, 6), PINK, function()
-				Remotes.Event("RequestSpawnCar"):FireServer(def.Id)
-				PhoneUI.Close()
-			end).Name = "Deliver"
-			button(r, "STYLE", UDim2.new(0.3, 0, 0, 26), UDim2.new(0.68, 0, 0, 42), PURPLE, function()
-				detailId = def.Id
-				show("Custom")
-			end).Name = "Style"
-		end
+	local function line(name, order, text, px, kind, color)
+		local l = themeText(words, text, UDim2.fromScale(1, 0), nil, px, kind, color)
+		l.Name = name
+		l.LayoutOrder = order
+		l.AutomaticSize = Enum.AutomaticSize.Y
+		l.TextWrapped = true
+		l.TextTruncate = Enum.TextTruncate.None
+		return l
 	end
-	if n == 0 then
-		label(s, "No cars for this role yet. Visit AUTONEON!", UDim2.new(1, 0, 0, 40), nil, WHITE, Enum.TextXAlignment.Center)
+	if o.Title then
+		line("Title", 10, o.Title, 15, "Bold", o.TitleColor)
 	end
+	if o.Sub and o.Sub ~= "" then
+		line("Sub", 20, o.Sub, 13, "Body", o.SubColor or C.Dim)
+	end
+	if o.Meta and o.Meta ~= "" then
+		line("Meta", 30, o.Meta, 14, "Display", o.MetaColor or C.Dim)
+	end
+	local b
+	if o.Button then
+		b = W.button(r, o.ButtonName or "Go", o.Button, o.Kind, o.OnTap)
+		b.AnchorPoint = Vector2.new(1, 0)
+		b.Position = UDim2.new(1, 0, 0, 9)
+		b.Size = UDim2.fromOffset(width, touch)
+	end
+	return r, b, words
 end
 
--- Tap twice to buy a swatch (like the dealer's BUY): the first tap on a swatch that costs money arms
--- it for CONFIRM_TIME seconds ("TAP AGAIN: $500"), a second tap on the same swatch buys it.
-local CONFIRM_TIME = 4
-local SWATCH_W, SWATCH_H, CHIP, PER_LINE = 55, 66, 40, 5 -- 5 x 55 + 4 x 4 fits the 294 px grid
-
-local function armed(key)
-	return key ~= nil and pendingBuy.key == key and os.clock() - pendingBuy.at < CONFIRM_TIME
+-- A thin progress bar as one line of a row's words; `text` (optional) is its count, on the right.
+function W.meter(parent, order, share, color, text)
+	local small = textPx(13)
+	local f = W.frame(parent, "Meter", order)
+	f.Size = UDim2.new(1, 0, 0, text and small + 4 or 12)
+	local room = text and math.ceil(#text * small * 0.5) + 12 or 0
+	local bar, fill = Theme.Bar(f, color)
+	bar.AnchorPoint = Vector2.new(0, 0.5)
+	bar.Position = UDim2.fromScale(0, 0.5)
+	bar.Size = UDim2.new(1, -room, 0, 6)
+	bar.BackgroundColor3 = C.Dim -- the empty part: dim grey, like the TUNE page's bars
+	bar.BackgroundTransparency = 0.75
+	fill.Size = UDim2.fromScale(math.clamp(share, 0.02, 1), 1)
+	if text then
+		themeText(f, text, UDim2.new(0, room, 1, 0), UDim2.new(1, -room, 0, 0), 13, "Display", C.Dim, Enum.TextXAlignment.Right)
+	end
+	return f
 end
 
--- One customising section: a title, a status line (the price rule, or "TAP AGAIN: $500 (Sunset)")
--- and a grid of swatches with a caption under each: its price, OWNED / STOCK / FREE, ON (on the car
--- now) or what unlocks it (with a lock). cells[i] = { Color, Name, Caption, CaptionColor, Current,
--- Locked, Price, Key, Pick }.
-local function swatchRow(parent, title, note, cells, order)
-	local lines = math.ceil(#cells / PER_LINE)
-	local gridH = lines * SWATCH_H + math.max(0, lines - 1) * 6
-	local r = row(parent, 56 + gridH + 10, order)
-	r.Name = title
-	label(r, string.upper(title), UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6))
-	local status = label(r, note, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 32), LAVENDER)
-	status.Name = "Status"
+-- One small stat in a grid (AUTONEON): its name and number over a thin bar.
+function W.stat(parent, order, name, value, share)
+	local small = textPx(13)
+	local cell = W.frame(parent, name, order)
+	themeText(cell, name, UDim2.new(0.55, 0, 0, small + 2), nil, 13, "Display", C.Dim)
+	themeText(cell, value, UDim2.new(0.45, 0, 0, small + 2), UDim2.fromScale(0.55, 0), 13, "Display", nil, Enum.TextXAlignment.Right)
+	local bar, fill = Theme.Bar(cell, C.Text)
+	bar.Position = UDim2.fromOffset(0, small + 5)
+	bar.Size = UDim2.new(1, 0, 0, 4)
+	bar.BackgroundColor3 = C.Dim
+	bar.BackgroundTransparency = 0.75
+	fill.Size = UDim2.fromScale(math.clamp(share, 0.05, 1), 1)
+	return cell
+end
+
+-- A small padlock on a dark disc (a paint or glow you can't use yet). No turned pieces: it lives in a
+-- scrolling list, and a turned frame isn't clipped at the list's edge.
+function W.lock(parent)
+	local disc = W.block(parent, "Lock", 0, 0, 24, 24, C.Shadow, 12)
+	disc.AnchorPoint = Vector2.new(0.5, 0.5)
+	disc.Position = UDim2.fromScale(0.5, 0.5)
+	disc.BackgroundTransparency = 0.35
+	local shackle = W.block(disc, "Shackle", 8.5, 4.5, 7, 8, nil, 3)
+	shackle.BackgroundTransparency = 1
+	W.ring(shackle, C.Text, 1.5)
+	W.block(disc, "Body", 6, 10.5, 12, 9, nil, 2, 2)
+	return disc
+end
+
+-- One row of colour swatches on the STYLE page: thumb-sized squares in a grid; the one on the car wears
+-- a white ring and a dot, locked ones a padlock. The grid's holder keeps its default name ("Frame").
+function W.swatches(parent, title, price, items, current, order, onPick)
+	local touch, nameH = touchHeight(), textPx(15) + 4
+	local gap = 6
+	local width = ui.screen.Size.X.Offset - 6 - 4 -- the list's scroll bar keeps 6; 2 each side for the ring
+	local cols = math.max(1, math.floor((width + gap) / (touch + gap)))
+	local lines = math.ceil(#items / cols)
+	local top = 10 + nameH + 8
+	local r = W.row(parent, title, top + lines * (touch + gap) + 6, order)
+	themeText(r, string.upper(title), UDim2.new(0.5, 0, 0, nameH), UDim2.fromOffset(0, 10), 15, "Bold")
+	themeText(r, price, UDim2.new(0.5, 0, 0, nameH), UDim2.new(0.5, 0, 0, 10), 15, "Display", C.Cash, Enum.TextXAlignment.Right)
 	local holder = Instance.new("Frame")
-	holder.Size = UDim2.new(1, -20, 0, gridH)
-	holder.Position = UDim2.fromOffset(10, 56)
+	holder.Size = UDim2.new(1, -4, 0, lines * (touch + gap))
+	holder.Position = UDim2.fromOffset(2, top)
 	holder.BackgroundTransparency = 1
 	holder.Parent = r
 	local grid = Instance.new("UIGridLayout")
-	grid.CellSize = UDim2.fromOffset(SWATCH_W, SWATCH_H)
-	grid.CellPadding = UDim2.fromOffset(4, 6)
+	grid.CellSize = UDim2.fromOffset(touch, touch)
+	grid.CellPadding = UDim2.fromOffset(gap, gap)
 	grid.SortOrder = Enum.SortOrder.LayoutOrder
 	grid.Parent = holder
-	for i, cell in ipairs(cells) do
+	for i, item in ipairs(items) do
 		local b = Instance.new("TextButton")
 		b.Name = "Swatch" .. i
 		b.Text = ""
-		b.AutoButtonColor = false
-		b.BackgroundTransparency = 1
+		b.AutoButtonColor = true
+		b.BackgroundColor3 = item.Color
+		b.BorderSizePixel = 0
 		b.LayoutOrder = i
+		Theme.Corners(b, 6)
 		b.Parent = holder
-		local chip = Instance.new("Frame")
-		chip.Name = "Chip"
-		chip.Size = UDim2.fromOffset(CHIP, CHIP)
-		chip.Position = UDim2.fromOffset((SWATCH_W - CHIP) / 2, 2)
-		chip.BackgroundColor3 = cell.Color
-		chip.Parent = b
-		corner(chip, UDim.new(0.5, 0))
-		local ring = stroke(chip, cell.Current and WHITE or DARK, cell.Current and 4 or 1)
-		if cell.Locked then
-			label(chip, "🔒", UDim2.fromScale(0.6, 0.6), UDim2.fromScale(0.2, 0.2), WHITE, Enum.TextXAlignment.Center)
+		if i == current then
+			W.ring(b, C.Text, 2)
+			local dot = W.block(b, "On", 0, 0, 10, 10, C.Text, 5)
+			dot.AnchorPoint = Vector2.new(0.5, 0.5)
+			dot.Position = UDim2.fromScale(0.5, 0.5)
+			W.ring(dot, K.Ink, 2)
+		else
+			W.ring(b, C.Text, 1).Transparency = 0.8
 		end
-		local cap = label(b, cell.Caption, UDim2.new(1, 0, 0, 18), UDim2.fromOffset(0, CHIP + 6), cell.CaptionColor,
-			Enum.TextXAlignment.Center)
-		cap.Name = "Caption"
-		local function arm()
-			ring.Color, ring.Thickness = GOLD, 4
-			cap.Text, cap.TextColor3 = "AGAIN", GOLD
-			status.Text = "TAP AGAIN: " .. money(cell.Price) .. " (" .. tostring(cell.Name) .. ")"
-			status.TextColor3 = GOLD
-		end
-		if cell.Price and armed(cell.Key) then
-			arm()
+		if not Garage.Allowed(player, item) then
+			W.lock(b)
 		end
 		b.Activated:Connect(function()
-			require(script.Parent:WaitForChild("SoundClient")).Play("Click")
-			if cell.Current then
-				return -- already on the car
+			if i == current then
+				return -- already on the car (white ring): a second tap would just pay again
 			end
-			if cell.Locked or not cell.Price then
-				cell.Pick() -- free (or locked: the server says what unlocks it)
-				return
-			end
-			if armed(cell.Key) then
-				pendingBuy.key = nil
-				cell.Pick()
-				return
-			end
-			local other = armed(pendingBuy.key)
-			local key, at = cell.Key, os.clock()
-			pendingBuy.key, pendingBuy.at = key, at
-			if other then
-				show("Custom") -- disarm the other swatch (this one is drawn armed)
-			else
-				arm()
-			end
-			task.delay(CONFIRM_TIME, function()
-				if pendingBuy.key == key and pendingBuy.at == at then
-					pendingBuy.key = nil
-					if phone.Visible and current == "Custom" then
-						show("Custom")
-					end
-				end
-			end)
+			onPick(i, item)
 		end)
 	end
 	return r
 end
 
--- A paint or rim swatch: what it costs on this car (Garage.StyleCost, the server's own rule), and
--- whether it's on the car, locked, owned or for sale.
-local function styleCell(kind, def, index, entry, wearing, ownedSet, remote)
-	local cell = { Color = entry.Color, Name = entry.Name, Key = kind .. ":" .. def.Id .. ":" .. index }
-	local cost = Garage.StyleCost(kind, index, ownedSet) or 0
-	local stock = (kind == "Paints" and index == 0) or (kind == "Rims" and index == Garage.StockRim)
-	if index == wearing then
-		cell.Current, cell.Caption, cell.CaptionColor = true, "ON", WHITE
-	elseif not Garage.Allowed(player, entry) then
-		cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", ORANGE
-	elseif cost > 0 then
-		cell.Price, cell.Caption, cell.CaptionColor = cost, money(cost), GOLD
-	else
-		cell.Caption, cell.CaptionColor = stock and "STOCK" or "OWNED", MINT
-	end
-	cell.Pick = function()
-		Remotes.Event(remote):FireServer(def.Id, index)
-	end
-	return cell
+-- App icon glyphs: a few white blocks on the app's coloured tile (no image assets). `g` is a 28 x 28
+-- box and `ink` the tile's colour, for holes cut into the white. Keys are the PAGES keys. (Turned pieces
+-- are fine here: the home screen doesn't scroll.)
+W.glyph = {
+	Garage = function(g, ink) -- a car, side on
+		W.block(g, "Cabin", 7, 6, 14, 9, nil, 3)
+		W.block(g, "Body", 0, 12, 28, 8, nil, 2)
+		for i, x in ipairs({ 4, 17 }) do
+			local wheel = W.block(g, "Wheel" .. i, x, 16, 7, 7, ink, 4, 2)
+			W.ring(wheel, C.Text, 1.5)
+		end
+	end,
+	Dealer = function(g) -- a steering wheel
+		local rim = W.block(g, "Rim", 3, 3, 22, 22, nil, 11)
+		rim.BackgroundTransparency = 1
+		W.ring(rim, C.Text, 3)
+		W.block(g, "Spokes", 4, 12.5, 20, 3)
+		W.block(g, "Spoke", 12.5, 14, 3, 10)
+		W.block(g, "Hub", 10, 10, 8, 8, nil, 4)
+	end,
+	GPS = function(g, ink) -- a map pin
+		W.block(g, "Tip", 9.5, 14, 9, 9).Rotation = 45
+		W.block(g, "Head", 5, 3, 18, 18, nil, 9)
+		W.block(g, "Eye", 11, 9, 6, 6, ink, 3, 2)
+	end,
+	Jobs = function(g, ink) -- a briefcase
+		local handle = W.block(g, "Handle", 10, 4.5, 8, 6, nil, 2)
+		handle.BackgroundTransparency = 1
+		W.ring(handle, C.Text, 2)
+		W.block(g, "Case", 2, 9, 24, 15, nil, 3)
+		W.block(g, "Seam", 2, 15, 24, 1.5, ink, nil, 2)
+		W.block(g, "Clasp", 12, 13.5, 4, 4.5, nil, 1, 3)
+	end,
+	Shop = function(g, ink) -- a shopping bag
+		local loop = W.block(g, "Loop", 9.5, 3, 9, 10, nil, 4)
+		loop.BackgroundTransparency = 1
+		W.ring(loop, C.Text, 2)
+		W.block(g, "Bag", 4, 10, 20, 15, nil, 3)
+		W.block(g, "Hole1", 9, 13, 2, 2, ink, 1, 2)
+		W.block(g, "Hole2", 17, 13, 2, 2, ink, 1, 2)
+	end,
+	Goals = function(g) -- a trophy
+		local handles = W.block(g, "Handles", 4, 4, 20, 7, nil, 3)
+		handles.BackgroundTransparency = 1
+		W.ring(handles, C.Text, 2)
+		W.block(g, "Cup", 8, 2, 12, 13, nil, 4)
+		W.block(g, "Stem", 12.5, 15, 3, 5)
+		W.block(g, "Base", 8, 20, 12, 3.5, nil, 1)
+	end,
+	Crew = function(g) -- two people
+		W.block(g, "Head1", 3.5, 5, 8, 8, nil, 4)
+		W.block(g, "Body1", 2, 15, 11, 9, nil, 4)
+		W.block(g, "Head2", 16.5, 5, 8, 8, nil, 4)
+		W.block(g, "Body2", 15, 15, 11, 9, nil, 4)
+	end,
+	Home_ = function(g, ink) -- a house
+		W.block(g, "Roof", 6, 3, 16, 16).Rotation = 45
+		W.block(g, "Walls", 5, 12, 18, 13, nil, 1)
+		W.block(g, "Door", 12, 17, 4, 8, ink, 1, 2)
+	end,
+	Settings = function(g, ink) -- three sliders
+		for i, x in ipairs({ 16, 5, 12 }) do
+			local y = 3 + (i - 1) * 9
+			W.block(g, "Track" .. i, 2, y, 24, 2, nil, 1)
+			local knob = W.block(g, "Knob" .. i, x, y - 2, 6, 6, ink, 3, 2)
+			W.ring(knob, C.Text, 1.5)
+		end
+	end,
+}
+
+------------------------------------------------------------------ the header and the home screen
+
+-- Everything around the page, for this screen and this page: the home screen has no header (its page
+-- starts right under the status bar, over the wallpaper); an app page gets the back chevron and its
+-- title. The shell is built once, so its sizes are set again here for the scale in use.
+local function layoutShell()
+	local touch = touchHeight()
+	local height = phone.Size.Y.Offset
+	local home = S.back == nil
+	local top = K.Bezel + K.Status
+	-- The shell's own text floor (the page on screen may be drawn with another one: S.minText).
+	local floor = math.ceil(K.MinText / math.max(ui.fit.Scale, 0.5))
+	local clockPx, cashPx, titlePx = math.max(13, floor), math.max(14, floor), math.max(20, floor)
+	ui.clock.TextSize = clockPx
+	ui.cash.TextSize = cashPx
+	ui.island.Size = UDim2.fromOffset(cashPx * 6, math.min(cashPx + 6, K.Status - 4))
+	ui.icons.Scale = clockPx / 13
+	-- The header: a thumb-sized back button with the chevron on the page's left edge, the title right
+	-- of the chevron (over the button's right part: a label lets the tap through).
+	ui.chevron.Scale = touch / Theme.Touch
+	ui.back.Position = UDim2.fromOffset(K.Bezel, top)
+	ui.back.Size = UDim2.fromOffset(touch, touch)
+	local titleLeft = K.Inset + math.ceil(12 * ui.chevron.Scale) + 8
+	ui.titleCap.MaxTextSize = titlePx
+	ui.title.Position = UDim2.fromOffset(titleLeft, top + math.floor((touch - (titlePx + 8)) / 2))
+	ui.title.Size = UDim2.fromOffset(K.W - titleLeft - K.Inset, titlePx + 8)
+	ui.headRule.Position = UDim2.fromOffset(K.Inset, top + touch)
+	ui.headRule.Size = UDim2.fromOffset(K.W - 2 * K.Inset, 1)
+	ui.title.Visible, ui.back.Visible, ui.headRule.Visible = not home, not home, not home
+	ui.wall.Visible = home
+	-- The page between them, and the home bar's thumb-sized strip along the foot.
+	local pageTop = top + (home and 8 or touch + 1)
+	local barTop = height - K.Bezel - touch
+	ui.screen.Position = UDim2.fromOffset(K.Inset, pageTop)
+	ui.screen.Size = UDim2.fromOffset(K.W - 2 * K.Inset, math.max(barTop - pageTop, 40))
+	ui.homeBar.Position = UDim2.fromOffset(K.W / 2 - 90, barTop)
+	ui.homeBar.Size = UDim2.fromOffset(180, touch)
 end
 
-local function customPage()
+local function setHeader(title, backTo)
+	if backTo == "Home" and S.fromGuide then
+		backTo = "Guide" -- opened from HOW TO PLAY: Back returns there
+	end
+	ui.title.Text = title
+	S.back = backTo
+	layoutShell()
+end
+
+function PAGES.Home()
+	setHeader("NEON PHONE", nil)
+	local screen = ui.screen
+	local touch, small = touchHeight(), textPx(13)
+	local width, height = screen.Size.X.Offset, screen.Size.Y.Offset
+	-- HOW TO PLAY and its hint keep the bottom of the page; the grid's three rows share what is left, so
+	-- on a short screen the icons shrink instead of running off it.
+	local hintH, labelH, gap = small + 4, small + 4, 8
+	local guideTop = height - hintH - 4 - touch
+	local cellH = math.clamp(math.floor((guideTop - 10 - 2 * gap) / 3), 36 + labelH + 4, 68 + labelH + 4)
+	local icon = cellH - labelH - 4
+	-- A tall screen has room to spare: a big clock on top, like a lock screen's, and more air between
+	-- the rows of icons.
+	local free = guideTop - 10 - (3 * cellH + 2 * gap)
+	local clockH = free >= 120 and 92 or 0
+	gap = math.clamp(gap + math.floor((free - clockH) / 4), gap, 26)
+	local gridH = 3 * cellH + 2 * gap
+	if clockH > 0 then
+		local big = themeText(screen, ui.clock.Text, UDim2.new(1, 0, 0, 56), UDim2.fromOffset(0, 12), 46, "Display", nil,
+			Enum.TextXAlignment.Center, true)
+		big.Name = "Clock"
+		themeText(screen, "PORT SOLANA", UDim2.new(1, 0, 0, small + 4), UDim2.fromOffset(0, 68), 13, "Bold", C.Dim,
+			Enum.TextXAlignment.Center, true).Name = "City"
+	end
+	local grid = W.frame(screen, "Apps")
+	grid.Position = UDim2.fromOffset(0, clockH + math.max(0, math.floor((guideTop - 10 - clockH - gridH) / 2)))
+	grid.Size = UDim2.fromOffset(width, gridH)
+	local layout = Instance.new("UIGridLayout")
+	layout.CellSize = UDim2.new(1 / 3, -6, 0, cellH)
+	layout.CellPadding = UDim2.fromOffset(9, gap)
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = grid
+	for i, app in ipairs(K.Apps) do
+		-- The whole cell is the button (icon and label), so the tap target is bigger than the icon.
+		local tile = Instance.new("TextButton")
+		tile.Name = app.Page
+		tile.LayoutOrder = i
+		tile.BackgroundTransparency = 1
+		tile.AutoButtonColor = false
+		tile.Text = ""
+		tile.Parent = grid
+		local face = W.block(tile, "Icon", 0, 0, icon, icon, app.Color, math.floor(icon * 0.22))
+		face.AnchorPoint = Vector2.new(0.5, 0)
+		face.Position = UDim2.fromScale(0.5, 0)
+		local g = W.frame(face, "Glyph")
+		g.AnchorPoint = Vector2.new(0.5, 0.5)
+		g.Position = UDim2.fromScale(0.5, 0.5)
+		g.Size = UDim2.fromOffset(28, 28)
+		local zoom = Instance.new("UIScale")
+		zoom.Scale = icon / 50
+		zoom.Parent = g
+		W.glyph[app.Page](g, app.Color)
+		local name = themeText(tile, app.Name, UDim2.new(1, 8, 0, labelH), UDim2.new(0, -4, 0, icon + 4), 13, "Display", nil,
+			Enum.TextXAlignment.Center, true)
+		name.Name = "Label"
+		tile.Activated:Connect(function()
+			sfx("Click")
+			show(app.Page)
+		end)
+	end
+	-- HOW TO PLAY, under the grid: a wide flat card, like a home-screen widget.
+	local guide = Instance.new("TextButton")
+	guide.Name = "Guide"
+	guide.AnchorPoint = Vector2.new(0.5, 0.5) -- centred, so the pulse grows evenly from the middle
+	guide.Position = UDim2.new(0.5, 0, 0, guideTop + touch / 2)
+	guide.Size = UDim2.new(1, 0, 0, touch)
+	guide.Text = ""
+	flat(guide, "Quiet")
+	guide.BackgroundColor3 = K.Card
+	guide.BackgroundTransparency = 0.1
+	guide.Parent = screen
+	guide.Activated:Connect(function()
+		sfx("Click")
+		show("Guide")
+	end)
+	local glow = W.ring(guide, C.Gold, 1)
+	glow.Transparency = 0.5
+	local badge = W.block(guide, "Badge", 0, 0, 28, 28, C.Gold, 6)
+	badge.AnchorPoint = Vector2.new(0, 0.5)
+	badge.Position = UDim2.new(0, 10, 0.5, 0)
+	themeText(badge, "?", UDim2.fromScale(1, 1), nil, 18, "Display", K.Ink, Enum.TextXAlignment.Center)
+	themeText(guide, "HOW TO PLAY", UDim2.new(1, -84, 1, 0), UDim2.fromOffset(50, 0), 17, "Display")
+	themeText(guide, "›", UDim2.new(0, 20, 1, 0), UDim2.new(1, -30, 0, 0), 20, "Display", C.Dim, Enum.TextXAlignment.Center)
+	local hint = themeText(screen, "Steal cars, heists, homes & more", UDim2.new(1, 0, 0, hintH), UDim2.fromOffset(0, guideTop + touch + 4),
+		13, "Body", C.Dim, Enum.TextXAlignment.Center, true)
+	hint.Name = "GuideHint"
+	-- First home screen this session: a few gentle pulses so new players spot it (never a popup).
+	if not S.guideHinted then
+		S.guideHinted = true
+		local pop = Instance.new("UIScale")
+		pop.Parent = guide
+		local pulse = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 2, true, 0.4)
+		TweenService:Create(pop, pulse, { Scale = 1.04 }):Play()
+		TweenService:Create(glow, pulse, { Thickness = 2, Transparency = 0 }):Play()
+	end
+end
+
+------------------------------------------------------------------ garage and its STYLE page
+
+function PAGES.Garage()
+	setHeader("GARAGE", "Home")
+	local mine = owned()
+	local touch, nameH = touchHeight(), textPx(15) + 4
+	local styleW = 96
+	local s = W.list(0)
+	local n = 0
+	for i, def in ipairs(Vehicles.List) do
+		if mine[def.Id] and canDrive(def) and not def.Hidden then
+			n += 1
+			-- Name and class on one line, DELIVER and STYLE under it, then (cars that can be tuned) the TUNE
+			-- strip: every button a thumb tall.
+			local tunable = Garage.CanTune(def)
+			local yButtons = 10 + nameH + 6
+			local yTune = yButtons + touch + 6
+			local r = W.row(s, def.Id, (tunable and yTune + touch or yButtons + touch) + 10, i)
+			local paint = customOf(def.Id)
+			local painted = paint > 0 and not def.Boat and Garage.Paints[paint]
+			-- Boats ignore paint (older saves may still hold some), so they show their stock colour.
+			local swatch = W.block(r, "Paint", 1, 10 + math.floor((nameH - 14) / 2), 14, 14, painted and painted.Color or def.Color, 4)
+			W.ring(swatch, C.Text, 1).Transparency = 0.7
+			themeText(r, def.DisplayName or def.Id, UDim2.new(0.64, -24, 0, nameH), UDim2.fromOffset(24, 10), 15, "Bold")
+			themeText(r, def.Class or "", UDim2.new(0.36, 0, 0, nameH), UDim2.new(0.64, 0, 0, 10), 13, "Body", C.Dim,
+				Enum.TextXAlignment.Right)
+			local deliver = W.button(r, "Deliver", def.Boat and "LAUNCH" or "DELIVER", "Primary", function()
+				Remotes.Event("RequestSpawnCar"):FireServer(def.Id)
+				PhoneUI.Close()
+			end)
+			deliver.Position = UDim2.fromOffset(0, yButtons)
+			deliver.Size = UDim2.new(1, -(styleW + 8), 0, touch)
+			if def.Boat then
+				-- A boat's textured hull shows no paint, rims or underglow (GarageService refuses them too).
+				local note = themeText(r, "Factory colours", UDim2.fromOffset(styleW, touch), UDim2.new(1, -styleW, 0, yButtons), 13, "Body",
+					C.Dim, Enum.TextXAlignment.Center)
+				note.Name = "Factory"
+				note.TextWrapped = true
+			else
+				local style = W.button(r, "Style", "STYLE", "Quiet", function()
+					detailId = def.Id
+					show("Custom")
+				end)
+				style.Position = UDim2.new(1, -styleW, 0, yButtons)
+				style.Size = UDim2.fromOffset(styleW, touch)
+			end
+			if tunable then
+				local tune = Garage.ParseTune(player:GetAttribute("Tune_" .. def.Id))
+				local full = tune.Total >= Garage.MaxTuneTotal
+				local b = themeButton(r, "Tune", touch, 0, "Quiet", function()
+					detailId = def.Id
+					show("Tune")
+				end)
+				b.Position = UDim2.fromOffset(0, yTune)
+				themeText(b, "TUNE", UDim2.new(0, 60, 1, 0), UDim2.fromOffset(12, 0), 17, "Display")
+				-- Display (condensed): the count still fits at a phone's text size. A stock car says what's
+				-- inside (speed AND sound), so new players look for the exhausts too.
+				local status = tune.Total == 0 and "SPEED + SOUND  ›" or (tune.Total .. " / " .. Garage.MaxTuneTotal .. " upgrades  ›")
+				themeText(b, full and "FULLY TUNED" or status,
+					UDim2.new(1, -90, 1, 0), UDim2.fromOffset(78, 0), 13, "Display", full and C.Gold or C.Dim,
+					Enum.TextXAlignment.Right)
+			end
+		end
+	end
+	if n == 0 then
+		W.note(s, "No cars for this role yet. Visit AutoNeon Motors downtown!", 1, C.Text, Enum.TextXAlignment.Center)
+	end
+end
+
+function PAGES.Custom()
 	local def = Vehicles.ById[detailId]
-	if not def then
-		show("Garage")
-		return
+	if not def or def.Boat or def.Hidden then
+		return show("Garage") -- boats can't be styled (the Garage shows no STYLE button for them)
 	end
 	setHeader(string.upper(def.DisplayName or def.Id), "Garage")
 	local paint, glow, rim = customOf(def.Id)
-	local paints, rims = styleOf(def.Id)
-	local s = list(0.02)
-	-- Paint: the car's own colour first (always owned), then every Garage paint.
-	local stockColor = typeof(def.Color) == "Color3" and def.Color or Color3.fromRGB(200, 200, 210)
-	local cells = { styleCell("Paints", def, 0, { Name = "Stock", Color = stockColor }, paint, paints, "RequestPaint") }
-	for i, entry in ipairs(Garage.Paints) do
-		table.insert(cells, styleCell("Paints", def, i, entry, paint, paints, "RequestPaint"))
-	end
-	swatchRow(s, "Paint", "New colour " .. money(Garage.PaintPrice) .. " once · switch back free", cells, 1)
-	if not def.Boat then -- boats have no wheels and no underglow (the server refuses both too)
-		cells = {}
-		for i, entry in ipairs(Garage.Rims) do
-			table.insert(cells, styleCell("Rims", def, i, entry, rim > 0 and rim or Garage.StockRim, rims, "RequestRims"))
-		end
-		swatchRow(s, "Rims", "New rims " .. money(Garage.RimPrice) .. " once · switch back free", cells, 2)
-		local installed = glow > 0
-		cells = {}
-		for i, entry in ipairs(Garage.Glows) do
-			local cell = { Color = entry.Color, Name = entry.Name, Key = "Glows:" .. def.Id .. ":" .. i }
-			if installed and i == glow then
-				cell.Current, cell.Caption, cell.CaptionColor = true, "ON", WHITE
-			elseif not Garage.Allowed(player, entry) then
-				cell.Locked, cell.Caption, cell.CaptionColor = true, Garage.Needs(entry) or "LOCKED", ORANGE
-			elseif not installed then
-				cell.Price, cell.Caption, cell.CaptionColor = Garage.UnderglowPrice, "INSTALL", GOLD
-			else
-				cell.Caption, cell.CaptionColor = "FREE", MINT
-			end
-			cell.Pick = function()
-				Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
-			end
-			table.insert(cells, cell)
-		end
-		swatchRow(s, "Underglow", installed and "Installed ✓ · colour swaps are free"
-			or ("Install once " .. money(Garage.UnderglowPrice) .. " · then every colour free"), cells, 3)
-	end
-	local hint = label(s, "Changes show on this car next time it's delivered (or right away if it's out).",
-		UDim2.new(1, 0, 0, 36), nil, LAVENDER, Enum.TextXAlignment.Center)
-	hint.LayoutOrder = 4
-	hint.TextWrapped = true
+	local s = W.list(0)
+	W.swatches(s, "Paint", money(Garage.PaintPrice), Garage.Paints, paint, 1, function(i)
+		Remotes.Event("RequestPaint"):FireServer(def.Id, i)
+	end)
+	W.swatches(s, "Rims", money(Garage.RimPrice), Garage.Rims, rim, 2, function(i)
+		Remotes.Event("RequestRims"):FireServer(def.Id, i)
+	end)
+	local glowPrice = glow > 0 and "FREE SWAP" or money(Garage.UnderglowPrice)
+	W.swatches(s, "Underglow", glowPrice, Garage.Glows, glow, 3, function(i)
+		Remotes.Event("RequestUnderglow"):FireServer(def.Id, i)
+	end)
+	W.note(s, "Changes show on this car next time it's delivered (or right away if it's out).", 4, nil,
+		Enum.TextXAlignment.Center).Name = "Hint"
 end
 
-local function dealerPage()
+------------------------------------------------------------------ garage: the TUNE page (Theme look)
+
+local TUNE_ARM_TIME = 4 -- seconds a buy button waits for its second tap
+-- Seconds a sent purchase waits for the server's answer: the button reads FITTING... and buy taps are
+-- ignored meanwhile. The answer (GarageResult, or a refusal toast) ends the wait sooner; with no answer
+-- at all (a silent refusal) the button goes back to its price after this.
+local TUNE_BUSY = 2.5
+-- Seconds the BUY button keeps offering the exhaust heard last (each listen starts it again). Longer
+-- than a buy button's wait: the rev alone lasts over two seconds, and BUY says what it buys and for
+-- how much the whole time.
+local EXHAUST_PICK_TIME = 8
+local BAR_TIME = 0.45 -- seconds a stat bar takes to glide to a new length
+local BAR_HEIGHT = 8 -- design px: thick enough to see the preview piece on a phone (0.7 scale)
+local BAR_FLOOR = 0.7 -- an empty bar is 70% of this car's stock number (see the header)
+local FLASH_TIME = 0.7 -- seconds a button stays lit after its upgrade lands
+
+local tuneArm, tuneArmUntil = nil, 0 -- the buy button waiting for its second tap ("<carId>/<button>"), and until when
+local tuneSent, tuneBusyUntil = nil, 0 -- the button whose purchase was sent (drawn FITTING...), and until when
+-- The exhaust the BUY button offers ("<carId>/X:<exhaust key>": the unbought chip tapped last), and until when.
+local exhaustPick, exhaustPickUntil = nil, 0
+-- What the armed (then sent) button buys, for the bars' preview: { Key = "<carId>/<button>", Id = carId,
+-- Stages = { [track] = stage after it }, Text = AUTO TUNE's plan line or nil }. nil for an exhaust.
+local tuneTarget
+local tuneBars = {} -- the stat bars as last drawn: { Id = carId, [field] = { From, To, At } }
+local tuneFlash -- { At = os.clock(), Keys = { ["<carId>/<button>"] = true } }: buttons to light up (PhoneUI.Init sets it)
+
+-- Theme's quiet surfaces are see-through black, made to sit over the street. The phone's screen is
+-- near-black itself, so on this page they could not be told from it: rows and chips were words with no
+-- button around them. Here they are Theme's lighter panel colour instead (flat gives every other page's
+-- quiet buttons the same look).
+local function lift(obj)
+	obj.BackgroundColor3 = Theme.Color.PanelLight
+	obj.BackgroundTransparency = 0.2
+	return obj
+end
+
+-- A themeButton for the TUNE page: the quiet ones are lifted, white and green ones show as they are.
+local function tuneButton(parent, name, height, order, kind, onTap)
+	local b = themeButton(parent, name, height, order, kind, onTap)
+	if kind ~= "Primary" and kind ~= "Confirm" then
+		lift(b)
+	end
+	return b
+end
+
+local function percent(share)
+	return math.floor(share * 100 + 0.5)
+end
+
+local function armed(key)
+	return tuneArm == key and os.clock() < tuneArmUntil
+end
+
+local function sent(key)
+	return tuneSent == key and os.clock() < tuneBusyUntil
+end
+
+local function picked(key)
+	return exhaustPick == key and os.clock() < exhaustPickUntil
+end
+
+-- The armed or sent purchase on car `id` whose gain the bars preview, or nil.
+local function previewOf(id)
+	local t = tuneTarget
+	if t and t.Id == id and (armed(t.Key) or sent(t.Key)) then
+		return t
+	end
+	return nil
+end
+
+-- The stages a car would have after `plan` ({ { Track, Stage }, ... }): a copy, for the bars' preview.
+local function stagesAfter(stages, plan)
+	local after = table.clone(stages)
+	for _, step in ipairs(plan) do
+		after[step.Track] = math.max(after[step.Track] or 0, step.Stage)
+	end
+	return after
+end
+
+-- Ask the server for a purchase (`fire` sends the remote). The button reads FITTING... until the answer,
+-- so the page never flicks back to the old price in between; PhoneUI.Init ends the wait when the answer
+-- or a refusal toast arrives (tuneSent = nil).
+local function send(key, fire)
+	tuneArm = nil
+	tuneSent, tuneBusyUntil = key, os.clock() + TUNE_BUSY
+	fire()
+	task.delay(TUNE_BUSY + 0.05, function()
+		if tuneSent == key and os.clock() >= tuneBusyUntil then
+			tuneSent = nil
+			if S.open and current == "Tune" then
+				show("Tune") -- refused without a word, or no answer: back to its price
+			end
+		end
+	end)
+end
+
+-- Buying takes two taps: the first arms the button (the page redraws it green and the bars preview
+-- `target`, see tuneTarget), the second, within TUNE_ARM_TIME, sends `run`. Arming another button, or
+-- waiting too long, lets go of the first. (Exhausts don't buy this way: see pickExhaust.)
+local function armOrRun(key, run, target)
+	if armed(key) then
+		send(key, run)
+	else
+		tuneArm, tuneArmUntil = key, os.clock() + TUNE_ARM_TIME
+		tuneTarget = target
+		exhaustPick = nil -- one green button at a time: the exhaust's BUY offer lets go too
+		if target then
+			target.Key = key
+		end
+		task.delay(TUNE_ARM_TIME + 0.05, function()
+			if tuneArm == key and os.clock() >= tuneArmUntil then
+				tuneArm = nil
+				if S.open and current == "Tune" then
+					show("Tune") -- back to its price
+				end
+			end
+		end)
+	end
+	show("Tune")
+end
+
+-- An exhaust chip that isn't bought yet was tapped (and its rev played): offer it on the BUY button for
+-- EXHAUST_PICK_TIME. Listening spends nothing however often a chip is tapped; each tap just starts the
+-- wait again. A track or AUTO TUNE waiting for its second tap lets go (one green button at a time).
+local function pickExhaust(key)
+	exhaustPick, exhaustPickUntil = key, os.clock() + EXHAUST_PICK_TIME
+	tuneArm = nil
+	task.delay(EXHAUST_PICK_TIME + 0.05, function()
+		if exhaustPick == key and os.clock() >= exhaustPickUntil then
+			exhaustPick = nil
+			if S.open and current == "Tune" then
+				show("Tune") -- BUY goes quiet again
+			end
+		end
+	end)
+	show("Tune")
+end
+
+-- One stat bar: white = stock, pink = what the tune added, see-through pink = what the armed button
+-- would add (shown before paying, like a tuning shop). `stock`, `to` (tuned) and `ahead` (after the
+-- armed purchase, or nil) are lengths, 0..1. The bar runs from `left` px to `right` px short of the
+-- panel's right edge, its top at `y`. A redraw in the middle of a glide (a purchase changes the cash and
+-- the tune a moment apart, each redrawing the page) carries on from where the bar was instead of
+-- starting again.
+local function tuneBar(parent, field, left, right, y, stock, to, ahead, now)
+	local rec = tuneBars[field]
+	if not rec then
+		rec = { From = stock, To = to, At = now }
+	elseif math.abs(rec.To - to) > 0.001 then
+		local done = math.clamp((now - rec.At) / BAR_TIME, 0, 1)
+		rec = { From = rec.From + (rec.To - rec.From) * done, To = to, At = now }
+	end
+	tuneBars[field] = rec
+	local done = math.clamp((now - rec.At) / BAR_TIME, 0, 1)
+	local bar, fill = Theme.Bar(parent, Theme.Color.Brand)
+	bar.Position = UDim2.new(0, left, 0, y)
+	bar.Size = UDim2.new(1, -(left + right), 0, BAR_HEIGHT)
+	-- The room left to grow has to show (a stock car's bar was a white line ending in nothing): Theme's
+	-- black track can't be seen in here (see lift), so the empty part is dim grey, like an empty stage pip.
+	bar.BackgroundColor3 = Theme.Color.Dim
+	bar.BackgroundTransparency = 0.75
+	-- Back to front: the preview piece (1), the tuned pink (2), the stock white (3).
+	fill.ZIndex = 2
+	fill.Size = UDim2.fromScale(rec.From + (rec.To - rec.From) * done, 1)
+	if done < 1 and rec.From ~= rec.To then
+		TweenService:Create(fill, TweenInfo.new(BAR_TIME * (1 - done), Enum.EasingStyle.Linear),
+			{ Size = UDim2.fromScale(rec.To, 1) }):Play()
+	end
+	if ahead and ahead > to + 0.001 then
+		local gain = Instance.new("Frame")
+		gain.Name = "Preview"
+		gain.Size = UDim2.fromScale(ahead, 1)
+		gain.BackgroundColor3 = Theme.Color.Brand
+		gain.BackgroundTransparency = 0.6
+		gain.BorderSizePixel = 0
+		gain.ZIndex = 1
+		Theme.Corners(gain, 2)
+		gain.Parent = bar
+	end
+	local base = Instance.new("Frame")
+	base.Name = "Stock"
+	base.Size = UDim2.fromScale(stock, 1)
+	base.BackgroundColor3 = Theme.Color.Text
+	base.BorderSizePixel = 0
+	base.ZIndex = fill.ZIndex + 1 -- over the pink, so only the gain shows past its end
+	Theme.Corners(base, 2)
+	base.Parent = bar
+end
+
+-- Light a button up for a moment when its purchase lands (fades out; never takes taps).
+local function flash(parent, key, now)
+	if not tuneFlash or not tuneFlash.Keys[key] then
+		return
+	end
+	local done = (now - tuneFlash.At) / FLASH_TIME
+	if done >= 1 then
+		return
+	end
+	local glow = Instance.new("Frame")
+	glow.Name = "Flash"
+	glow.Size = UDim2.fromScale(1, 1)
+	glow.BackgroundColor3 = Theme.Color.Text
+	glow.BackgroundTransparency = 0.5 + 0.5 * done
+	glow.BorderSizePixel = 0
+	glow.ZIndex = 5
+	Theme.Corners(glow)
+	glow.Parent = parent
+	TweenService:Create(glow, TweenInfo.new(FLASH_TIME * (1 - done), Enum.EasingStyle.Linear), { BackgroundTransparency = 1 }):Play()
+end
+
+-- Let the player hear an exhaust before paying, if SoundClient offers a preview (it owns every sound).
+local function previewExhaust(key)
+	pcall(function()
+		local sounds = require(script.Parent:WaitForChild("SoundClient"))
+		if type(sounds.PreviewExhaust) == "function" then
+			sounds.PreviewExhaust(key)
+		end
+	end)
+end
+
+local function tunePage()
+	local def = Vehicles.ById[detailId]
+	if not def or not Garage.CanTune(def) or not owned()[def.Id] then
+		return show("Garage") -- boats, police cars and cars you don't own have no TUNE page
+	end
+	local id = def.Id
+	setHeader("TUNE · " .. string.upper(def.DisplayName or id), "Garage")
+	local tune = Garage.ParseTune(player:GetAttribute("Tune_" .. id))
+	local cash = player:GetAttribute("Cash") or 0
+	local now = os.clock()
+	-- Text as it will be drawn (textPx: bigger on phones) and buttons tall enough for a thumb and for a
+	-- name over a line of small text (48 on a PC, where 44 would be enough for the thumb alone).
+	local big, small = textPx(17), textPx(11)
+	local touch = math.max(touchHeight(), big + small + 20)
+	if tuneBars.Id ~= id then
+		tuneBars = { Id = id } -- another car: its bars grow from stock
+	end
+	local s = list(0.02)
+
+	-- Every buy button asks this first: false (and a toast saying why) when the tap can't go through.
+	-- GarageService checks the same things again. While a purchase is on its way (FITTING...) taps just
+	-- do nothing.
+	local function canBuy(price, what)
+		if os.clock() < tuneBusyUntil then
+			return false
+		end
+		if (player:GetAttribute("Heat") or 0) > 0 and player:GetAttribute("HeatSpotted") then
+			NotifyController.Show(NotifyController.Messages.TuneWanted or "The cops can see you! Lose them before tuning.", nil, "police")
+			return false
+		end
+		local have = player:GetAttribute("Cash") or 0
+		if have < price then
+			NotifyController.Show("You need " .. money(price - have) .. " more for " .. what .. ".", nil, "money")
+			return false
+		end
+		return true
+	end
+
+	-- AUTO TUNE: the plan and its total are on the button before the first tap; the second tap sends it.
+	local plan, total, cheapest = Garage.AutoTunePlan(def, tune.Stages, cash)
+	local autoKey = id .. "/Auto"
+	local autoSent = sent(autoKey)
+	-- Cash that changed while AUTO TUNE waits for its second tap changes the plan: keep the preview on it.
+	if armed(autoKey) and tuneTarget and tuneTarget.Key == autoKey and #plan > 0 then
+		tuneTarget.Stages = stagesAfter(tune.Stages, plan)
+		tuneTarget.Text = Garage.PlanText(plan)
+	end
+	local target = previewOf(id) -- the armed or sent purchase the bars preview, or nil
+	local autoKind = "Primary"
+	if not cheapest or (#plan == 0 and not autoSent) then
+		autoKind = "Quiet" -- fully tuned, or nothing affordable
+	elseif autoSent or armed(autoKey) then
+		autoKind = "Confirm"
+	end
+	local titlePx, subPx = textPx(20), textPx(12)
+	-- Room for the title and a plan that wraps onto two lines ("Engine 1, Turbo 1, Brakes 1, Tyres 1,
+	-- Nitro 1" does on a phone).
+	local autoHeight = math.max(touch, 16 + titlePx + 2 + subPx * 2)
+	local auto = tuneButton(s, "AutoTune", autoHeight, 1, autoKind, function()
+		if not cheapest then
+			return -- fully tuned
+		elseif #plan == 0 then
+			canBuy(cheapest, "the cheapest upgrade") -- says how much is missing
+		elseif canBuy(total, "AUTO TUNE") then
+			armOrRun(autoKey, function()
+				-- The total this button shows and the stages its plan starts from: the server buys no more
+				-- than that, and nothing at all if the car has moved on (a second try after a slow answer).
+				Remotes.Event("RequestAutoTune"):FireServer(id, total, tune.Total)
+			end, { Id = id, Stages = stagesAfter(tune.Stages, plan), Text = Garage.PlanText(plan) })
+		end
+	end)
+	auto.AutoButtonColor = cheapest ~= nil
+	local title, sub
+	if not cheapest then
+		title, sub = "FULLY TUNED", "Every upgrade is fitted"
+	elseif autoSent then
+		title, sub = "FITTING...", target and target.Text or ""
+	elseif #plan == 0 then
+		title, sub = "AUTO TUNE", "Cheapest upgrade: " .. money(cheapest)
+	else
+		title, sub = (autoKind == "Confirm" and "TAP AGAIN  " or "AUTO TUNE  ") .. money(total), Garage.PlanText(plan)
+	end
+	-- Title over the plan, centred as a block: the plan is one line or two, whichever it needs.
+	local words = Instance.new("Frame")
+	words.Name = "Words"
+	words.BackgroundTransparency = 1
+	words.Size = UDim2.new(1, -16, 1, -8)
+	words.Position = UDim2.fromOffset(8, 4)
+	words.Parent = auto
+	local stack = Instance.new("UIListLayout")
+	stack.SortOrder = Enum.SortOrder.LayoutOrder
+	stack.VerticalAlignment = Enum.VerticalAlignment.Center
+	stack.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	stack.Padding = UDim.new(0, 2)
+	stack.Parent = words
+	themeText(words, title, UDim2.new(1, 0, 0, titlePx), nil, 20, "Display", auto.TextColor3,
+		Enum.TextXAlignment.Center).LayoutOrder = 1
+	local planLine = themeText(words, sub, UDim2.new(1, 0, 0, 0), nil, 12, "Body",
+		autoKind == "Quiet" and Theme.Color.Dim or auto.TextColor3, Enum.TextXAlignment.Center)
+	planLine.LayoutOrder = 2
+	planLine.TextWrapped = true
+	planLine.TextTruncate = Enum.TextTruncate.None
+	planLine.AutomaticSize = Enum.AutomaticSize.Y -- as tall as its lines
+	flash(auto, autoKey, now)
+
+	-- Stock against tuned, one bar per track (each track's first field is the one the driver feels).
+	-- Each bar is scaled to THIS car: empty = BAR_FLOOR of its stock number, full = this car fully tuned,
+	-- so every stage is a clear step (on one scale for every car, Engine 1 on a Palmetto grew the bar by
+	-- under 2 real px on a phone). The numbers on the right stay absolute (mph, %, seconds).
+	local tracks = Garage.Tune.Tracks
+	local tuned = Garage.TunedStats(def, tune.Stages)
+	local fullTune = Garage.TunedStats(def, Garage.MaxStages)
+	local ahead = target and Garage.TunedStats(def, target.Stages) -- after the armed purchase
+	-- Label | bar | value on each line, sized from the text (a phone's bigger text gets a wider label).
+	local pitch = math.max(20, small + 6)
+	local labelWidth, valueWidth = small * 6 + 12, 64
+	local barLeft, barRight = 10 + labelWidth + 6, valueWidth + 8 + 6
+	local panel = Instance.new("Frame")
+	panel.Name = "Stats"
+	panel.LayoutOrder = 2
+	panel.Size = UDim2.new(1, 0, 0, 16 + #tracks * pitch)
+	lift(Theme.Panel(panel))
+	panel.Parent = s
+	for i, track in ipairs(tracks) do
+		local field = track.Fields[1]
+		local stage = tune.Stages[track.Key]
+		local y = 8 + (i - 1) * pitch
+		local stock = def[field] or 0
+		local low = stock * BAR_FLOOR
+		local span = math.max((fullTune[field] or stock) - low, 0.001)
+		-- The armed purchase raises this track: preview its gain (see-through pink, and the number in pink).
+		local nextStage = target and target.Stages[track.Key] or stage
+		local previewing = ahead ~= nil and nextStage > stage
+		themeText(panel, track.Stat, UDim2.fromOffset(labelWidth, pitch), UDim2.fromOffset(10, y), 11, "Bold", Theme.Color.Dim,
+			nil, true)
+		tuneBar(panel, field, barLeft, barRight, y + math.floor((pitch - BAR_HEIGHT) / 2),
+			math.clamp((stock - low) / span, 0.03, 1), math.clamp((tuned[field] - low) / span, 0.03, 1),
+			previewing and math.clamp((ahead[field] - low) / span, 0.03, 1) or nil, now)
+		local shown = previewing and ahead[field] or tuned[field]
+		local shownStage = previewing and nextStage or stage
+		local value
+		if field == "MaxSpeed" then
+			value = math.floor(shown * K.StudsToMph + 0.5) .. " mph"
+		elseif field == "NitroSeconds" then
+			value = string.format("%.1f s", shown)
+		else
+			value = shownStage > 0 and ("+" .. percent(track.Gain[shownStage]) .. "%") or "stock"
+		end
+		local valueColor = stage > 0 and Theme.Color.Text or Theme.Color.Dim
+		if previewing then
+			valueColor = Theme.Color.Brand
+		end
+		themeText(panel, value, UDim2.fromOffset(valueWidth, pitch), UDim2.new(1, -(valueWidth + 8), 0, y), 13, "Display",
+			valueColor, Enum.TextXAlignment.Right, true)
+	end
+
+	-- Exhausts (sound only), right under the bars: "faster" (AUTO TUNE) and "sounds better" share the
+	-- first screen on a phone. Tapping a chip plays its rev, the fitted one too, so players can compare,
+	-- and for a chip that isn't bought that is ALL a tap does, however often. (It used to arm a buy, so
+	-- listening a second time paid up to $8,000 with no price on screen.) The head row's BUY button then
+	-- offers the one heard last, by price and name, and is the only thing here that spends anything.
+	-- One bought earlier fits with a single tap (free).
+	-- The head row is always a thumb tall with BUY in it, so nothing moves under a finger when an offer
+	-- comes or goes.
+	local chipName = textPx(14)
+	local chipTop = -math.floor((chipName + 2 + small) / 2) -- a name over a small line, centred as a block
+	local cols = 3
+	-- The exhaust on BUY: the one being bought right now, else the unbought one heard last.
+	local offer, offerKey
+	for _, exhaust in ipairs(Garage.Exhausts) do
+		local k = id .. "/X:" .. exhaust.Key
+		if not tune.Owned[exhaust.Key] and (sent(k) or (not offer and picked(k))) then
+			offer, offerKey = exhaust, k
+		end
+	end
+	local buying = offer ~= nil and sent(offerKey)
+	local affordable = offer ~= nil and cash >= offer.Price
+	local headName = textPx(15)
+	local headTop = -math.floor((headName + 2 + small) / 2)
+	local head = Instance.new("Frame")
+	head.Name = "ExhaustHead"
+	head.LayoutOrder = 3
+	head.Size = UDim2.new(1, 0, 0, touch)
+	head.BackgroundTransparency = 1
+	head.Parent = s
+	themeText(head, "EXHAUST SOUND", UDim2.new(2 / 3, -4, 0, headName), UDim2.new(0, 2, 0.5, headTop), 15, "Display", nil, nil,
+		true)
+	themeText(head, "tap one to hear it", UDim2.new(2 / 3, -4, 0, small), UDim2.new(0, 2, 0.5, headTop + headName + 2), 11,
+		"Body", Theme.Color.Dim, nil, true)
+	-- Green only when a tap would really buy (or is buying); quiet with dim words otherwise.
+	local buy = tuneButton(head, "BuyExhaust", touch, 0, (buying or affordable) and "Confirm" or "Quiet", function()
+		if not offer then
+			NotifyController.Show("Tap an exhaust to hear it first.", nil, "info")
+		elseif canBuy(offer.Price, "the " .. offer.Name .. " exhaust") then
+			send(offerKey, function()
+				Remotes.Event("RequestExhaust"):FireServer(id, offer.Key)
+			end)
+			show("Tune") -- FITTING... here and on its chip
+		end
+	end)
+	-- As wide as a chip and right above the last column of them (the grid below: cells a third of the
+	-- width less 4, 6 apart).
+	buy.Position = UDim2.new(1 - 1 / cols, 4, 0, 0)
+	buy.Size = UDim2.new(1 / cols, -4, 0, touch)
+	buy.AutoButtonColor = offer ~= nil
+	local buyInk = (buying or affordable) and buy.TextColor3 or Theme.Color.Dim
+	if offer then
+		-- "BUY $8,000" over "RACE": the price is on the button at the moment of paying.
+		themeText(buy, buying and "FITTING..." or ("BUY " .. money(offer.Price)), UDim2.new(1, -8, 0, chipName),
+			UDim2.new(0, 4, 0.5, chipTop), 14, "Display", buyInk, Enum.TextXAlignment.Center)
+		themeText(buy, offer.Name, UDim2.new(1, -8, 0, small), UDim2.new(0, 4, 0.5, chipTop + chipName + 2), 11, "Display",
+			buyInk, Enum.TextXAlignment.Center)
+	else
+		themeText(buy, "BUY", UDim2.new(1, -8, 1, 0), UDim2.fromOffset(4, 0), 14, "Display", buyInk, Enum.TextXAlignment.Center)
+	end
+	local lines = math.ceil(#Garage.Exhausts / cols)
+	local grid = Instance.new("Frame")
+	grid.Name = "Exhausts"
+	grid.LayoutOrder = 4
+	grid.Size = UDim2.new(1, 0, 0, lines * touch + (lines - 1) * 6)
+	grid.BackgroundTransparency = 1
+	grid.Parent = s
+	local cells = Instance.new("UIGridLayout")
+	cells.CellSize = UDim2.new(1 / cols, -4, 0, touch)
+	cells.CellPadding = UDim2.fromOffset(6, 6)
+	cells.SortOrder = Enum.SortOrder.LayoutOrder
+	cells.Parent = grid
+	-- Name over status, centred as a block. The status is in the condensed Display font so "FITTING..."
+	-- (and BUY's "BUY $8,000") fit a chip a third of the screen wide at a phone's text size.
+	for i, exhaust in ipairs(Garage.Exhausts) do
+		local key = exhaust.Key
+		local fitted = tune.Exhaust == key
+		local bought = tune.Owned[key] == true
+		local armKey = id .. "/X:" .. key
+		local fitting = not fitted and sent(armKey)
+		local chip = tuneButton(grid, key, touch, i, fitted and "Primary" or (fitting and "Confirm" or "Quiet"), function()
+			previewExhaust(key) -- every chip, the fitted one too
+			if fitted then
+				return
+			end
+			if bought then
+				-- Yours already: one tap fits it, free (canBuy: not while the cops watch or a purchase is on its way).
+				if canBuy(0, exhaust.Name) then
+					exhaustPick = nil
+					send(armKey, function()
+						Remotes.Event("RequestExhaust"):FireServer(id, key)
+					end)
+					show("Tune") -- FITTING... on the chip
+				end
+			else
+				pickExhaust(armKey) -- only heard: BUY, above, offers it now (no toast, no cash check, no cost)
+			end
+		end)
+		local ink = chip.TextColor3
+		if offer == exhaust and not fitting then
+			-- The one BUY offers: a solid chip with a pink line along its foot (Theme: pink only as a
+			-- highlight). Every quiet chip is the lighter colour in here (see lift), so the line is what
+			-- marks it: 3 px, which is still 2 real pixels on a phone.
+			chip.BackgroundTransparency = 0
+			local mark = Instance.new("Frame")
+			mark.Name = "Picked"
+			mark.Size = UDim2.new(1, -12, 0, 3)
+			mark.Position = UDim2.new(0, 6, 1, -6)
+			mark.BackgroundColor3 = Theme.Color.Brand
+			mark.BorderSizePixel = 0
+			mark.Parent = chip
+		end
+		themeText(chip, exhaust.Name, UDim2.new(1, -8, 0, chipName), UDim2.new(0, 4, 0.5, chipTop), 14, "Display", ink,
+			Enum.TextXAlignment.Center)
+		local status, statusColor
+		if fitted then
+			status, statusColor = "FITTED", ink
+		elseif fitting then
+			status, statusColor = "FITTING...", ink
+		elseif bought then
+			status, statusColor = "OWNED", Theme.Color.Dim
+		else
+			status, statusColor = money(exhaust.Price), cash >= exhaust.Price and Theme.Color.Cash or Theme.Color.Dim
+		end
+		themeText(chip, status, UDim2.new(1, -8, 0, small), UDim2.new(0, 4, 0.5, chipTop + chipName + 2), 11, "Display",
+			statusColor, Enum.TextXAlignment.Center)
+		flash(chip, armKey, now)
+	end
+
+	-- The five tracks. The whole row is the buy button for its next stage: name and pips over the gain
+	-- (centred as a block), the price on the right. The pips already say which stage it's on.
+	local nameTop = -math.floor((big + 2 + small) / 2)
+	for i, track in ipairs(tracks) do
+		local key = track.Key
+		local stage = tune.Stages[key]
+		local price = Garage.StagePrice(def, key, stage + 1) -- nil once the track is maxed
+		local armKey = id .. "/" .. key
+		local fitting = price ~= nil and sent(armKey)
+		local confirm = fitting or (price ~= nil and armed(armKey))
+		local r = tuneButton(s, key, touch, 10 + i, confirm and "Confirm" or "Quiet", function()
+			if price and canBuy(price, key .. " stage " .. (stage + 1)) then
+				armOrRun(armKey, function()
+					-- The stage this row shows: after a slow answer and a second try, the server won't sell
+					-- the next (dearer) stage in its place.
+					Remotes.Event("RequestTune"):FireServer(id, key, stage + 1)
+				end, { Id = id, Stages = stagesAfter(tune.Stages, { { Track = key, Stage = stage + 1 } }) })
+			end
+		end)
+		r.AutoButtonColor = price ~= nil
+		local ink = r.TextColor3
+		themeText(r, string.upper(key), UDim2.new(0, 72, 0, big), UDim2.new(0, 10, 0.5, nameTop), 17, "Display", ink)
+		pips(r, UDim2.new(0, 86, 0.5, nameTop + math.floor((big - 10) / 2)), stage, #track.Gain, ink)
+		-- The gain the next stage brings the car to (over stock), or the last one's on a maxed track. While
+		-- armed the bars above show that gain, so the line says what to do.
+		local line
+		if not price then
+			line = "+" .. percent(track.Gain[stage]) .. "% " .. track.What
+		elseif fitting then
+			line = "FITTING..."
+		elseif confirm then
+			line = "TAP AGAIN"
+		else
+			line = "+" .. percent(track.Gain[stage + 1]) .. "% " .. track.What
+		end
+		themeText(r, line, UDim2.new(1, -112, 0, small), UDim2.new(0, 10, 0.5, nameTop + big + 2), 11, "Body",
+			confirm and ink or Theme.Color.Dim)
+		local priceColor = Theme.Color.Gold -- MAX
+		if price then
+			priceColor = confirm and ink or (cash >= price and Theme.Color.Cash or Theme.Color.Dim)
+		end
+		themeText(r, price and money(price) or "MAX", UDim2.new(0, 90, 0, big), UDim2.new(1, -100, 0.5, -math.floor(big / 2)), 17,
+			"Display", priceColor, Enum.TextXAlignment.Right)
+		flash(r, armKey, now)
+	end
+
+	-- Two lines' room: it wraps at a phone's text size.
+	local foot = themeText(s, "Upgrades fit at once if the car is out.", UDim2.new(1, 0, 0, small * 2 + 6), nil, 11, "Body",
+		Theme.Color.Dim, Enum.TextXAlignment.Center, true)
+	foot.Name = "Hint"
+	foot.LayoutOrder = 30
+	foot.TextWrapped = true
+	foot.TextTruncate = Enum.TextTruncate.None
+end
+
+-- A place from MapService's Places list by name (the dealerships add themselves there), else `fallback`.
+local function placePos(name, fallback)
+	local ok, places = pcall(function()
+		return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("Places") or "[]")
+	end)
+	for _, p in ipairs(ok and places or {}) do
+		if p.n == name then
+			return Vector3.new(p.x, 0, p.z)
+		end
+	end
+	return fallback
+end
+
+-- Point the GPS at a place from that list (or `fallback`) and put the phone away.
+local function routeTo(name, fallback)
+	local pos = placePos(name, fallback)
+	if not pos then
+		NotifyController.Show("Can't find " .. name .. " on the map yet. Try again in a moment!", nil, "info")
+		return
+	end
+	GPSClient.SetTarget(name, pos)
+	PhoneUI.Close()
+end
+
+PAGES.Tune = tunePage
+
+------------------------------------------------------------------ AUTONEON, HOME, GPS, JOBS
+
+function PAGES.Dealer()
 	setHeader("AUTONEON", "Home")
 	local mine = owned()
-	local s = list(0.02)
+	local touch, nameH, small = touchHeight(), textPx(15) + 4, textPx(13)
+	local statH = small + 11
+	-- Name and price, class (and a heist lock), four small stats two by two, then one wide button.
+	local yClass = 10 + nameH + 2
+	local yStats = yClass + small + 4 + 8
+	local yButton = yStats + statH * 2 + 6 + 10
+	local s = W.list(0)
+	W.note(s, "Browse here, buy in person: see each ride up close at the dealership.", 0).Name = "Intro"
 	for i, def in ipairs(Vehicles.List) do
-		if def.Police then
+		if def.Police or def.Hidden then
 			continue
 		end
-		local r = row(s, 150, i)
-		r.Name = def.Id
-		label(r, def.DisplayName or def.Id, UDim2.new(0.6, 0, 0, 28), UDim2.fromOffset(12, 8))
-		label(r, def.Class, UDim2.new(0.4, 0, 0, 20), UDim2.new(0.58, -10, 0, 12), def.Color:Lerp(WHITE, 0.55), Enum.TextXAlignment.Right)
-		local stats = Instance.new("Frame")
-		stats.Size = UDim2.new(1, 0, 0, 80)
-		stats.Position = UDim2.fromOffset(0, 36)
-		stats.BackgroundTransparency = 1
-		stats.Parent = r
-		statBar(stats, "Speed", (def.MaxSpeed or 120) / 200, 0.02, PINK)
-		statBar(stats, "Accel", (def.AccelRating or 1) / 5, 0.26, CYAN)
-		statBar(stats, "Handling", (def.HandlingRating or 1) / 5, 0.5, MINT)
-		statBar(stats, "Tough", (def.Toughness or 1) / 5, 0.74, GOLD)
-		local text, color, click
+		local r = W.row(s, def.Id, yButton + touch + 10, i)
+		local have = player:GetAttribute("BigHeists") or 0
+		local tag, tagColor = money(def.Price or 0), C.Cash
+		local class = def.Class or ""
+		local text, kind, click
 		if mine[def.Id] then
-			text, color = "OWNED", Color3.fromRGB(70, 60, 100)
+			tag, tagColor = "OWNED", C.Dim
+			text, kind = "IN YOUR GARAGE", "Quiet"
 		elseif def.Pass then
-			text, color = "GAME PASS", PURPLE
+			tag, tagColor = "GAME PASS", C.Gold
+			text, kind = "SEE IT IN THE SHOP", "Quiet"
 			click = function()
-				for _, pass in ipairs(Shop.Passes) do
-					if pass.Key == def.Pass then
-						NotifyController.Show("The " .. (def.DisplayName or def.Id) .. " comes with the " .. pass.Name .. " pass.", PURPLE)
-					end
-				end
+				S.fromGuide, S.guideScroll = false, nil -- (like a fresh open: the SHOP goes Back to the home screen)
 				show("Shop")
 			end
+		elseif def.UnlockHeists and have < def.UnlockHeists then
+			-- Heist-locked (Config.Vehicles UnlockHeists): the lock and this player's count; the cash price
+			-- stays on the right of the name.
+			class = class .. "  ·  after " .. def.UnlockHeists .. " big heists"
+			text, kind = "LOCKED: " .. def.UnlockHeists .. " BIG HEISTS (" .. have .. "/" .. def.UnlockHeists .. ")", "Quiet"
+			click = function()
+				NotifyController.Show("Pull big heists (" .. Heists.BigNames() .. "), or help your crew pull them, to unlock the "
+					.. (def.DisplayName or def.Id) .. ". Then buy it with cash at the dealer.", C.Gold, "info")
+			end
 		else
-			text, color = "BUY " .. money(def.Price or 0), PINK
-			click = function(b)
-				if confirmBuy.id == def.Id and os.clock() - confirmBuy.at < 4 then
-					confirmBuy.id = nil
-					Remotes.Event("RequestBuyCar"):FireServer(def.Id)
-				else
-					confirmBuy.id, confirmBuy.at = def.Id, os.clock()
-					b.Text = "TAP TO CONFIRM"
-					b.BackgroundColor3 = GOLD
-					task.delay(4, function()
-						if b.Parent and b.Text == "TAP TO CONFIRM" then
-							b.Text = text
-							b.BackgroundColor3 = color
-						end
-					end)
-				end
+			local where = def.Boat and K.Dealers.Boats or K.Dealers.Cars
+			text, kind = def.Boat and "GPS TO THE MARINA" or "GPS TO THE DEALER", "Quiet"
+			click = function()
+				routeTo(where.Name, where.Pos)
 			end
 		end
-		local b
-		b = button(r, text, UDim2.new(1, -24, 0, 26), UDim2.new(0, 12, 1, -32), color, click and function()
-			click(b)
-		end)
-		b.Name = "Buy"
+		themeText(r, def.DisplayName or def.Id, UDim2.new(0.6, 0, 0, nameH), UDim2.fromOffset(0, 10), 15, "Bold")
+		themeText(r, tag, UDim2.new(0.4, 0, 0, nameH), UDim2.new(0.6, 0, 0, 10), 15, "Display", tagColor, Enum.TextXAlignment.Right)
+		themeText(r, class, UDim2.new(1, 0, 0, small + 4), UDim2.fromOffset(0, yClass), 13, "Body", C.Dim)
+		local stats = W.frame(r, "Stats")
+		stats.Position = UDim2.fromOffset(0, yStats)
+		stats.Size = UDim2.new(1, 0, 0, statH * 2 + 6)
+		local grid = Instance.new("UIGridLayout")
+		grid.CellSize = UDim2.new(0.5, -6, 0, statH)
+		grid.CellPadding = UDim2.fromOffset(12, 6)
+		grid.SortOrder = Enum.SortOrder.LayoutOrder
+		grid.Parent = stats
+		local speed = def.MaxSpeed or 120
+		W.stat(stats, 1, "SPEED", math.floor(speed * K.StudsToMph + 0.5) .. " mph", speed / math.max(Vehicles.TopSpeed or 200, 1))
+		W.stat(stats, 2, "ACCEL", (def.AccelRating or 1) .. " / 5", (def.AccelRating or 1) / 5)
+		W.stat(stats, 3, "HANDLING", (def.HandlingRating or 1) .. " / 5", (def.HandlingRating or 1) / 5)
+		W.stat(stats, 4, "TOUGH", (def.Toughness or 1) .. " / 5", (def.Toughness or 1) / 5)
+		local b = W.button(r, "Buy", text, kind, click)
+		b.Position = UDim2.fromOffset(0, yButton)
+		b.Size = UDim2.new(1, 0, 0, touch)
+		if not click then
+			b.TextColor3 = C.Dim -- nothing to do with one you own
+			b.AutoButtonColor = false
+		end
 	end
 end
 
-local GPS_TABS = { { "Activity", "FUN" }, { "Heist", "HEISTS" }, { "Service", "PLACES" } }
+function PAGES.Home_()
+	setHeader("HOME", "Home")
+	local ok, HouseClient = pcall(function()
+		return require(script.Parent:WaitForChild("HouseClient", 2))
+	end)
+	if not ok or not HouseClient then
+		W.note(ui.screen, "Homes are loading...", 0, C.Text, Enum.TextXAlignment.Center)
+		return
+	end
+	local s = W.list(0)
+	local mine = HouseClient.HomeName()
+	W.item(s, {
+		Name = "MyHome", Order = 0,
+		Title = mine or "You don't own a home yet",
+		Sub = mine and "You spawn there in free roam, and your cars wait in its garage." or "Pick one below and drive to its front door.",
+		Button = mine and "GO HOME" or "HOW IT WORKS", ButtonName = "GoHome", Kind = mine and "Primary" or "Quiet", Width = 124,
+		OnTap = function()
+			if HouseClient.RouteTo() then
+				PhoneUI.Close()
+			else
+				NotifyController.Show("Pick a home below, drive to its front door and press View / Buy. You spawn there and your cars wait in its garage.",
+					nil, "info")
+			end
+		end,
+	})
+	for i, h in ipairs(HouseClient.Homes()) do
+		W.item(s, {
+			Name = h.Id, Order = i,
+			Title = h.Name,
+			Sub = h.Blurb,
+			Meta = (h.Owned and "YOURS" or money(h.Price)) .. "  ·  " .. tostring(h.GarageSlots) .. " cars  ·  "
+				.. GPSClient.FormatDistance(GPSClient.Distance(h.Position) or 0),
+			MetaColor = h.Owned and C.Gold or C.Cash,
+			Button = "GPS", ButtonName = "Go", Width = 72,
+			OnTap = function()
+				HouseClient.RouteTo(h.Id)
+				PhoneUI.Close()
+			end,
+		})
+	end
+end
 
-local function gpsPage()
+function PAGES.GPS()
 	setHeader("GPS", "Home")
 	local places = {}
 	local ok, decoded = pcall(function()
 		return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("Places") or "[]")
 	end)
-	if ok then
+	if ok and type(decoded) == "table" then
 		places = decoded
 	end
 	local open = {}
 	for id in string.gmatch(ReplicatedStorage:GetAttribute("OpenHeists") or "", "[^,]+") do
 		open[id] = true
 	end
-	local tabs = Instance.new("Frame")
-	tabs.Size = UDim2.fromScale(1, 0.08)
-	tabs.Position = UDim2.fromScale(0, 0.01)
-	tabs.BackgroundTransparency = 1
-	tabs.Parent = screen
-	tabs.Name = "Tabs"
-	for i, t in ipairs(GPS_TABS) do
-		button(tabs, t[2], UDim2.fromScale(0.31, 1), UDim2.fromScale((i - 1) * 0.345, 0), gpsTab == t[1] and PINK or PANEL, function()
-			gpsTab = t[1]
+	local touch = touchHeight()
+	-- Three tabs side by side (6 px apart), the one showing in white.
+	local tabs = W.frame(ui.screen, "Tabs")
+	tabs.Position = UDim2.fromOffset(0, 8)
+	tabs.Size = UDim2.new(1, 0, 0, touch)
+	for i, t in ipairs(K.GpsTabs) do
+		local tab = W.button(tabs, t[1], t[2], S.gpsTab == t[1] and "Primary" or "Quiet", function()
+			S.gpsTab = t[1]
 			show("GPS")
-		end).Name = t[1]
+		end)
+		tab.Position = UDim2.new((i - 1) / 3, (i - 1) * 2, 0, 0)
+		tab.Size = UDim2.new(1 / 3, -4, 1, 0)
 	end
-	local top = 0.11
+	local top = 8 + touch + 8
 	if GPSClient.Target() then
-		button(screen, "CLEAR ROUTE", UDim2.fromScale(1, 0.07), UDim2.fromScale(0, 0.11), Color3.fromRGB(90, 70, 130), function()
+		local clearRoute = W.button(ui.screen, "ClearRoute", "CLEAR ROUTE", "Quiet", function()
 			GPSClient.Clear()
 			show("GPS")
 		end)
-		top = 0.2
+		clearRoute.Position = UDim2.fromOffset(0, top)
+		clearRoute.Size = UDim2.new(1, 0, 0, touch)
+		top += touch + 8
 	end
-	local s = list(top)
+	local s = W.list(top)
 	local rows = {}
 	for _, p in ipairs(places) do
-		if p.c == gpsTab then
+		if p.c == S.gpsTab then
 			local pos = Vector3.new(p.x, 0, p.z)
 			table.insert(rows, { p = p, pos = pos, d = GPSClient.Distance(pos) or 0 })
 		end
 	end
 	table.sort(rows, function(a, b)
-		if gpsTab == "Heist" and (open[a.p.id] ~= nil) ~= (open[b.p.id] ~= nil) then
+		if S.gpsTab == "Heist" and (open[a.p.id] ~= nil) ~= (open[b.p.id] ~= nil) then
 			return open[a.p.id] ~= nil
 		end
 		return a.d < b.d
 	end)
 	for i, item in ipairs(rows) do
 		local p = item.p
-		local r = row(s, 48, i)
-		r.Name = p.id or p.n
-		local nameColor = WHITE
 		local status = (p.k and (p.k .. " · ") or "") .. GPSClient.FormatDistance(item.d)
+		local nameColor, statusColor
 		if p.c == "Heist" then
-			nameColor = open[p.id] and MINT or Color3.fromRGB(150, 140, 175)
+			-- Open heists first and in full white, with OPEN in green; closed ones dim.
+			nameColor = not open[p.id] and C.Dim or nil
+			statusColor = open[p.id] and C.Cash or nil
 			status = (open[p.id] and "OPEN · " or "closed · ") .. GPSClient.FormatDistance(item.d)
 		end
-		label(r, p.n, UDim2.new(0.66, 0, 0, 20), UDim2.fromOffset(10, 6), nameColor)
-		label(r, status, UDim2.new(0.66, 0, 0, 15), UDim2.fromOffset(10, 28), Color3.fromRGB(200, 190, 230))
-		button(r, "GO", UDim2.new(0.26, 0, 0, 32), UDim2.new(0.72, -6, 0, 8), MINT, function()
-			GPSClient.SetTarget(p.n, item.pos)
-			PhoneUI.Close()
-		end).Name = "Go"
+		W.item(s, {
+			Name = tostring(p.id or p.n), Order = i,
+			Title = p.n, TitleColor = nameColor,
+			Sub = status, SubColor = statusColor,
+			Button = "GO", ButtonName = "Go", Width = 64,
+			OnTap = function()
+				GPSClient.SetTarget(p.n, item.pos)
+				PhoneUI.Close()
+			end,
+		})
+	end
+	if #rows == 0 then
+		W.note(s, "Nothing on the map here yet.", 1, nil, Enum.TextXAlignment.Center)
 	end
 end
 
-local function jobsPage()
+function PAGES.Jobs()
 	setHeader("JOBS", "Home")
-	local s = list(0.02)
+	local s = W.list(0)
 	local side = player:GetAttribute("Side") or "Civilian"
-	-- Police duty: an optional job. TeamService checks heat, the cooldown and the cop cap, and says
-	-- why in a toast; a switch respawns you at your side's spawn with its starter car.
-	local cop = side == "Cop"
-	local cops = 0
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p:GetAttribute("Side") == "Cop" then
-			cops += 1
-		end
-	end
-	local r = row(s, 132, 1)
-	r.Name = "Duty"
-	label(r, cop and "🚓 ON DUTY: POLICE" or "🚓 POLICE (OPTIONAL JOB)", UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), CYAN)
-	local blurb = label(r, cop and "Chase wanted players for bounties. Off duty, you roam as a citizen again."
-		or "Chase wanted players and earn bounties. You'll start at the station with a patrol car.",
-		UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 32), LAVENDER)
-	blurb.TextWrapped = true
-	label(r, "Cops on duty: " .. cops .. " / " .. TeamsConfig.MaxCops(#Players:GetPlayers()), UDim2.new(1, -20, 0, 16),
-		UDim2.fromOffset(10, 68), cop and CYAN or LAVENDER)
-	button(r, cop and "GO OFF DUTY" or "GO ON DUTY (POLICE)", UDim2.new(1, -20, 0, 34), UDim2.new(0, 10, 1, -42),
-		cop and PINK or CYAN, function()
-			dutyAskedAt = os.clock()
-			Remotes.Event("RequestTeam"):FireServer(cop and "Civilian" or "Cop")
-		end).Name = "Duty"
+	W.item(s, {
+		Name = "Role", Order = 1,
+		Title = "You are: " .. (side == "Cop" and "POLICE" or side == "Prisoner" and "IN PRISON" or "FREE ROAM"),
+		TitleColor = side == "Cop" and C.Police or nil,
+		Sub = "Switch between free roam and police.",
+		Button = "SWITCH ROLE", ButtonName = "Switch", Width = 116,
+		OnTap = function()
+			PhoneUI.Close()
+			local TeamUI = require(script.Parent:WaitForChild("TeamUI"))
+			if TeamUI.Open then
+				TeamUI.Open()
+			end
+		end,
+	})
 	local jobs = {
 		{ "Taxi driver", "Pick up passengers, drop them off fast for tips.", "Taxi Stand" },
 		{ "Street racer", "Beat par on 3 routes. Set a best time!", "Ocean Drive Sprint" },
 		{ "Drifter", "Slide through the Drift Zone on Lighthouse Key.", "Drift Zone" },
 	}
+	for i, j in ipairs(jobs) do
+		W.item(s, {
+			Name = j[3], Order = i + 1,
+			Title = j[1],
+			Sub = j[2],
+			Button = "GPS", ButtonName = "Go", Width = 72,
+			OnTap = function()
+				routeTo(j[3], nil)
+			end,
+		})
+	end
 	-- Phone missions (MissionService): full pay once a day each.
 	local done = {}
 	for id in string.gmatch(player:GetAttribute("MissionsDone") or "", "[^,]+") do
 		done[id] = true
 	end
-	-- Only your side's missions (Side defaults to "Civilian").
-	local mine = {}
-	for _, m in ipairs(Missions.List) do
-		if (m.Side or "Civilian") == side then
-			table.insert(mine, m)
-		end
-	end
-	if #mine > 0 then
-		local mh = label(s, "MISSIONS", UDim2.new(1, 0, 0, 22), nil, MINT, Enum.TextXAlignment.Center)
-		mh.LayoutOrder = 50
-	end
-	for i, m in ipairs(mine) do
-		local mr = row(s, 96, 50 + i)
-		mr.Name = m.Id
-		label(mr, m.Name .. (done[m.Id] and "  ✅" or ""), UDim2.new(0.66, 0, 0, 22), UDim2.fromOffset(10, 6), done[m.Id] and MINT or WHITE)
-		local b = label(mr, m.Blurb, UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 30), Color3.fromRGB(200, 190, 230))
-		b.TextWrapped = true
-		local share = type(Missions.RepeatShareFor) == "function" and Missions.RepeatShareFor(m) or Missions.RepeatShare
-		label(mr, (done[m.Id] and "repeat " or "") .. money(done[m.Id] and math.floor(m.Cash * share) or m.Cash)
-			.. (m.NeedsBoat and "  ·  boat" or ""), UDim2.new(0.5, 0, 0, 18), UDim2.new(0, 10, 1, -24), GOLD)
-		button(mr, "START", UDim2.new(0.3, 0, 0, 26), UDim2.new(0.68, -6, 1, -32), MINT, function()
-			Remotes.Event("RequestMission"):FireServer("Start", m.Id)
-			PhoneUI.Close()
-		end).Name = "Start"
-	end
-	for i, j in ipairs(jobs) do
-		local jr = row(s, 84, i + 1)
-		label(jr, j[1], UDim2.new(0.62, 0, 0, 24), UDim2.fromOffset(10, 6))
-		local d = label(jr, j[2], UDim2.new(0.62, 0, 0, 40), UDim2.fromOffset(10, 34), Color3.fromRGB(200, 190, 230))
-		d.TextWrapped = true
-		button(jr, "GPS", UDim2.new(0.26, 0, 0, 32), UDim2.new(0.72, -6, 0, 26), MINT, function()
-			local ok, places = pcall(function()
-				return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("Places") or "[]")
-			end)
-			for _, p in ipairs(ok and places or {}) do
-				if p.n == j[3] then
-					GPSClient.SetTarget(p.n, Vector3.new(p.x, 0, p.z))
-					PhoneUI.Close()
-					return
-				end
-			end
-		end)
+	W.head(s, "MISSIONS", 50)
+	for i, m in ipairs(Missions.List) do
+		W.item(s, {
+			Name = m.Id, Order = 50 + i,
+			Title = m.Name .. (done[m.Id] and "  ✓" or ""), TitleColor = done[m.Id] and C.Cash or nil,
+			Sub = m.Blurb,
+			Meta = (done[m.Id] and "repeat " or "") .. money(done[m.Id] and math.floor(m.Cash * Missions.RepeatShare) or m.Cash)
+				.. (m.NeedsBoat and "  ·  boat" or ""),
+			MetaColor = C.Cash,
+			Button = "START", ButtonName = "Start", Kind = "Primary", Width = 84,
+			OnTap = function()
+				Remotes.Event("RequestMission"):FireServer("Start", m.Id)
+				PhoneUI.Close()
+			end,
+		})
 	end
 end
 
 ------------------------------------------------------------------ shop
 
-local GREY = Color3.fromRGB(70, 60, 100)
-local priceCache = {} -- [id] = Robux price read live from Roblox
-
-local function robux(n)
-	return "R$ " .. string.sub(money(n), 2)
+local priceCache = {} -- [id] = "R$ 499" (read live: prices are never hard-coded)
+local function priceText(id, infoType)
+	if id == 0 then
+		return "SOON"
+	end
+	if priceCache[id] then
+		return priceCache[id]
+	end
+	local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, id, infoType)
+	if ok and info and info.PriceInRobux then
+		priceCache[id] = "R$ " .. info.PriceInRobux
+		return priceCache[id]
+	end
+	return "BUY"
 end
 
--- The price to show: live from Roblox once the item exists (Managed Pricing, price changes), else the
--- starting price in Config.Shop. Yields (web call): run it in its own thread.
-local function livePrice(item, infoType)
-	if item.Id == 0 then
-		return item.Price
-	end
-	if priceCache[item.Id] == nil then
-		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, item.Id, infoType)
-		if ok and type(info) == "table" and type(info.PriceInRobux) == "number" then
-			priceCache[item.Id] = info.PriceInRobux
+function PAGES.Shop()
+	setHeader("SHOP", "Home")
+	local s = W.list(0)
+	W.head(s, "GAME PASSES", 0)
+	for i, pass in ipairs(Shop.Passes) do
+		local has = player:GetAttribute("Pass_" .. pass.Key) == true
+		local _, b = W.item(s, {
+			Name = pass.Key, Order = i,
+			Title = pass.Name,
+			Sub = pass.Perk,
+			Button = has and "OWNED" or "...", ButtonName = "Buy", Kind = has and "Quiet" or "Primary", Width = 96,
+			OnTap = function()
+				if not has and pass.Id ~= 0 then
+					MarketplaceService:PromptGamePassPurchase(player, pass.Id)
+				elseif pass.Id == 0 then
+					NotifyController.Show(pass.Name .. " is coming soon!", nil, "info")
+				end
+			end,
+		})
+		if has then
+			b.TextColor3 = C.Dim
+			b.AutoButtonColor = false
+		else
+			task.spawn(function()
+				local text = priceText(pass.Id, Enum.InfoType.GamePass)
+				if b.Parent then
+					b.Text = text
+				end
+			end)
 		end
 	end
-	return priceCache[item.Id] or item.Price
-end
-
--- The price label: the config price right away, the live one when it arrives.
-local function priceLabel(parent, item, infoType, size, pos, align)
-	local l = label(parent, item.Price and robux(item.Price) or "", size, pos, MINT, align)
-	l.Name = "Price"
-	if item.Id ~= 0 then
+	W.head(s, "CASH PACKS", 49)
+	-- Honest about what cash packs can't do: heist locks, cop ranks and pass cars stay locked.
+	W.note(s, "Cash packs add cash only: they can't skip heist locks, cop ranks or passes.", 50).Name = "CashNote"
+	for i, product in ipairs(Shop.Products) do
+		local _, b = W.item(s, {
+			Name = product.Key, Order = 50 + i,
+			Title = money(product.Cash), TitleColor = C.Cash,
+			Button = "...", ButtonName = "Buy", Kind = "Primary", Width = 96,
+			OnTap = function()
+				if product.Id ~= 0 then
+					MarketplaceService:PromptProductPurchase(player, product.Id)
+				else
+					NotifyController.Show("Cash packs are coming soon!", nil, "info")
+				end
+			end,
+		})
 		task.spawn(function()
-			local price = livePrice(item, infoType)
-			if l.Parent and type(price) == "number" then
-				l.Text = robux(price)
+			local text = priceText(product.Id, Enum.InfoType.Product)
+			if b.Parent then
+				b.Text = text
 			end
 		end)
 	end
-	return l
-end
-
--- BUY / FREE / OWNED / COMING SOON. kind = "Pass" | "Product" (ShopService's RequestShopFree kinds).
-local function shopButton(parent, size, pos, kind, item, owns, soonText)
-	local free = player:GetAttribute("ShopFree") -- "Studio" | "Owner" | nil, set by ShopService
-	local text, color, click
-	if owns then
-		text, color = "OWNED ✓", GREY
-	elseif free == "Studio" or free == "Owner" then
-		text, color = free == "Studio" and "FREE (Studio)" or "FREE (owner)", MINT
-		click = function()
-			Remotes.Event("RequestShopFree"):FireServer(kind, item.Key)
-		end
-	elseif item.Id ~= 0 then
-		text, color = "BUY", kind == "Pass" and PURPLE or PINK
-		click = function()
-			if kind == "Pass" then
-				MarketplaceService:PromptGamePassPurchase(player, item.Id)
-			else
-				MarketplaceService:PromptProductPurchase(player, item.Id)
-			end
-		end
-	else
-		text, color = "COMING SOON", GREY
-		click = function()
-			NotifyController.Show(soonText, PURPLE)
-		end
-	end
-	local b = button(parent, text, size, pos, color, click)
-	b.Name = "Buy"
-	return b
-end
-
-local function shopPage()
-	setHeader("SHOP", "Home")
-	local s = list(0.02)
-	local free = player:GetAttribute("ShopFree")
-	if free == "Studio" or free == "Owner" then
-		local banner = label(s, free == "Studio" and "🧪 STUDIO TEST: everything here is free and instant."
-			or "👑 Your game: every pass is on, and cash packs are free for you.", UDim2.new(1, 0, 0, 36), nil, GOLD,
-			Enum.TextXAlignment.Center)
-		banner.TextWrapped = true
-		banner.LayoutOrder = 0
-	end
-	local head = label(s, "GAME PASSES", UDim2.new(1, 0, 0, 24), nil, PURPLE:Lerp(WHITE, 0.35), Enum.TextXAlignment.Center)
-	head.LayoutOrder = 1
-	for i, pass in ipairs(Shop.Passes) do
-		local r = row(s, 116, 1 + i)
-		r.Name = pass.Key
-		label(r, pass.Icon, UDim2.fromOffset(40, 40), UDim2.fromOffset(8, 10), WHITE, Enum.TextXAlignment.Center)
-		label(r, pass.Name, UDim2.new(0.7, -64, 0, 24), UDim2.fromOffset(54, 8), GOLD)
-		priceLabel(r, pass, Enum.InfoType.GamePass, UDim2.new(0.3, 0, 0, 22), UDim2.new(0.7, -10, 0, 9), Enum.TextXAlignment.Right)
-		local perk = label(r, pass.Perk, UDim2.new(1, -64, 0, 36), UDim2.fromOffset(54, 34), LAVENDER)
-		perk.TextWrapped = true
-		shopButton(r, UDim2.new(0.5, 0, 0, 32), UDim2.new(0.5, -10, 1, -40), "Pass", pass,
-			player:GetAttribute("Pass_" .. pass.Key) == true, pass.Name .. " is coming soon!")
-	end
-	local head2 = label(s, "CASH PACKS", UDim2.new(1, 0, 0, 24), nil, MINT, Enum.TextXAlignment.Center)
-	head2.LayoutOrder = 50
-	for i, product in ipairs(Shop.Products) do
-		local r = row(s, 56, 50 + i)
-		r.Name = product.Key
-		label(r, "💵 " .. money(product.Cash), UDim2.new(0.6, -14, 0, 26), UDim2.fromOffset(10, 5), MINT)
-		local price = priceLabel(r, product, Enum.InfoType.Product, UDim2.new(0.6, -46, 0, 16), UDim2.fromOffset(42, 33),
-			Enum.TextXAlignment.Left)
-		price.TextColor3 = WHITE
-		shopButton(r, UDim2.new(0.36, 0, 0, 36), UDim2.new(0.64, -10, 0, 10), "Product", product, false,
-			"Cash packs are coming soon!")
-	end
-	local foot = label(s, "Prices in Robux. Cash goes straight to your bank.", UDim2.new(1, 0, 0, 18), nil,
-		Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
-	foot.LayoutOrder = 100
 end
 
 ------------------------------------------------------------------ goals: ranks + daily challenges
 
-local function goalsPage()
+function PAGES.Goals()
 	setHeader("GOALS", "Home")
 	local ProgressClient = require(script.Parent:WaitForChild("ProgressClient"))
-	local s = list(0.02)
+	local s = W.list(0)
+	-- Goal chain hidden with its X (JourneyService)? Offer it back; the server puts it where it was.
+	if player:GetAttribute("JourneyHidden") == true then
+		W.gap(s, -2, 8)
+		local again = W.button(s, "ShowGoals", "SHOW MY GOALS AGAIN", "Quiet", function()
+			Remotes.Event("JourneyStep"):FireServer("Show")
+		end)
+		again.Size = UDim2.new(1, 0, 0, touchHeight())
+		again.LayoutOrder = -1
+		W.gap(s, 0, 8)
+	end
 	for i, side in ipairs({ "Civilian", "Cop" }) do
 		local rank, frac, xp, nextXP = ProgressClient.Progress(side)
-		local color = side == "Cop" and CYAN or PINK
-		local r = row(s, 86, i)
-		r.Name = side
-		label(r, ROLE[side] .. "  ·  RANK " .. rank, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), color)
-		local bg = Instance.new("Frame")
-		bg.Size = UDim2.new(1, -20, 0, 10)
-		bg.Position = UDim2.fromOffset(10, 36)
-		bg.BackgroundColor3 = DARK
-		bg.Parent = r
-		corner(bg, UDim.new(0.5, 0))
-		local fillBar = Instance.new("Frame")
-		fillBar.Size = UDim2.fromScale(math.clamp(frac, 0.02, 1), 1)
-		fillBar.BackgroundColor3 = color
-		fillBar.Parent = bg
-		corner(fillBar, UDim.new(0.5, 0))
-		local unlocks = Progression.Unlocks[side == "Cop" and "cop" or "civ"]
+		local cop = side == "Cop"
+		local unlocks = Progression.Unlocks[cop and "cop" or "civ"]
 		local nextUnlock
 		for rr = rank + 1, Progression.MaxRank do
 			if unlocks[rr] then
@@ -860,38 +1897,15 @@ local function goalsPage()
 			end
 		end
 		local info = rank >= Progression.MaxRank and "Max rank!" or (xp .. " / " .. nextXP .. " XP" .. (nextUnlock and ("  ·  next: " .. nextUnlock) or ""))
-		local l = label(r, info, UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 52), Color3.fromRGB(200, 190, 230))
-		l.TextWrapped = true
+		local _, _, words = W.item(s, {
+			Name = side, Order = i,
+			Title = (cop and "POLICE" or "FREE ROAM") .. "  ·  RANK " .. rank, TitleColor = cop and C.Police or nil,
+			Sub = info,
+		})
+		W.meter(words, 15, frac, cop and C.Police or C.Text)
 	end
-	-- Gus the Gator figurines (CollectibleService: GusFound / GusTotal), with a clue for the nearest one.
-	local found = player:GetAttribute("GusFound") or 0
-	local total = player:GetAttribute("GusTotal") or 40
-	local gus = row(s, 86, 5)
-	gus.Name = "Gus"
-	label(gus, "🐊 Gus figurines  " .. found .. "/" .. total, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 6), MINT)
-	local gbg = Instance.new("Frame")
-	gbg.Size = UDim2.new(1, -20, 0, 10)
-	gbg.Position = UDim2.fromOffset(10, 36)
-	gbg.BackgroundColor3 = DARK
-	gbg.Parent = gus
-	corner(gbg, UDim.new(0.5, 0))
-	local gfill = Instance.new("Frame")
-	gfill.Size = UDim2.fromScale(math.clamp(total > 0 and found / total or 0, 0.02, 1), 1)
-	gfill.BackgroundColor3 = MINT
-	gfill.Parent = gbg
-	corner(gfill, UDim.new(0.5, 0))
-	local clue = found >= total and "All found! Gator Green paint unlocked." or "Hidden all over Port Solana: $250 each."
-	local Collectibles = found < total and optional(script.Parent, "CollectibleClient")
-	if Collectibles and type(Collectibles.NextHint) == "function" then
-		local ok, hint = pcall(Collectibles.NextHint)
-		if ok and type(hint) == "string" and hint ~= "" then
-			clue = "Clue: " .. hint
-		end
-	end
-	local cl = label(gus, clue, UDim2.new(1, -20, 0, 26), UDim2.fromOffset(10, 52), LAVENDER)
-	cl.TextWrapped = true
-	local head = label(s, "TODAY'S CHALLENGES  ·  $2,000 + 100 XP each", UDim2.new(1, 0, 0, 22), nil, GOLD, Enum.TextXAlignment.Center)
-	head.LayoutOrder = 10
+	local reward = Progression.ChallengeReward
+	W.head(s, "TODAY'S CHALLENGES  ·  " .. money(reward.Cash) .. " + " .. reward.XP .. " XP EACH", 10, C.Gold)
 	local ok, listData = pcall(function()
 		return HttpService:JSONDecode(player:GetAttribute("Challenges") or "[]")
 	end)
@@ -899,464 +1913,1221 @@ local function goalsPage()
 	for _, c in ipairs(Progression.Challenges) do
 		byId[c.Id] = c
 	end
-	for i, entry in ipairs(ok and listData or {}) do
+	for i, entry in ipairs(ok and type(listData) == "table" and listData or {}) do
 		local def = byId[entry.id]
 		if def then
-			local r = row(s, 60, 10 + i)
-			local color = def.Side == "Cop" and CYAN or PINK
-			label(r, (entry.done and "✅ " or "") .. def.Text, UDim2.new(1, -20, 0, 22), UDim2.fromOffset(10, 6), entry.done and MINT or WHITE)
-			local bg = Instance.new("Frame")
-			bg.Size = UDim2.new(1, -90, 0, 8)
-			bg.Position = UDim2.fromOffset(10, 38)
-			bg.BackgroundColor3 = DARK
-			bg.Parent = r
-			corner(bg, UDim.new(0.5, 0))
-			local fillBar = Instance.new("Frame")
-			fillBar.Size = UDim2.fromScale(math.clamp(entry.p / def.Goal, 0.02, 1), 1)
-			fillBar.BackgroundColor3 = entry.done and MINT or color
-			fillBar.Parent = bg
-			corner(fillBar, UDim.new(0.5, 0))
-			label(r, entry.p .. "/" .. def.Goal, UDim2.new(0, 64, 0, 18), UDim2.new(1, -74, 0, 32), Color3.fromRGB(200, 190, 230),
-				Enum.TextXAlignment.Right)
+			local progress = tonumber(entry.p) or 0
+			local _, _, words = W.item(s, {
+				Name = def.Id, Order = 10 + i,
+				Title = (entry.done and "✓ " or "") .. def.Text, TitleColor = entry.done and C.Cash or nil,
+			})
+			W.meter(words, 15, progress / math.max(def.Goal, 1), entry.done and C.Cash or (def.Side == "Cop" and C.Police or C.Text),
+				progress .. "/" .. def.Goal)
 		end
 	end
-	local foot = label(s, "New challenges every day at midnight (UTC).", UDim2.new(1, 0, 0, 18), nil, Color3.fromRGB(160, 150, 190),
-		Enum.TextXAlignment.Center)
-	foot.LayoutOrder = 20
+	W.note(s, "New challenges every day at midnight (UTC).", 100, nil, Enum.TextXAlignment.Center)
 end
 
 ------------------------------------------------------------------ crew
 
-local function crewPage()
+-- Roblox's invite check and the friends-online list are web calls that wait and can fail (and Studio
+-- sends no invites), so they're asked in the background and the CREW page redraws when they answer.
+-- While the CREW page stays open the friends list is asked again every K.FriendsFresh seconds (PhoneUI.Init).
+local crew = {
+	inviteOk = nil, -- nil: not known yet, else Roblox's answer
+	inviteAsking = false, -- the INVITE FRIENDS slot shows a dim placeholder meanwhile (no rows jump later)
+	inviteFailedAt = nil, -- os.clock() of the last failed check (asked again a minute later)
+	friendsOnline = nil, -- { At = os.clock(), List = { GetFriendsOnline entries }, Failed = bool }
+	friendsAsking = false,
+	friendsSig = nil, -- what the last answer showed: the page only redraws when that changes
+	queued = false,
+	joiningUntil = {}, -- [friend's UserId] = os.clock() until which their JOIN button shows JOINING...
+	bigScoreLine = nil, -- THE BIG SCORE's status label on the page as drawn (the 0.5 s loop rewrites its words)
+	bigScoreKey = nil, -- ...and what that line meant then (a change redraws the page: START / QUIT follow it)
+	quitArmedUntil = 0, -- os.clock() until which QUIT waits for its second tap
+}
+
+-- THE BIG SCORE's line: could this player start it right now? Worked out here from what the server
+-- publishes (BigScoreService checks it all again, and a refusal comes with a toast that says why).
+-- Returns the words, their colour, ready (START would go), running (we're on its roster) and a key that
+-- only changes when the meaning does (not every second of a countdown).
+function crew.bigScoreStatus()
+	local def = Heists.BigScore or {}
+	local step = player:GetAttribute("BigScore")
+	if step ~= nil then
+		return "On the job: step " .. tostring(step) .. "/6. Your goal is at the top of the screen.", C.Gold, false, true,
+			"run" .. tostring(step)
+	end
+	if player:GetAttribute("Side") ~= "Civilian" then
+		return "Free-roam players only.", C.Dim, false, false, "side"
+	end
+	if ReplicatedStorage:GetAttribute("BigScoreBusy") == true then
+		return "A crew is on it right now.", C.Dim, false, false, "busy"
+	end
+	local need, rank = def.MinRank or 3, player:GetAttribute("CivRank") or 1
+	if rank < need then
+		return "Unlocks at free-roam rank " .. need .. " (you're " .. rank .. ").", C.Purple, false, false, "rank"
+	end
+	local t = Workspace:GetServerTimeNow()
+	local readyAt = player:GetAttribute("BigScoreReadyAt")
+	if type(readyAt) == "number" and readyAt > t then
+		local left = math.ceil(readyAt - t)
+		return string.format("Laying low: ready again in %d:%02d", left // 60, left % 60), C.Dim, false, false, "wait"
+	end
+	if (player:GetAttribute("Heat") or 0) > 0 then
+		return "Lose the cops first.", C.Danger, false, false, "heat"
+	end
+	if player:GetAttribute("Mission") ~= nil or player:GetAttribute("RacingId") ~= nil or player:GetAttribute("JobKind") ~= nil then
+		return "Finish what you're doing first.", C.Orange, false, false, "doing"
+	end
+	-- Who could come along: crewmates in free roam, not on a mission, race or job shift, past their own
+	-- cooldown (just you without a crew).
+	local count = 1
+	local id = player:GetAttribute("Crew")
+	if id then
+		local ok, crews = pcall(HttpService.JSONDecode, HttpService, ReplicatedStorage:GetAttribute("Crews") or "{}")
+		local ids = ok and type(crews) == "table" and crews[id]
+		if type(ids) == "table" then
+			count = 0
+			for _, uid in ipairs(ids) do
+				local p = Players:GetPlayerByUserId(tonumber(uid) or 0)
+				local at = p and p:GetAttribute("BigScoreReadyAt")
+				local busy = p and (p:GetAttribute("Mission") ~= nil or p:GetAttribute("RacingId") ~= nil or p:GetAttribute("JobKind") ~= nil)
+				if p and p:GetAttribute("Side") == "Civilian" and not busy and not (type(at) == "number" and at > t) then
+					count += 1
+				end
+			end
+		end
+	end
+	local min = RunService:IsStudio() and 1 or (def.CrewMin or 2) -- (Studio: solo, so it can be tested alone)
+	if count < min then
+		return "Needs a crew of " .. min .. "+ ready to go (you have " .. count .. ").", C.Orange, false, false, "crew" .. count
+	end
+	return "Ready: " .. math.min(count, def.CrewMax or 4) .. " of you can go now.", C.Cash, true, false, "ready" .. count
+end
+
+-- Deferred: an answer can land while the CREW page itself is still drawing (it would draw the page twice).
+local function redrawCrew()
+	if crew.queued then
+		return
+	end
+	crew.queued = true
+	task.defer(function()
+		crew.queued = false
+		if S.open and current == "Crew" then
+			show("Crew")
+		end
+	end)
+end
+
+local function askInvite()
+	if crew.inviteOk ~= nil or crew.inviteAsking or RunService:IsStudio()
+		or (crew.inviteFailedAt and os.clock() - crew.inviteFailedAt < 60) then
+		return
+	end
+	crew.inviteAsking = true
+	task.spawn(function()
+		local ok, can = pcall(SocialService.CanSendGameInviteAsync, SocialService, player)
+		crew.inviteAsking = false
+		if ok then
+			crew.inviteOk = can == true
+		else
+			crew.inviteFailedAt = os.clock()
+		end
+		redrawCrew() -- the button (or nothing) takes the placeholder's place
+	end)
+end
+
+local function askFriends()
+	if crew.friendsAsking or (crew.friendsOnline and os.clock() - crew.friendsOnline.At < K.FriendsFresh) then
+		return
+	end
+	-- Unpublished there are no other servers, and Studio's test players (negative UserIds) have no friends.
+	if game.PlaceId == 0 or (RunService:IsStudio() and player.UserId <= 0) then
+		crew.friendsOnline = { At = os.clock(), List = {}, Failed = false }
+		return
+	end
+	crew.friendsAsking = true
+	task.spawn(function()
+		local ok, entries = pcall(player.GetFriendsOnline, player, 200)
+		local others = {}
+		local sig = ok and "ok" or "failed"
+		if ok and type(entries) == "table" then
+			for _, f in ipairs(entries) do
+				-- In a server of this game that isn't this one (friends in this one are under PLAYERS HERE).
+				if f.PlaceId == game.PlaceId and type(f.GameId) == "string" and f.GameId ~= ""
+					and f.GameId ~= game.JobId and type(f.VisitorId) == "number" and not Players:GetPlayerByUserId(f.VisitorId) then
+					table.insert(others, f)
+					sig ..= "|" .. f.VisitorId .. "@" .. f.GameId
+				end
+			end
+		end
+		crew.friendsOnline = { At = os.clock(), List = others, Failed = not ok }
+		crew.friendsAsking = false
+		if sig ~= crew.friendsSig then
+			crew.friendsSig = sig
+			redrawCrew()
+		end
+	end)
+end
+
+-- Put a JOIN button back once its wait is over (still here: the teleport didn't happen).
+local function resetJoinLater(b, id)
+	task.delay(math.max(0, (crew.joiningUntil[id] or 0) - os.clock()), function()
+		if b.Parent then
+			b.Text = "JOIN"
+		end
+	end)
+end
+
+-- Roblox's own invite pop-up. LaunchData carries our UserId so FriendsService knows who a friend came to
+-- see (crew invite, spawning beside us). Sending invites never pays anything (Roblox rules).
+local function promptInvite()
+	local ok = pcall(function()
+		local options = Instance.new("ExperienceInviteOptions")
+		options.PromptMessage = "Come play Theft Miami Coast with me!"
+		options.LaunchData = tostring(player.UserId)
+		SocialService:PromptGameInvite(player, options)
+	end)
+	if ok then
+		-- Analytics, and tells FriendsService that a friend arriving with our UserId soon was really invited.
+		Remotes.Event("RequestFriends"):FireServer("InvitePrompt")
+	else
+		NotifyController.Show("Invites aren't available right now. Try again later!", nil, "info")
+	end
+end
+
+-- Today's play-together bonus and the Squad paint, with the rules FriendsService publishes.
+local function playTogetherRow(parent, order)
+	local need = ReplicatedStorage:GetAttribute("CoplayMinutes") or 10
+	local cash = ReplicatedStorage:GetAttribute("CoplayCash") or 2000
+	local squad = ReplicatedStorage:GetAttribute("CoplaySquadDays") or 3
+	local mins = math.min(player:GetAttribute("CoplayMins") or 0, need)
+	local days = player:GetAttribute("CoplayDays") or 0
+	local done = player:GetAttribute("CoplayDone") == true
+	local _, _, words = W.item(parent, {
+		Name = "PlayTogether", Order = order,
+		Title = "PLAY TOGETHER",
+		Sub = done and "Today's co-op bonus is paid. See you tomorrow!"
+			or ("Play " .. need .. " min with a Roblox friend in this server: " .. money(cash) .. " once a day."),
+		Meta = days >= squad and "Squad paint unlocked (GARAGE > STYLE)"
+			or ("Squad paint: play together on " .. squad .. " days (" .. days .. "/" .. squad .. ")"),
+		MetaColor = C.Gold,
+	})
+	W.meter(words, 25, done and 1 or mins / math.max(need, 1), C.Cash, (done and need or mins) .. "/" .. need .. " min")
+end
+
+function PAGES.Crew()
 	setHeader("CREW", "Home")
-	local s = list(0.02)
+	askInvite()
+	askFriends()
+	local touch = touchHeight()
+	local s = W.list(0)
+	W.gap(s, -1, 8)
+	if crew.inviteOk then
+		local invite = W.button(s, "InviteFriends", "INVITE FRIENDS", "Primary", promptInvite)
+		invite.Size = UDim2.new(1, 0, 0, touch)
+		invite.LayoutOrder = 0
+	elseif crew.inviteAsking then
+		-- Holds the button's place until Roblox answers, so the rows below never jump under a finger.
+		local slot = themeText(s, "INVITE FRIENDS", UDim2.new(1, 0, 0, touch), nil, 15, "Display", C.Dim, Enum.TextXAlignment.Center)
+		slot.Name = "InviteFriends"
+		slot.LayoutOrder = 0
+		slot.BackgroundTransparency = 0.2
+		slot.BackgroundColor3 = K.Card
+		Theme.Corners(slot)
+	elseif RunService:IsStudio() then
+		W.note(s, "INVITE FRIENDS shows here in the live game.", 0, nil, Enum.TextXAlignment.Center).Name = "InviteStudio"
+	end
 	local myCrew = player:GetAttribute("Crew")
-	local info = label(s, (myCrew and "Rob together: +20% cash when a crewmate is close." or "Invite players to rob together (+20% cash) and ride in each other's cars.")
-		.. (player:GetAttribute("FriendBonus") and "  Friend here: +10%!" or ""), UDim2.new(1, 0, 0, 38), nil,
-		Color3.fromRGB(200, 190, 230), Enum.TextXAlignment.Center)
-	info.TextWrapped = true
-	info.LayoutOrder = 1
+	W.note(s, (myCrew and "Rob together: +20% cash when a crewmate is close." or "Invite players to rob together (+20% cash) and ride in each other's cars.")
+		.. (player:GetAttribute("FriendBonus") and "  Friend here: +10%!" or ""), 1, nil, Enum.TextXAlignment.Center).Name = "Info"
 	local order = 2
+	-- THE BIG SCORE (BigScoreService): whether you could start it right now (PhoneUI.Init's 0.5 s loop
+	-- keeps the line's countdown fresh) and START, or QUIT (two taps: it can end the job for the whole
+	-- crew) while you're on it. Cops get the line without a button.
+	local heist = Heists.BigScore or {}
+	local status, statusColor, ready, running, key = crew.bigScoreStatus()
+	local armed = running and crew.quitArmedUntil > os.clock()
+	local bars, each = heist.Bars or 12, heist.BarValue or 8000
+	W.head(s, "THE BIG SCORE", order, C.Gold)
+	order += 1
+	local bigButton
+	local _, b, words = W.item(s, {
+		Name = "BigScore", Order = order,
+		Title = "Rob the Solana Gold Reserve",
+		Sub = "Hack an armored van, open the gate together, drill the vault, load up to " .. bars .. " gold bars and get the van to"
+			.. " the Hideout. Crew of " .. (heist.CrewMin or 2) .. "-" .. (heist.CrewMax or 4) .. ", up to " .. money(bars * each) .. "+.",
+		Meta = status, MetaColor = statusColor,
+		Button = (running or player:GetAttribute("Side") == "Civilian") and (running and (armed and "SURE?" or "QUIT") or "START") or nil,
+		ButtonName = running and "Quit" or "Start",
+		Kind = running and "Danger" or (ready and "Primary" or "Quiet"),
+		Width = 88,
+		OnTap = function()
+			if not running then
+				Remotes.Event("RequestBigScore"):FireServer("Start")
+				if ready then
+					PhoneUI.Close() -- (the start stamp is on its way; a refusal's toast is easier to read with the phone up)
+				end
+				return
+			end
+			if crew.quitArmedUntil <= os.clock() then
+				crew.quitArmedUntil = os.clock() + 3
+				bigButton.Text = "SURE?"
+				task.delay(3.05, function()
+					if bigButton.Parent and crew.quitArmedUntil <= os.clock() then
+						bigButton.Text = "QUIT"
+					end
+				end)
+				return
+			end
+			crew.quitArmedUntil = 0
+			Remotes.Event("RequestBigScore"):FireServer("Quit")
+		end,
+	})
+	bigButton = b
+	if armed and b then
+		-- (redrawn while QUIT waits for its second tap: it reads SURE? until the wait is over)
+		task.delay(crew.quitArmedUntil - os.clock() + 0.05, function()
+			if b.Parent and crew.quitArmedUntil <= os.clock() then
+				b.Text = "QUIT"
+			end
+		end)
+	end
+	crew.bigScoreLine = words:FindFirstChild("Meta")
+	crew.bigScoreKey = key
+	order += 1
 	if myCrew then
-		local head = label(s, "YOUR CREW", UDim2.new(1, 0, 0, 22), nil, MINT, Enum.TextXAlignment.Center)
-		head.LayoutOrder = order
+		W.head(s, "YOUR CREW", order)
 		order += 1
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p:GetAttribute("Crew") == myCrew then
-				local r = row(s, 40, order)
+				W.item(s, { Name = "Mate" .. p.UserId, Order = order, Title = p.DisplayName .. (p == player and "  (you)" or "") })
 				order += 1
-				label(r, (p == player and "★ " or "♦ ") .. p.DisplayName, UDim2.new(1, -20, 0, 24), UDim2.fromOffset(10, 8), PINK)
 			end
 		end
-		local leave = button(s, "LEAVE CREW", UDim2.new(1, 0, 0, 32), nil, Color3.fromRGB(90, 70, 130), function()
+		W.gap(s, order, 8)
+		order += 1
+		local leave = W.button(s, "Leave", "LEAVE CREW", "Quiet", function()
 			Remotes.Event("RequestCrew"):FireServer("Leave")
 		end)
-		leave.Name = "Leave"
+		leave.Size = UDim2.new(1, 0, 0, touch)
 		leave.LayoutOrder = order
 		order += 1
 	end
-	local head2 = label(s, "PLAYERS HERE", UDim2.new(1, 0, 0, 22), nil, GOLD, Enum.TextXAlignment.Center)
-	head2.LayoutOrder = order
+	W.head(s, "PLAYERS HERE", order)
 	order += 1
 	local any = false
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player and (not myCrew or p:GetAttribute("Crew") ~= myCrew) then
 			any = true
-			local r = row(s, 48, order)
-			r.Name = tostring(p.UserId)
-			order += 1
-			label(r, p.DisplayName, UDim2.new(0.62, 0, 0, 22), UDim2.fromOffset(10, 5))
 			local side = p:GetAttribute("Side") or ""
-			label(r, side == "Cop" and "Police" or side == "Prisoner" and "In prison" or "Citizen", UDim2.new(0.62, 0, 0, 16),
-				UDim2.fromOffset(10, 27), LAVENDER)
-			button(r, "INVITE", UDim2.new(0.3, 0, 0, 32), UDim2.new(0.68, -6, 0, 8), MINT, function()
-				Remotes.Event("RequestCrew"):FireServer("Invite", p.UserId)
-			end).Name = "Invite"
+			W.item(s, {
+				Name = tostring(p.UserId), Order = order,
+				Title = p.DisplayName,
+				Sub = side == "Cop" and "Police" or side == "Prisoner" and "In prison" or "Free roam",
+				Button = "INVITE", ButtonName = "Invite", Width = 88,
+				OnTap = function()
+					Remotes.Event("RequestCrew"):FireServer("Invite", p.UserId)
+				end,
+			})
+			order += 1
 		end
 	end
 	if not any then
-		local none = label(s, "Nobody else here yet. Invite friends from the Roblox menu!", UDim2.new(1, 0, 0, 36), nil,
-			Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
-		none.TextWrapped = true
-		none.LayoutOrder = order
+		W.note(s, crew.inviteOk and "Nobody else here yet. Tap INVITE FRIENDS above!" or "Nobody else here yet.", order, nil,
+			Enum.TextXAlignment.Center)
+		order += 1
 	end
-end
-
------------------------------------------------------------------- feed: every Coast Feed post
-
-local function ago(t)
-	local d = math.max(0, os.time() - (t or os.time()))
-	if d < 60 then
-		return "now"
-	elseif d < 3600 then
-		return (d // 60) .. "m ago"
-	end
-	return (d // 3600) .. "h ago"
-end
-
-local function feedPage()
-	setHeader("FEED", "Home")
-	FeedController.MarkRead()
-	local s = list(0.02)
-	local history = FeedController.History
-	if #history == 0 then
-		local none = label(s, "Nothing yet. Big moments in Port Solana show up here.", UDim2.new(1, 0, 0, 40), nil,
-			Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
-		none.TextWrapped = true
-		return
-	end
-	for i = #history, 1, -1 do -- newest first
-		local e = history[i]
-		local r = row(s, 78, #history - i + 1)
-		local accent = Instance.new("Frame")
-		accent.Size = UDim2.new(0, 6, 1, -20)
-		accent.Position = UDim2.fromOffset(8, 10)
-		accent.BackgroundColor3 = e.Color or PINK
-		accent.Parent = r
-		corner(accent, UDim.new(0.5, 0))
-		local t = label(r, e.Text, UDim2.new(1, -36, 0, 46), UDim2.fromOffset(22, 6), WHITE)
-		t.TextWrapped = true
-		t.TextTruncate = Enum.TextTruncate.AtEnd
-		local limit = Instance.new("UITextSizeConstraint")
-		limit.MinTextSize = 13
-		limit.MaxTextSize = 18
-		limit.Parent = t
-		label(r, ago(e.Time), UDim2.new(0.5, 0, 0, 16), UDim2.new(0.5, -12, 1, -22), Color3.fromRGB(160, 150, 190),
-			Enum.TextXAlignment.Right)
-	end
-end
-
------------------------------------------------------------------- homes: safehouses (PropertyService)
-
--- One short line about a house. Config.Properties may give Features ("2 floors · pool · 4-car garage")
--- or the raw fields (Floors, Pool, Garage = bays); any of them may be missing.
-local function houseFeatures(def)
-	if type(def.Features) == "string" and def.Features ~= "" then
-		return def.Features
-	end
-	local bits = {}
-	if type(def.Floors) == "number" and def.Floors >= 2 then
-		table.insert(bits, math.floor(def.Floors) .. " floors")
-	end
-	if def.Pool == true then
-		table.insert(bits, "pool")
-	end
-	if type(def.Garage) == "number" and def.Garage >= 1 then
-		table.insert(bits, math.floor(def.Garage) .. "-car garage")
-	end
-	return #bits > 0 and table.concat(bits, " · ") or nil
-end
-
-local function homesPage()
-	setHeader("HOMES", "Home")
-	local s = list(0.02)
-	local Properties = optional(ReplicatedStorage.Shared.Config, "Properties")
-	if not Properties or type(Properties.List) ~= "table" then
-		label(s, "Homes are coming soon!", UDim2.new(1, 0, 0, 40), nil, LAVENDER, Enum.TextXAlignment.Center)
-		return
-	end
-	local mine = {}
-	for id in string.gmatch(player:GetAttribute("OwnedProps") or "", "[^,]+") do
-		mine[id] = true
-	end
-	local home = player:GetAttribute("HomeId")
-	local rank = player:GetAttribute("CivRank") or 1
-	local intro = label(s, "Your own home: respawn there, bank your bag on its pad, earn rent.",
-		UDim2.new(1, 0, 0, 36), nil, LAVENDER, Enum.TextXAlignment.Center)
-	intro.TextWrapped = true
-	intro.LayoutOrder = 0
-	for i, def in ipairs(Properties.List) do
-		if type(def) ~= "table" or def.Id == nil then
-			continue
+	-- Friends in other servers of this game: JOIN asks the server to teleport us there (FriendsService).
+	W.head(s, "FRIENDS IN OTHER SERVERS", order)
+	order += 1
+	local others = {}
+	for _, f in ipairs(crew.friendsOnline and crew.friendsOnline.List or {}) do
+		if not Players:GetPlayerByUserId(f.VisitorId) and #others < K.MaxFriendRows then
+			table.insert(others, f) -- (a friend who came here since the list was fetched is under PLAYERS HERE)
 		end
-		local owned = mine[def.Id] == true
-		local features = houseFeatures(def)
-		local extra = features and 22 or 0
-		local r = row(s, 116 + extra, i)
-		r.Name = tostring(def.Id)
-		-- (name and district stop short of the price on the right: "$1,200,000" fills its box)
-		label(r, tostring(def.Name or def.Id), UDim2.new(0.6, -10, 0, 24), UDim2.fromOffset(10, 6))
-		label(r, tostring(def.District or ""), UDim2.new(0.6, -10, 0, 16), UDim2.fromOffset(10, 32), LAVENDER)
-		if features then
-			local fl = label(r, "🏡 " .. features, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52), WHITE)
-			fl.Name = "Features"
-			fl.TextTruncate = Enum.TextTruncate.AtEnd
-		end
-		local status, statusColor
-		if home == def.Id then
-			status, statusColor = "🏠 HOME", PINK
-		elseif owned then
-			status, statusColor = "OWNED", MINT
-		else
-			status, statusColor = money(type(def.Price) == "number" and def.Price or 0), GOLD
-		end
-		label(r, status, UDim2.new(0.36, 0, 0, 22), UDim2.new(0.64, -10, 0, 8), statusColor, Enum.TextXAlignment.Right)
-		local rent = "Rent " .. money(type(def.Rent) == "number" and def.Rent or 0) .. "/h"
-		local info, infoColor = rent, LAVENDER
-		if owned then
-			info = rent .. "  ·  waiting " .. money(player:GetAttribute("Rent_" .. def.Id) or 0) .. " (collect at the door)"
-			infoColor = MINT
-		else
-			local need = type(def.MinRank) == "number" and def.MinRank or 1
-			if need > 1 then
-				info = rent .. "  ·  rank " .. need .. (rank >= need and " ✓" or " needed")
-				infoColor = rank >= need and LAVENDER or ORANGE
-			end
-		end
-		local il = label(r, info, UDim2.new(1, -20, 0, 18), UDim2.fromOffset(10, 52 + extra), infoColor)
-		il.TextTruncate = Enum.TextTruncate.AtEnd
-		local canSetHome = owned and home ~= def.Id
-		button(r, "SHOW ME", UDim2.new(canSetHome and 0.46 or 1, canSetHome and -12 or -20, 0, 32),
-			UDim2.new(0, 10, 1, -40), MINT, function()
-				-- Owners go to the door; buyers to the FOR SALE sign (some doors are behind owner-only gates).
-				local target = def.Pos
-				if not owned then
-					local ok, spots = pcall(function()
-						return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("HomeSpots") or "{}")
-					end)
-					local s = ok and type(spots) == "table" and spots[def.Id]
-					if type(s) == "table" and type(s.s) == "table" and tonumber(s.s[1]) and tonumber(s.s[2]) then
-						target = Vector3.new(s.s[1], 0, s.s[2])
-					end
+	end
+	for _, f in ipairs(others) do
+		local id = f.VisitorId
+		local name = f.DisplayName or f.UserName or "Your friend"
+		-- A redraw mid-JOIN (a co-op minute, someone joining) keeps showing JOINING... until the wait is over.
+		local busy = (crew.joiningUntil[id] or 0) > os.clock()
+		local join
+		local _, b = W.item(s, {
+			Name = "Friend" .. id, Order = order,
+			Title = name,
+			Sub = "Another Theft Miami Coast server",
+			Button = busy and "JOINING..." or "JOIN", ButtonName = "Join", Width = 104,
+			OnTap = function()
+				if (crew.joiningUntil[id] or 0) > os.clock() then
+					return -- already asked (the server says if it can't)
 				end
-				if typeof(target) == "Vector3" then
-					GPSClient.SetTarget(tostring(def.Name), target)
-					PhoneUI.Close()
+				-- The server refuses these too; checking first saves a "Joining..." that's refused at once.
+				if (player:GetAttribute("Heat") or 0) > 0 then
+					NotifyController.Show("Lose the cops before joining a friend.", nil, "police")
+					return
 				end
-			end).Name = "ShowMe"
-		if canSetHome then
-			button(r, "SET HOME", UDim2.new(0.46, -12, 0, 32), UDim2.new(0.54, 2, 1, -40), PINK, function()
-				Remotes.Event("RequestProperty"):FireServer("SetHome", def.Id)
-			end).Name = "SetHome"
+				if (player:GetAttribute("Carried") or 0) > 0 then
+					NotifyController.Show("Bank your bag cash first: it can't come with you!", nil, "money")
+					return
+				end
+				crew.joiningUntil[id] = os.clock() + K.JoinWait
+				join.Text = "JOINING..."
+				Remotes.Event("RequestFriends"):FireServer("Join", id, f.GameId)
+				NotifyController.Show("Joining " .. name .. "...", nil, "crew")
+				resetJoinLater(join, id)
+			end,
+		})
+		join = b
+		order += 1
+		if busy then
+			resetJoinLater(join, id)
 		end
 	end
-	local foot = label(s, "Buy it and collect rent in person, at the door.", UDim2.new(1, 0, 0, 18), nil,
-		Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
-	foot.LayoutOrder = 100
+	if #others == 0 then
+		local text
+		if game.PlaceId == 0 then
+			text = "Friends in other servers show once the game is published."
+		elseif not crew.friendsOnline then
+			text = "Looking for friends..."
+		elseif crew.friendsOnline.Failed then
+			text = "Couldn't check your friends right now."
+		else
+			text = "No friends in other Theft Miami Coast servers right now."
+		end
+		W.note(s, text, order, nil, Enum.TextXAlignment.Center).Name = "NoFriends"
+		order += 1
+	end
+	playTogetherRow(s, order)
 end
 
 ------------------------------------------------------------------ settings
 
-local function settingsPage()
+function PAGES.Settings()
 	setHeader("SETTINGS", "Home")
 	local Settings = require(script.Parent:WaitForChild("SettingsClient"))
-	local s = list(0.02)
+	local touch, nameH = touchHeight(), textPx(15) + 4
+	local s = W.list(0)
+	-- A title over five steps side by side (5 px apart), the one in use in white.
 	local function volumeRow(key, title, order)
-		local r = row(s, 70, order)
-		r.Name = key
-		label(r, title, UDim2.new(1, -20, 0, 22), UDim2.fromOffset(10, 6))
-		local steps = { 0, 0.25, 0.5, 0.75, 1 }
-		for i, v in ipairs(steps) do
-			local on = math.abs(Settings.Get(key) - v) < 0.01
-			local b = button(r, v == 0 and "OFF" or (math.floor(v * 100) .. "%"), UDim2.new(0.18, 0, 0, 28),
-				UDim2.new((i - 1) * 0.2 + 0.01, 0, 0, 34), on and PINK or PANEL, function()
-					Settings.Set(key, v)
-					show("Settings")
-				end)
-			b.Name = key .. i
+		local r = W.row(s, key, 10 + nameH + 6 + touch + 10, order)
+		themeText(r, title, UDim2.new(1, 0, 0, nameH), UDim2.fromOffset(0, 10), 15, "Bold")
+		for i, v in ipairs({ 0, 0.25, 0.5, 0.75, 1 }) do
+			local on = math.abs((Settings.Get(key) or 0) - v) < 0.01
+			local b = W.button(r, key .. i, v == 0 and "OFF" or (math.floor(v * 100) .. "%"), on and "Primary" or "Quiet", function()
+				Settings.Set(key, v)
+				show("Settings")
+			end)
+			b.Position = UDim2.new((i - 1) / 5, i - 1, 0, 10 + nameH + 6)
+			b.Size = UDim2.new(1 / 5, -4, 0, touch)
 		end
 	end
-	volumeRow("Music", "📻 Radio volume", 1)
-	volumeRow("Effects", "🔊 Sound effects", 2)
-	local r = row(s, 86, 3)
-	r.Name = "Performance"
+	volumeRow("Music", "Music volume", 1)
+	volumeRow("Effects", "Sound effects", 2)
 	local perf = Settings.Get("Performance")
-	label(r, "⚡ Performance mode", UDim2.new(0.62, 0, 0, 22), UDim2.fromOffset(10, 6))
-	local d = label(r, "Fewer traffic cars and people. Smoother on older phones.", UDim2.new(1, -20, 0, 32),
-		UDim2.fromOffset(10, 32), Color3.fromRGB(200, 190, 230))
-	d.TextWrapped = true
-	button(r, perf and "ON" or "OFF", UDim2.new(0.28, 0, 0, 26), UDim2.new(0.7, -6, 0, 4), perf and MINT or PANEL, function()
-		Settings.Set("Performance", not perf)
-		show("Settings")
-	end).Name = "Toggle"
-	local keys = label(s, "Keys: P phone (gamepad: D-pad down) · E enter/use · F exit · Space drift · Shift nitro · H horn/siren · V radio · R flip",
-		UDim2.new(1, 0, 0, 40), nil, Color3.fromRGB(160, 150, 190), Enum.TextXAlignment.Center)
-	keys.TextWrapped = true
-	keys.LayoutOrder = 4
+	W.item(s, {
+		Name = "Performance", Order = 3,
+		Title = "Performance mode",
+		Sub = "Fewer traffic cars and people, no night window glow. Smoother on older phones.",
+		Button = perf and "ON" or "OFF", ButtonName = "Toggle", Kind = perf and "Primary" or "Quiet", Width = 72,
+		OnTap = function()
+			Settings.Set("Performance", not perf)
+			show("Settings")
+		end,
+	})
+	-- Passive mode (CombatService decides; this only asks).
+	local passive = Settings.Get("Passive")
+	W.item(s, {
+		Name = "Passive", Order = 4,
+		Title = "Passive mode",
+		Sub = "Nobody can hit you, and you can't fight. Not while wanted or carrying a bag.",
+		Button = passive and "ON" or "OFF", ButtonName = "Toggle", Kind = passive and "Primary" or "Quiet", Width = 72,
+		OnTap = function()
+			Settings.Set("Passive", not passive) -- only a request; the server answers through the attribute "Passive"
+		end,
+	})
+	-- The key list is for keyboards: a touch-only player has the on-screen buttons instead.
+	if not (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) then
+		W.note(s, "Keys: P phone · E use · F get in/out · 1 fists · 2+ guns · R reload · Space drift · Shift nitro · H horn/siren · V radio · R flip (in a car)",
+			5, nil, Enum.TextXAlignment.Center).Name = "Keys"
+	end
 end
 
-local PAGES = {
-	Home = homePage,
-	Feed = feedPage,
-	Homes = homesPage,
-	Settings = settingsPage,
-	Crew = crewPage,
-	Goals = goalsPage,
-	Shop = shopPage,
-	Garage = garagePage,
-	Custom = customPage,
-	Dealer = dealerPage,
-	GPS = gpsPage,
-	Jobs = jobsPage,
-}
+------------------------------------------------------------------ how to play
+
+-- Is street-car stealing (CarjackService) running on this server? It creates the RequestCarjack remote.
+local function carjackLive()
+	local folder = ReplicatedStorage:FindFirstChild("Remotes")
+	return folder ~= nil and folder:FindFirstChild("RequestCarjack") ~= nil
+end
+
+-- The guide's sections, in short lines (most fit on one line) so a whole section fits on a phone screen.
+-- Short is the name on its topic chip. Buttons: { text, Gps = place name (+ Fallback position) } routes
+-- the GPS, { text, Tab = "Heist" / "Activity" } opens that GPS tab, { text, Page = page } opens a phone
+-- page. In the text, [word] marks a key, button or sign (shown in bold white). Touch-only players (the
+-- same test as CombatClient's hint) see their on-screen buttons instead of keys. Numbers come from the
+-- shared configs; the few that only live in a server service say which one.
+local function guideSections()
+	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local function pick(keys, taps)
+		return touch and taps or keys
+	end
+	local homeFrom
+	for _, h in ipairs(Housing.List) do
+		homeFrom = math.min(homeFrom or h.Price, h.Price)
+	end
+	local bank = Heists.Types.CoastalBank
+	local reward = Progression.ChallengeReward
+	-- The bag's size, worked out like EconomyService.CarryLimit (bigger with the Big Duffel Bag pass).
+	local bag = math.floor(Heists.CarryLimit * (1 + (player:GetAttribute("Pass_BigDuffel") and Shop.DuffelCarryBonus or 0)))
+	-- Coast Arms (Config.Combat): where it is, and what its first gun costs.
+	local gunShop = Combat.Shop or {}
+	local pistol = Combat.Guns and Combat.Guns.Pistol
+
+	-- Labels from InteractClient's contextual button (JACK, BREAK IN, STEAL; F on a keyboard) and the
+	-- HOT CAR sign over CarBoostService's hot cars.
+	local steal
+	if carjackLive() then
+		steal = {
+			"Stand in front of a car: it stops.",
+			pick("At its door, press [F] to [JACK] it.", "At its door, tap [JACK]."),
+			pick("Car park cars: hold [F] to [BREAK IN].", "Car park cars: hold [BREAK IN]."),
+			pick("[HOT CAR] sign? Hold [F] to [STEAL].", "[HOT CAR] sign? Hold [STEAL]."),
+			"Sell at the Chop Shop. Hot cars pay most!",
+		}
+	else
+		-- Without CarjackService only the hot cars can be stolen.
+		steal = {
+			"Find a parked car with a [HOT CAR] sign.",
+			pick("Hold [F] next to it to [STEAL] it.", "Hold [STEAL] next to it."),
+			"Sell it at the Chop Shop for bag cash.",
+		}
+	end
+
+	local rank = { "Robberies, races and jobs give XP.", "Ranks (up to " .. Progression.MaxRank .. ") unlock rewards." }
+	if bank and bank.MinRank then
+		table.insert(rank, "The Coastal Bank needs rank " .. bank.MinRank .. ".")
+	end
+	table.insert(rank, "Daily [GOALS]: " .. money(reward.Cash) .. " + " .. reward.XP .. " XP each.")
+
+	return {
+		{
+			Id = "Controls", Title = "Driving & controls", Short = "DRIVE",
+			Lines = pick({
+				"[WASD] drive · [Space] drift",
+				"[Shift] nitro · [R] flip · [H] horn",
+				"[F] get in/out · [E] use · [P] phone",
+				"[V] radio · [C] smoke when wanted",
+			}, {
+				"Tap [GET IN] next to your car.",
+				"Steer with the thumbstick.",
+				"[GAS] [BRAKE] [NITRO] [DRIFT] [EXIT]",
+				"Upside down? [FLIP]. Wanted? [SMOKE].",
+			}),
+		},
+		{
+			Id = "Steal", Title = "Steal cars", Short = "STEAL",
+			Lines = steal,
+			Buttons = { { "GPS: CHOP SHOP", Gps = "Chop Shop" } },
+		},
+		{
+			Id = "Rob", Title = "Rob stores & ATMs", Short = "ROB",
+			Lines = {
+				"Stores & ATMs: walk up, hold [Rob].",
+				"[GPS] > [HEISTS] shows which are open.",
+				"Cash goes in your bag (max " .. money(bag) .. ").",
+				"Lose the cops, bank it at the Hideout.",
+			},
+			Buttons = { { "OPEN HEISTS", Tab = "Heist" }, { "GPS: HIDEOUT", Gps = "Hideout" } },
+		},
+		{
+			Id = "Wanted", Title = "Wanted stars", Short = "STARS",
+			Lines = {
+				-- 5: HeatService's cap (the HUD's 5 stars).
+				"Crimes give you stars (up to 5).",
+				"Stay out of sight and they fade.",
+				"Banking at the Hideout clears them.",
+				"Spray & Go or a new [OUTFIT] take a star off.",
+			},
+			Buttons = { { "GPS: HIDEOUT", Gps = "Hideout" }, { "GPS: SPRAY & GO", Gps = "Spray & Go" } },
+		},
+		{
+			Id = "Rank", Title = "Rank up", Short = "RANK",
+			Lines = rank,
+			Buttons = { { "OPEN GOALS", Page = "Goals" } },
+		},
+		{
+			Id = "Buy", Title = "Buy cars & boats", Short = "BUY",
+			Lines = {
+				"Cars: AutoNeon Motors, downtown.",
+				"Boats: Marina Boat Sales.",
+				pick("Walk up, press [E] to [View], then [BUY].", "Walk up, tap [View], then [BUY]."),
+				"Call your rides with [CAR] or [GARAGE].",
+				"Faster, better sounding: [GARAGE] > [TUNE].",
+			},
+			Buttons = {
+				{ "GPS: CARS", Gps = K.Dealers.Cars.Name, Fallback = K.Dealers.Cars.Pos },
+				{ "GPS: BOATS", Gps = K.Dealers.Boats.Name, Fallback = K.Dealers.Boats.Pos },
+				{ "PRICES", Page = "Dealer" },
+			},
+		},
+		{
+			Id = "Homes", Title = "Homes", Short = "HOMES",
+			Lines = {
+				homeFrom and ("Homes start at " .. money(homeFrom) .. ".") or "Pick one in [HOME].",
+				pick("Press [E] at its door: [View / Buy].", "Tap [View / Buy] at its door."),
+				"In free roam you spawn there.",
+				"Your cars wait in its garage.",
+			},
+			Buttons = { { "OPEN HOME", Page = "Home_" } },
+		},
+		{
+			Id = "Fight", Title = "Fists & guns", Short = "FIGHT",
+			Lines = {
+				pick("[1] fists · [2+] guns · [R] reload", "Tap [WEAPON] to switch, [FIRE] to shoot."),
+				"Guns from " .. money(pistol and pistol.Price or 0) .. " at Coast Arms.",
+				"Knockouts drop cash. Everyone gets back up!",
+				"No fights in safe zones or [Passive] mode.",
+			},
+			Buttons = {
+				{ "GPS: COAST ARMS", Gps = gunShop.Name or "Coast Arms", Fallback = gunShop.Center },
+				{ "OPEN SETTINGS", Page = "Settings" },
+			},
+		},
+		{
+			Id = "Jobs", Title = "Jobs & fun", Short = "JOBS",
+			Lines = {
+				"Taxi Stand & Courier Depot: drive up.",
+				"Races, " .. #Activities.Stunts .. " stunt jumps, drifting: all pay!",
+				-- 12 minutes: CarMeetService, EVERY (480 s) + WARNING (60) + LENGTH (180) from one meet to the next.
+				"Car Meet at Marina Row every 12 minutes.",
+				"Missions are in [JOBS].",
+			},
+			Buttons = { { "OPEN JOBS", Page = "Jobs" }, { "OPEN FUN", Tab = "Activity" } },
+		},
+		{
+			Id = "Police", Title = "Play as police", Short = "POLICE",
+			Lines = {
+				"[JOBS] > [SWITCH ROLE] to be a cop.",
+				-- $80: ArrestService PATROL_PAY.
+				"Cops earn $80 a minute on patrol.",
+				-- The Cuff prompt is held with Q (ArrestService), not E.
+				pick("[T] taser · [G] spikes · hold [Q] to [Cuff]", "[TASER] · [SPIKES] · hold [Cuff]"),
+				"Caught robbers lose their bag.",
+			},
+			Buttons = { { "OPEN JOBS", Page = "Jobs" } },
+		},
+		{
+			Id = "Saving", Title = "Saving", Short = "SAVE",
+			Lines = {
+				"Cash, cars, home and ranks save by themselves.",
+				-- $7,000: DailyService (PER_DAY x the streak day, capped at day 7).
+				"Come back daily: the bonus grows to $7,000.",
+				"Bag cash never saves: bank it first!",
+			},
+		},
+	}
+end
+
+-- Rich text for a guide line: [word] -> bold white, and &, <, > escaped first.
+local function markup(text)
+	local safe = string.gsub(text, "&", "&amp;")
+	safe = string.gsub(safe, "<", "&lt;")
+	safe = string.gsub(safe, ">", "&gt;")
+	return (string.gsub(safe, "%[(.-)%]", '<font color="#F5F5F5"><b>%1</b></font>'))
+end
+
+local function guideAction(b)
+	if b.Gps then
+		routeTo(b.Gps, b.Fallback) -- (put away on the guide: it reopens at this spot, see PhoneUI.Close)
+	elseif b.Tab then
+		S.gpsTab = b.Tab
+		S.fromGuide = true
+		show("GPS")
+	elseif b.Page then
+		S.fromGuide = true
+		show(b.Page)
+	end
+end
+
+-- Scroll the guide list `s` so `sec` sits at its top (nil: back to the topics). Absolute positions are
+-- screen pixels (after the phone's UIScale); CanvasPosition is in the phone's own units, hence / the scale.
+-- A spot past the end of the list is held at the end by the ScrollingFrame itself.
+local function guideJump(s, sec)
+	local y = sec and s.CanvasPosition.Y + (sec.AbsolutePosition.Y - s.AbsolutePosition.Y) / ui.fit.Scale or 0
+	TweenService:Create(s, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ CanvasPosition = Vector2.new(0, math.max(y, 0)) }):Play()
+end
+
+-- One section: a thin line, a title row (with TOP back to the topics), bullet lines (wrapped, their height
+-- set by the text) and a row of buttons. Returns its frame.
+local function guideSection(parent, sec, order)
+	local touch, px = touchHeight(), textPx(14)
+	local f = W.frame(parent, sec.Id, order)
+	f.Size = UDim2.fromScale(1, 0)
+	f.AutomaticSize = Enum.AutomaticSize.Y
+	local pad = Instance.new("UIPadding")
+	pad.PaddingBottom = UDim.new(0, 12)
+	pad.Parent = f
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 5)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = f
+	local head = W.frame(f, "Head", 0)
+	head.Size = UDim2.new(1, 0, 0, touch + 8)
+	W.rule(head)
+	local title = themeText(head, sec.Title, UDim2.new(1, -76, 1, 0), nil, 18, "Display")
+	title.Name = "Title"
+	local top = W.button(head, "Top", "TOP", "Quiet", function()
+		guideJump(parent, nil)
+	end)
+	top.Position = UDim2.new(1, -64, 0, 4)
+	top.Size = UDim2.fromOffset(64, touch)
+	top.TextColor3 = C.Dim
+	for i, line in ipairs(sec.Lines) do
+		local holder = W.frame(f, "Line" .. i, i)
+		holder.Size = UDim2.fromScale(1, 0)
+		holder.AutomaticSize = Enum.AutomaticSize.Y
+		W.block(holder, "Dot", 3, math.floor(px / 2) - 1, 4, 4, C.Dim, 2)
+		local t = themeText(holder, markup(line), UDim2.new(1, -14, 0, 0), UDim2.fromOffset(14, 0), 14, "Body", C.Dim)
+		t.Name = "Text"
+		t.AutomaticSize = Enum.AutomaticSize.Y
+		t.TextWrapped = true
+		t.TextTruncate = Enum.TextTruncate.None
+		t.RichText = true
+		t.TextYAlignment = Enum.TextYAlignment.Top
+	end
+	if sec.Buttons then
+		local bar = W.frame(f, "Buttons", 50)
+		bar.Size = UDim2.new(1, 0, 0, touch + 4)
+		local n, gap = #sec.Buttons, 6
+		for i, b in ipairs(sec.Buttons) do
+			-- n equal buttons with `gap` pixels between them: GPS ones route you there, OPEN ones open an app.
+			local btn = W.button(bar, b.Gps or b.Tab or b.Page, b[1], "Quiet", function()
+				guideAction(b)
+			end)
+			btn.Position = UDim2.new((i - 1) / n, (i - 1) * gap / n, 0, 4)
+			btn.Size = UDim2.new(1 / n, -gap * (n - 1) / n, 0, touch)
+		end
+	end
+	return f
+end
+
+function PAGES.Guide()
+	setHeader("HOW TO PLAY", "Home")
+	local touch = touchHeight()
+	local s = W.list(0)
+	W.note(s, "Tap a topic to jump to it. GPS buttons set your route.", 0, nil, Enum.TextXAlignment.Center).Name = "Intro"
+	local sections = guideSections()
+	-- Topic chips, three to a row: each scrolls to its section.
+	local rows = math.ceil(#sections / 3)
+	local chips = W.frame(s, "Topics", 1)
+	chips.Size = UDim2.new(1, 0, 0, rows * touch + (rows - 1) * 6 + 12)
+	local grid = Instance.new("UIGridLayout")
+	grid.CellSize = UDim2.new(1 / 3, -4, 0, touch)
+	grid.CellPadding = UDim2.fromOffset(6, 6)
+	grid.SortOrder = Enum.SortOrder.LayoutOrder
+	grid.Parent = chips
+	for i, sec in ipairs(sections) do
+		local f = guideSection(s, sec, 10 + i)
+		local chip = W.button(chips, sec.Id, sec.Short, "Quiet", function()
+			guideJump(s, f)
+		end)
+		chip.LayoutOrder = i
+	end
+end
+
+------------------------------------------------------------------ showing a page
+
+-- Gamepad (and keyboard) UI navigation. GuiService.SelectedObject may sit on a page button that the
+-- next redraw destroys. selectionPath notes where it is, from the screen down: each level's name and its
+-- place among same-named brothers ({ { "List", 1 }, { "Engine", 1 } }), so findPath can pick out the very
+-- same button on the redrawn page (a redraw builds the same tree in the same order). nil when nothing
+-- on the page is selected (touch and mouse players never have a selection).
+local function selectionPath()
+	local screen = ui.screen
+	local sel = GuiService.SelectedObject
+	if not sel or not sel:IsDescendantOf(screen) then
+		return nil
+	end
+	local path = {}
+	local node = sel
+	while node ~= screen do
+		local nth = 0
+		for _, c in ipairs(node.Parent:GetChildren()) do
+			if c.Name == node.Name then
+				nth += 1
+				if c == node then
+					break
+				end
+			end
+		end
+		table.insert(path, 1, { node.Name, nth })
+		node = node.Parent
+	end
+	return path
+end
+
+local function findPath(path)
+	local node = ui.screen
+	for _, step in ipairs(path) do
+		local found
+		local nth = 0
+		for _, c in ipairs(node:GetChildren()) do
+			if c.Name == step[1] then
+				nth += 1
+				if nth == step[2] then
+					found = c
+					break
+				end
+			end
+		end
+		if not found then
+			return nil
+		end
+		node = found
+	end
+	return node
+end
+
+-- The page's first button a gamepad can land on (pages build top to bottom, so it's the top one).
+local function firstButton()
+	for _, d in ipairs(ui.screen:GetDescendants()) do
+		if d:IsA("GuiButton") and d.Selectable and d.Visible then
+			return d
+		end
+	end
+	return nil
+end
 
 show = function(name)
-	-- Re-showing the same page (after a purchase, say) keeps the scroll position.
+	local screen = ui.screen
+	-- A gamepad's selection is on a button this redraw is about to destroy: note which one (see above).
+	local selPath = selectionPath()
+	local samePage = name == current
+	-- Re-showing the same page (after a purchase, say) keeps the scroll position, and so does coming
+	-- Back to the guide from a page it opened, or opening it again soon after putting the phone away on it.
 	local old = screen:FindFirstChild("List")
-	local keep = name == current and old and old.CanvasPosition
+	if current == "Guide" and name ~= "Guide" and old then
+		S.guideScroll = old.CanvasPosition
+	end
+	if name == "Home" or name == "Guide" then
+		S.fromGuide = false
+	end
+	if name == "Home" then
+		S.guideScroll = nil
+	end
+	local resume = S.guideResume and os.clock() - S.guideResume.At < K.ResumeFor and S.guideResume.Pos or nil
+	local keep = (samePage and old and old.CanvasPosition) or (name == "Guide" and (S.guideScroll or resume)) or nil
 	current = name
-	clear()
+	S.minText = name == "Tune" and K.TuneMinText or K.MinText
+	for _, c in ipairs(screen:GetChildren()) do
+		c:Destroy()
+	end
 	PAGES[name]()
+	-- Put the selection back: on the same button after a redraw (a TUNE buy's second press must land on
+	-- the button its first press armed), on the first button of a new page (or if that button is gone).
+	if selPath then
+		local twin = samePage and current == name and findPath(selPath) or nil
+		if not (twin and twin:IsA("GuiButton")) then
+			twin = firstButton()
+		end
+		if twin then
+			GuiService.SelectedObject = twin
+		end
+	end
 	local new = screen:FindFirstChild("List")
 	if keep and new then
 		task.defer(function()
 			new.CanvasPosition = keep
+			-- Rows size themselves to their words, so the canvas can reach full height a frame later than
+			-- this: if the position was cut short, set it again then.
+			task.wait()
+			if new.Parent and new.CanvasPosition.Y < keep.Y - 1 then
+				new.CanvasPosition = keep
+			end
 		end)
 	end
 end
 
------------------------------------------------------------------- phone shell
+-- BACK (the header's chevron, gamepad B): to the page this one was opened from.
+local function goBack()
+	if S.back then
+		if current == "Guide" then
+			S.guideResume = nil -- done with the guide: next time it starts at the top
+		end
+		show(S.back)
+	end
+end
+
+-- The home bar: back to the home screen, and from there the phone goes away.
+local function goHome()
+	if current == "Home" then
+		PhoneUI.Close()
+	else
+		if current == "Guide" then
+			S.guideResume = nil -- (as BACK)
+		end
+		show("Home")
+	end
+end
+
+------------------------------------------------------------------ the phone itself
+
+-- The open phone's right edge (offset from the screen's right): clear of the HUD's Buttons zone, so the
+-- PHONE / CAR tiles (and the PC key cap on their left) stay visible and tappable while it's open.
+local function bodyRight()
+	local touch = Theme.IsTouch()
+	local z = Theme.Zone("Buttons", touch)
+	return z.Pos.X.Offset - z.Size.X.Offset - (touch and 8 or 36) -- PC -108, phone -132
+end
+
+-- Where the phone rests while it is up...
+local function restAt()
+	return UDim2.new(1, bodyRight(), 0.5, 0)
+end
+
+-- ...and where it comes from and goes back to: lower and a little to the right, like a hand's pocket.
+local function awayAt()
+	return UDim2.new(1, bodyRight() + K.Slip, 0.5 + K.Drop, 0)
+end
 
 local function build()
-	gui = Instance.new("ScreenGui")
+	local gui = Instance.new("ScreenGui")
 	gui.Name = "Phone"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.DisplayOrder = 5
 	gui.Parent = player:WaitForChild("PlayerGui")
+	ui.gui = gui
 
-	-- Tap or click anywhere around the open phone to put it away. It's only visible while the phone
-	-- is open, so it never blocks the HUD. It sits under everything else in this gui (ZIndex 0); the
-	-- phone body is Active, so taps on the phone (even on its labels) never reach it.
-	backdrop = Instance.new("TextButton")
-	backdrop.Name = "Backdrop"
-	backdrop.Size = UDim2.fromScale(1, 1)
-	backdrop.BackgroundTransparency = 1
-	backdrop.Text = ""
-	backdrop.AutoButtonColor = false
-	backdrop.Selectable = false
-	backdrop.Modal = true -- frees a locked mouse (shift lock, first person) while the phone is open
-	backdrop.ZIndex = 0
-	backdrop.Visible = false
-	backdrop.Parent = gui
-	backdrop.Activated:Connect(function()
-		if phone.Visible and os.clock() - phoneTouchAt > 0.3 then
-			PhoneUI.Close()
-		end
-	end)
-
-	openButton = Instance.new("TextButton")
-	openButton.Name = "PhoneButton"
-	openButton.Position = UDim2.new(0, 108, 0, 188) -- beside the CAR button
-	openButton.Size = UDim2.fromOffset(84, 40)
-	openButton.BackgroundColor3 = DARK
-	openButton.BackgroundTransparency = 0.2
-	openButton.Font = FONT
-	openButton.TextScaled = true
-	openButton.TextColor3 = PINK
-	openButton.Text = "PHONE"
-	openButton.Parent = gui
-	corner(openButton, UDim.new(0.5, 0))
-	stroke(openButton, PINK, 2)
-	local op = Instance.new("UIPadding")
-	op.PaddingTop, op.PaddingBottom = UDim.new(0, 7), UDim.new(0, 7)
-	op.PaddingLeft, op.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
-	op.Parent = openButton
-	openButton.Activated:Connect(function()
+	-- PHONE: a square tile in the HUD's Buttons zone (slot 1, CAR is slot 2), with the P key cap on a
+	-- keyboard. HUDController draws and places it, and re-places it when the screen or input changes.
+	ui.openButton = HUDController.ZoneButton(gui, "PhoneButton", "Phone", "PHONE", "P", 1)
+	ui.openButton.Activated:Connect(function()
 		PhoneUI.Toggle()
 	end)
 
-	-- The phone is laid out at a fixed design width (360) and scaled to the screen with a UIScale,
-	-- so text and buttons keep their proportions from a small phone to a big monitor.
+	-- The body: laid out at a fixed design width (K.W) and scaled to the screen with a UIScale, so text
+	-- and buttons keep their proportions from a small phone to a big monitor.
 	phone = Instance.new("Frame")
 	phone.Name = "Body"
 	phone.AnchorPoint = Vector2.new(1, 0.5)
-	phone.Position = UDim2.new(1, -16, 0.5, 0)
-	phone.Size = UDim2.fromOffset(DESIGN_W, 690)
-	phone.BackgroundColor3 = DARK
-	phone.Active = true -- sinks taps on the phone itself, so they never fall through to the backdrop
+	phone.Position = restAt()
+	phone.Size = UDim2.fromOffset(K.W, 690)
+	phone.BackgroundColor3 = K.Case
+	phone.BorderSizePixel = 0
+	phone.Active = true -- taps on the phone never fall through to the game
 	phone.Visible = false
 	phone.Parent = gui
-	phone.InputBegan:Connect(function(input)
-		local t = input.UserInputType
-		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-			phoneTouchAt = os.clock()
-		end
+	Theme.Corners(phone, K.Round)
+	W.ring(phone, K.Edge, 1.5) -- the thin metal edge
+	ui.fit = Instance.new("UIScale")
+	ui.fit.Name = "Fit"
+	ui.fit.Parent = phone
+
+	-- The glass (its height is set by fitToScreen), and the home screen's wallpaper on it: a dark dusk
+	-- sky, the brand's pink and cyan far down in the dark.
+	local inner = K.Round - K.Bezel
+	ui.glass = W.block(phone, "Glass", K.Bezel, K.Bezel, K.W - 2 * K.Bezel, 100, K.Glass, inner)
+	ui.wall = W.block(ui.glass, "Wall", 0, 0, 1, 1, C.Text, inner)
+	ui.wall.Size = UDim2.fromScale(1, 1)
+	local sky = Instance.new("UIGradient")
+	sky.Rotation = 70
+	sky.Color = ColorSequence.new(K.WallTop, K.WallFoot)
+	sky.Parent = ui.wall
+
+	-- Status bar: the clock on the left, cash in the island, signal and battery on the right.
+	local side = K.Inset - K.Bezel
+	local status = W.frame(phone, "Status")
+	status.Position = UDim2.fromOffset(K.Bezel, K.Bezel)
+	status.Size = UDim2.fromOffset(K.W - 2 * K.Bezel, K.Status)
+	status.ZIndex = 2
+	ui.clock = themeText(status, "12:00", UDim2.new(0, 110, 1, 0), UDim2.fromOffset(side, 0), 13, "Bold")
+	ui.clock.Name = "Clock"
+	ui.island = W.block(status, "Island", 0, 0, 84, 20, C.Shadow, 10)
+	ui.island.AnchorPoint = Vector2.new(0.5, 0.5)
+	ui.island.Position = UDim2.fromScale(0.5, 0.5)
+	Theme.Corners(ui.island, 10).CornerRadius = UDim.new(0.5, 0) -- a pill at any height
+	ui.cash = themeText(ui.island, "$0", UDim2.fromScale(1, 1), nil, 14, "Display", C.Cash, Enum.TextXAlignment.Center)
+	ui.cash.Name = "Cash"
+	-- Four signal bars and a battery, drawn from blocks. Their UIScale keeps them as tall as the clock's
+	-- digits on small screens (layoutShell).
+	local icons = W.frame(status, "Icons")
+	icons.AnchorPoint = Vector2.new(1, 0.5)
+	icons.Position = UDim2.new(1, -side, 0.5, 0)
+	icons.Size = UDim2.fromOffset(46, 12)
+	ui.icons = Instance.new("UIScale")
+	ui.icons.Parent = icons
+	for i = 1, 4 do
+		local tall = 3 + i * 2
+		W.block(icons, "Signal" .. i, (i - 1) * 5, 12 - tall, 3, tall, C.Text, 1)
+	end
+	local cell = W.block(icons, "Battery", 24, 1, 19, 10, C.Text, 3)
+	cell.BackgroundTransparency = 1
+	W.ring(cell, C.Text, 1).Transparency = 0.4
+	W.block(cell, "Charge", 2, 2, 12, 6, C.Text, 1)
+	W.block(icons, "Cap", 44, 4, 2, 4, C.Text, 1).BackgroundTransparency = 0.4
+
+	-- The header of an app page: the back chevron (two small turned blocks; the button around it is a
+	-- thumb wide and tall), the title and a thin line under them. layoutShell places and sizes them.
+	ui.back = Instance.new("TextButton")
+	ui.back.Name = "Back"
+	ui.back.Text = ""
+	ui.back.BackgroundTransparency = 1
+	ui.back.AutoButtonColor = false
+	ui.back.ZIndex = 2
+	ui.back.Parent = phone
+	local chevron = W.frame(ui.back, "Chevron")
+	chevron.AnchorPoint = Vector2.new(0, 0.5)
+	chevron.Position = UDim2.new(0, side - 3, 0.5, 0)
+	chevron.Size = UDim2.fromOffset(12, 18)
+	W.block(chevron, "Up", 0, 4, 12, 2.5, C.Text, 1).Rotation = -45
+	W.block(chevron, "Down", 0, 11.5, 12, 2.5, C.Text, 1).Rotation = 45
+	ui.chevron = Instance.new("UIScale")
+	ui.chevron.Parent = chevron
+	ui.back.Activated:Connect(function()
+		sfx("Click")
+		goBack()
 	end)
-	corner(phone, UDim.new(0, 28))
-	stroke(phone, PINK, 3)
-	fit = Instance.new("UIScale")
-	fit.Name = "Fit"
-	fit.Parent = phone
+	-- The title shrinks to fit its line (TextScaled, capped at the size layoutShell gives it), so a long
+	-- car name on the TUNE page is never cut off.
+	ui.title = themeText(phone, "", UDim2.fromOffset(200, 30), nil, 20, "Display")
+	ui.title.Name = "Title"
+	ui.title.ZIndex = 2
+	ui.title.TextScaled = true
+	ui.titleCap = Instance.new("UITextSizeConstraint")
+	ui.titleCap.MinTextSize = 10
+	ui.titleCap.MaxTextSize = 20
+	ui.titleCap.Parent = ui.title
+	ui.headRule = W.block(phone, "HeadRule", 0, 0, 1, 1, C.Text, 0, 2)
+	ui.headRule.BackgroundTransparency = 0.88
 
-	-- Status bar: clock and cash.
-	clockLabel = label(phone, "12:00", UDim2.fromOffset(110, 20), UDim2.fromOffset(28, 18), WHITE)
-	cashLabel = label(phone, "$0", UDim2.fromOffset(150, 20), UDim2.fromOffset(DESIGN_W - 178, 18), MINT, Enum.TextXAlignment.Right)
+	-- The page. Every page is drawn into it (show), and what scrolls past its edges is clipped.
+	ui.screen = W.frame(phone, "Screen")
+	ui.screen.ClipsDescendants = true
+	ui.screen.ZIndex = 2
 
-	backButton = button(phone, "‹ BACK", UDim2.fromOffset(96, 34), UDim2.fromOffset(20, 50), PANEL, function()
-		if back then
-			show(back)
-		end
+	-- The home bar: a thumb-sized button with a thin pill in its middle.
+	ui.homeBar = Instance.new("TextButton")
+	ui.homeBar.Name = "HomeBar"
+	ui.homeBar.Text = ""
+	ui.homeBar.BackgroundTransparency = 1
+	ui.homeBar.AutoButtonColor = false
+	ui.homeBar.ZIndex = 2
+	ui.homeBar.Parent = phone
+	local pill = W.block(ui.homeBar, "Pill", 0, 0, 116, 4, C.Text, 2)
+	pill.AnchorPoint = Vector2.new(0.5, 0.5)
+	pill.Position = UDim2.fromScale(0.5, 0.5)
+	pill.BackgroundTransparency = 0.45
+	ui.homeBar.Activated:Connect(function()
+		sfx("Click")
+		goHome()
 	end)
-	backButton.Name = "Back"
-	titleLabel = label(phone, "NEON PHONE", UDim2.fromOffset(210, 30), UDim2.fromOffset(DESIGN_W - 230, 52), PINK, Enum.TextXAlignment.Right)
 
-	screen = Instance.new("Frame")
-	screen.Name = "Screen"
-	screen.Position = UDim2.fromOffset(20, 96)
-	screen.BackgroundTransparency = 1
-	screen.ClipsDescendants = true
-	screen.Parent = phone
-
-	homeBar = button(phone, "", UDim2.fromOffset(110, 10), UDim2.fromOffset(DESIGN_W / 2 - 55, 660), Color3.fromRGB(80, 70, 110), function()
-		if current == "Home" then
-			PhoneUI.Close()
-		else
-			show("Home")
-		end
-	end)
-	homeBar.Name = "HomeBar"
-	homeBar:FindFirstChildOfClass("UIPadding"):Destroy()
+	-- The dark screen of a phone that is on its way up or down (raise / lower), over everything on the glass.
+	ui.cover = W.block(phone, "Cover", K.Bezel, K.Bezel, K.W - 2 * K.Bezel, 100, C.Shadow, inner, 5)
+	ui.cover.Visible = false
 end
 
--- Fit the phone to the screen: scale 0.7-1.1 by screen height, then as tall as the screen allows.
+-- Fit the phone to the screen: scale 0.7-1.1 by the screen's height (smaller still if the screen is too
+-- narrow for it), then as tall as the screen allows.
 local function fitToScreen()
-	local vp = Workspace.CurrentCamera.ViewportSize
+	local cam = Workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(844, 390)
 	local scale = math.clamp(vp.Y / 720, 0.7, 1.1)
-	local height = math.min(math.floor(vp.Y * 0.92 / scale), 720)
-	fit.Scale = scale
-	phone.Size = UDim2.fromOffset(DESIGN_W, height)
-	screen.Size = UDim2.fromOffset(DESIGN_W - 40, height - 96 - 40)
-	homeBar.Position = UDim2.fromOffset(DESIGN_W / 2 - 55, height - 26)
+	scale = math.max(0.5, math.min(scale, (vp.X + bodyRight() - 8) / K.W))
+	local height = math.clamp(math.floor(vp.Y * 0.92 / scale), 240, 720)
+	ui.fit.Scale = scale
+	phone.Size = UDim2.fromOffset(K.W, height)
+	ui.glass.Size = UDim2.fromOffset(K.W - 2 * K.Bezel, height - 2 * K.Bezel)
+	ui.cover.Size = ui.glass.Size
+	layoutShell()
+	if not S.sliding then
+		phone.Position = restAt()
+	end
 end
 
 local function refreshStatus()
 	local t = Lighting.ClockTime
 	local h = math.floor(t)
 	local m = math.floor((t - h) * 60)
-	local ampm = h >= 12 and "PM" or "AM"
 	local h12 = h % 12
-	clockLabel.Text = string.format("%d:%02d %s", h12 == 0 and 12 or h12, m, ampm)
-	cashLabel.Text = money(player:GetAttribute("Cash") or 0)
+	local text = string.format("%d:%02d %s", h12 == 0 and 12 or h12, m, h >= 12 and "PM" or "AM")
+	ui.clock.Text = text
+	ui.cash.Text = money(player:GetAttribute("Cash") or 0)
+	local big = ui.screen:FindFirstChild("Clock") -- the home screen's big clock, when it has one
+	if big and big:IsA("TextLabel") then
+		big.Text = text
+	end
+end
+
+-- While the phone is up the character holds one and looks down at it (PoseClient shows it to everyone).
+-- Not in a seat: a driver's hands stay on the wheel. Nothing happens if that controller isn't there.
+local function holdPhone(on)
+	if on then
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		on = not (hum and hum.SeatPart)
+	end
+	if S.posed == on then
+		return
+	end
+	S.posed = on
+	task.spawn(function()
+		pcall(function()
+			local module = script.Parent:FindFirstChild("PoseClient")
+			local poses = module and require(module)
+			if type(poses) == "table" and type(poses.Broadcast) == "function" then
+				poses.Broadcast("PhoneLook", on)
+			end
+		end)
+	end)
+end
+
+local function stopSlide()
+	for _, tween in ipairs(S.tweens) do
+		tween:Cancel()
+	end
+	table.clear(S.tweens)
+end
+
+-- Bring the phone up: from the lower right, tilted, settling upright in K.Raise seconds. A turned frame
+-- clips nothing (a long list would hang out of the phone), so the page stays hidden and the glass dark
+-- until it is upright; then the screen lights up. A phone still on its way down turns round where it is.
+local function raise()
+	S.anim += 1
+	local id = S.anim
+	stopSlide()
+	ui.screen.Visible = false
+	ui.cover.BackgroundTransparency = 0
+	ui.cover.Visible = true
+	if not S.sliding then
+		phone.Position = awayAt()
+		phone.Rotation = K.Tilt
+	end
+	S.sliding = true
+	phone.Visible = true
+	local slide = TweenService:Create(phone, TweenInfo.new(K.Raise, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+		{ Position = restAt() })
+	local turn = TweenService:Create(phone, TweenInfo.new(K.Raise, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Rotation = 0 })
+	table.insert(S.tweens, slide)
+	table.insert(S.tweens, turn)
+	slide:Play()
+	turn:Play()
+	task.delay(K.Raise, function()
+		if S.anim ~= id then
+			return -- put away (or raised again) meanwhile
+		end
+		stopSlide()
+		S.sliding = false
+		phone.Position = restAt()
+		phone.Rotation = 0
+		ui.screen.Visible = true
+		local wake = TweenService:Create(ui.cover, TweenInfo.new(K.Wake), { BackgroundTransparency = 1 })
+		table.insert(S.tweens, wake)
+		wake:Play()
+		task.delay(K.Wake, function()
+			if S.anim == id then
+				ui.cover.Visible = false
+			end
+		end)
+	end)
+end
+
+-- Put it away: the screen goes dark, then the reverse of raise in K.Lower seconds.
+local function lower()
+	S.anim += 1
+	local id = S.anim
+	stopSlide()
+	ui.screen.Visible = false
+	ui.cover.BackgroundTransparency = 0
+	ui.cover.Visible = true
+	S.sliding = true
+	local slide = TweenService:Create(phone, TweenInfo.new(K.Lower, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+		{ Position = awayAt(), Rotation = K.Tilt })
+	table.insert(S.tweens, slide)
+	slide:Play()
+	task.delay(K.Lower, function()
+		if S.anim ~= id then
+			return -- raised again meanwhile
+		end
+		stopSlide()
+		S.sliding = false
+		phone.Visible = false
+	end)
 end
 
 function PhoneUI.IsOpen()
-	return phone.Visible
+	return S.open
 end
 
-function PhoneUI.Open(pageName)
-	if player:GetAttribute("Side") == "Prisoner" then
-		NotifyController.Show("Phones are confiscated in prison. Try the vent...", Color3.fromRGB(255, 138, 61))
+-- pageName: a PAGES key (none or unknown = the home screen). arg: for "Tune" / "Custom", the vehicle id
+-- whose page to open (the dealer's TUNE IT). On a phone that is already up it just changes the page.
+function PhoneUI.Open(pageName, arg)
+	if not phone then
+		return -- not built yet (PhoneUI.Init)
+	end
+	-- Not on the first-join title screen (local attribute TitleScreen, TeamUI): the phone's layer is
+	-- switched off there, so P raised it unseen. It was then up over the fresh HUD the moment a side was
+	-- picked, and GET IN did nothing until it was put away.
+	if player:GetAttribute("TitleScreen") == true then
 		return
 	end
+	if player:GetAttribute("Side") == "Prisoner" then
+		NotifyController.Show("Phones are confiscated in prison. Try the vent...", nil, "prison")
+		return
+	end
+	-- A gamepad selection somewhere else (the dealer card's TUNE IT, say) moves onto the phone below.
+	local selected = GuiService.SelectedObject
+	local wasOpen = S.open
+	S.open = true
 	fitToScreen()
-	phone.Visible = true
-	backdrop.Visible = true
+	pcall(function()
+		require(script.Parent.DealerClient).Close() -- the dealer card and the phone share the right side
+	end)
 	refreshStatus()
-	show(pageName or "Home")
-	-- Slide up from below, like pulling a phone out of a pocket.
-	phone.Position = UDim2.new(1, -16, 1.2, 0)
-	TweenService:Create(phone, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-		{ Position = UDim2.new(1, -16, 0.5, 0) }):Play()
+	S.fromGuide, S.guideScroll = false, nil -- a fresh open never goes Back into the guide
+	if (pageName == "Tune" or pageName == "Custom") and type(arg) == "string" and Vehicles.ById[arg] then
+		detailId = arg
+	end
+	show(PAGES[pageName] and pageName or "Home")
+	if selected and not selected:IsDescendantOf(phone) then
+		local first = firstButton()
+		if first then
+			GuiService.SelectedObject = first
+		end
+	end
+	if not wasOpen then
+		raise()
+		holdPhone(true)
+	end
 end
 
 function PhoneUI.Close()
-	phone.Visible = false
-	backdrop.Visible = false
+	if not S.open then
+		return
+	end
+	-- Put away on the guide (a GPS button, P, the PHONE button): remember where, so HOW TO PLAY reopens there.
+	if current == "Guide" then
+		local l = ui.screen:FindFirstChild("List")
+		if l then
+			S.guideResume = { Pos = l.CanvasPosition, At = os.clock() }
+		end
+	end
+	-- A gamepad selection must not stay on a hidden phone button (a press would still reach it).
+	local selected = GuiService.SelectedObject
+	if selected and selected:IsDescendantOf(phone) then
+		GuiService.SelectedObject = nil
+	end
+	S.open = false
+	lower()
+	holdPhone(false)
 end
 
 function PhoneUI.Toggle()
-	if phone.Visible then
+	if S.open then
 		PhoneUI.Close()
 	else
 		PhoneUI.Open()
@@ -1366,125 +3137,216 @@ end
 function PhoneUI.Init()
 	build()
 	fitToScreen()
-	Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitToScreen)
-	UserInputService.InputBegan:Connect(function(input, processed)
-		if processed then
+	-- Redraw a page if it's the one open. Deferred so a burst of changes (a whole crew leaving, the co-op
+	-- bonus setting three attributes at once) redraws once.
+	local pending = {}
+	local function refreshIf(name)
+		if pending[name] then
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.P or input.KeyCode == Enum.KeyCode.DPadDown then
-			PhoneUI.Toggle()
-		end
-	end)
-	-- Keep open pages fresh when the server changes what we own or how our cars look.
-	-- One rebuild per batch of changes (a purchase changes Custom_ and Style_ together).
-	local refreshQueued = false
-	local function maybeRefresh()
-		if refreshQueued then
-			return
-		end
-		refreshQueued = true
+		pending[name] = true
 		task.defer(function()
-			refreshQueued = false
-			if phone.Visible and (current == "Garage" or current == "Custom" or current == "Dealer" or current == "Shop"
-				or current == "Goals" or current == "Crew" or current == "Jobs" or current == "Homes") then
-				show(current)
+			pending[name] = nil
+			if S.open and current == name then
+				show(name)
 			end
 		end)
 	end
+	-- Pages measure their rows from the phone's scale, so a new screen size draws the open one again.
+	local cam = Workspace.CurrentCamera
+	if cam then
+		cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			fitToScreen()
+			refreshIf(current)
+		end)
+	end
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if input.KeyCode == Enum.KeyCode.ButtonB then
+			-- Gamepad B goes Back while the phone's buttons are being used (on foot: in a car B gets out).
+			local selected = GuiService.SelectedObject
+			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if S.open and selected and selected:IsDescendantOf(phone) and not (hum and hum.SeatPart) then
+				if S.back then
+					goBack()
+				else
+					PhoneUI.Close()
+				end
+			end
+			return
+		end
+		if processed then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.P then
+			PhoneUI.Toggle()
+		elseif input.KeyCode == Enum.KeyCode.DPadDown then
+			-- A gamepad had no button for the phone at all, so its garage, GPS and jobs (and the guide's
+			-- "open your PHONE" step) were out of reach. D-pad down was free: up flips the car, left / right
+			-- is the radio, and a press that moved a menu's selection comes in as processed (above).
+			if S.open then
+				-- With a phone button selected the D-pad walks the page (B puts the phone away then).
+				local selected = GuiService.SelectedObject
+				if not (selected and selected:IsDescendantOf(phone)) then
+					PhoneUI.Close()
+				end
+				return
+			end
+			-- The dressing room steps through its list with this button and keeps the phone shut (WardrobeUI).
+			local ok, dressing = pcall(function()
+				return require(script.Parent.WardrobeUI).IsOpen()
+			end)
+			if ok and dressing == true then
+				return
+			end
+			PhoneUI.Open()
+			-- On foot the selection goes to the page's first button once the phone is upright, so the D-pad
+			-- and A work it and B goes Back. Not in a car, where B gets out: a second press puts it away there.
+			task.delay(K.Raise + 0.05, function()
+				local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+				if S.open and GuiService.SelectedObject == nil and not (hum and hum.SeatPart) then
+					GuiService.SelectedObject = firstButton()
+				end
+			end)
+		end
+	end)
+	-- Keep open pages fresh when the server changes what we own or how our cars look.
+	local function maybeRefresh()
+		if S.open and (current == "Garage" or current == "Custom" or current == "Tune" or current == "Dealer" or current == "Shop"
+			or current == "Goals" or current == "Crew" or current == "Jobs" or current == "Home_") then
+			show(current)
+		end
+	end
 	player.AttributeChanged:Connect(function(name)
-		if name == "OwnedCars" or string.sub(name, 1, 7) == "Custom_" or string.sub(name, 1, 6) == "Style_"
-			or string.sub(name, 1, 5) == "Pass_" or name == "ShopFree" or name == "CopRank"
+		if name == "OwnedCars" or string.sub(name, 1, 7) == "Custom_" or string.sub(name, 1, 5) == "Pass_"
 			or string.sub(name, 1, 7) == "Unlock_" or name == "Challenges" or name == "CivXP" or name == "CopXP"
-			or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" or name == "GusFound"
-			or name == "GusTotal" or name == "OwnedProps" or name == "HomeId" or string.sub(name, 1, 5) == "Rent_"
-			or name == "CivRank" then
+			or name == "CopRank" or name == "Crew" or name == "FriendBonus" or name == "MissionsDone" or name == "JourneyHidden"
+			or name == "BigHeists" or name == "Home" then
 			maybeRefresh()
-		elseif name == "Cash" and phone.Visible then
+		elseif string.sub(name, 1, 5) == "Tune_" then
+			refreshIf("Tune")
+			refreshIf("Garage") -- its TUNE strips count the upgrades
+		elseif name == "Passive" then
+			refreshIf("Settings")
+		elseif name == "CoplayMins" or name == "CoplayDone" or name == "CoplayDays" then
+			refreshIf("Crew") -- the play-together progress (FriendsService)
+		elseif name == "BigScore" or name == "BigScoreReadyAt" or name == "CivRank" then
+			refreshIf("Crew") -- THE BIG SCORE's line and its START / QUIT
+		elseif name == "Cash" and S.open then
 			refreshStatus()
+			refreshIf("Tune") -- prices turn green the moment they're affordable, and AUTO TUNE's plan grows
 		elseif name == "Side" then
-			local side = player:GetAttribute("Side")
-			openButton.Visible = side ~= "Prisoner"
-			if side == "Prisoner" then
+			ui.openButton.Visible = player:GetAttribute("Side") ~= "Prisoner"
+			if player:GetAttribute("Side") == "Prisoner" then
 				PhoneUI.Close()
-			elseif os.clock() - dutyAskedAt < 10 then
-				-- JOBS asked for this switch: the server is respawning you at your side's spawn.
-				dutyAskedAt = -math.huge
-				PhoneUI.Close()
-				NotifyController.Show(side == "Cop" and "On duty! Your patrol car is waiting on the pad."
-					or "Off duty. Port Solana is yours to roam.", side == "Cop" and CYAN or PINK)
 			else
 				maybeRefresh()
 			end
 		end
 	end)
-	-- Property moments (PropertyService): a stamp for a new home and for rent collected at the door.
-	Remotes.OnClient("PropertyEvent", function(kind, info)
-		info = type(info) == "table" and info or {}
-		if kind == "Bought" then
-			HUDController.Stamp("NEW HOME!", tostring(info.Name or "Your place") .. (info.Home and " is your home now" or " is yours"),
-				ORANGE)
-		elseif kind == "Rent" and type(info.Amount) == "number" then
-			HUDController.Stamp("RENT COLLECTED", "+" .. money(info.Amount), MINT)
+	-- CREW lists other players (their Crew and Side) and GPS marks open heists, so redraw those pages when
+	-- that changes too.
+	local function watchPlayer(p)
+		if p == player then
+			return -- our own Crew and Side are handled above
+		end
+		p:GetAttributeChangedSignal("Crew"):Connect(function()
+			refreshIf("Crew")
+		end)
+		p:GetAttributeChangedSignal("Side"):Connect(function()
+			refreshIf("Crew")
+		end)
+	end
+	Players.PlayerAdded:Connect(function(p)
+		watchPlayer(p)
+		refreshIf("Crew")
+	end)
+	for _, p in ipairs(Players:GetPlayers()) do
+		watchPlayer(p)
+	end
+	-- ChildRemoved fires once the player is gone, so GetPlayers() no longer lists them.
+	Players.ChildRemoved:Connect(function()
+		refreshIf("Crew")
+	end)
+	ReplicatedStorage:GetAttributeChangedSignal("OpenHeists"):Connect(function()
+		refreshIf("GPS")
+	end)
+	-- THE BIG SCORE's line: another crew starting or ending it, and the crews it counts.
+	for _, name in ipairs({ "BigScoreBusy", "Crews" }) do
+		ReplicatedStorage:GetAttributeChangedSignal(name):Connect(function()
+			refreshIf("Crew")
+		end)
+	end
+	-- A refused JOIN (friend gone, full server...) puts the JOIN buttons back at once, and so does a
+	-- refused tune purchase (GarageService's toasts) for the button that read FITTING...
+	Remotes.OnClient("Notify", function(key)
+		if (key == "FriendJoinFailed" or key == "FriendServerFull" or key == "FriendJoinWanted" or key == "FriendJoinBag"
+			or key == "FriendJoinPrison" or key == "FriendJoinStudio" or key == "FriendInServer") and next(crew.joiningUntil) then
+			table.clear(crew.joiningUntil)
+			refreshIf("Crew")
+		elseif (key == "NotEnoughCash" or key == "TuneWanted") and tuneSent then
+			tuneSent, tuneBusyUntil = nil, 0
+			refreshIf("Tune")
 		end
 	end)
-	-- Door prompts (Workspace.Properties, attributes PropId / PropAction): only the ones that apply
-	-- to this player. The server re-checks every action anyway.
-	task.spawn(function()
-		while true do
-			task.wait(1)
-			pcall(function()
-				local folder = Workspace:FindFirstChild("Properties")
-				if not folder then
-					return
-				end
-				local mine = {}
-				for id in string.gmatch(player:GetAttribute("OwnedProps") or "", "[^,]+") do
-					mine[id] = true
-				end
-				local home = player:GetAttribute("HomeId")
-				local citizen = player:GetAttribute("Side") == "Civilian"
-				for _, pp in ipairs(folder:GetDescendants()) do
-					local id = pp:IsA("ProximityPrompt") and pp:GetAttribute("PropId")
-					if id then
-						local action = pp:GetAttribute("PropAction")
-						local on = true
-						if action == "Buy" then
-							on = citizen and not mine[id]
-						elseif action == "SetHome" then
-							on = mine[id] == true and home ~= id
-						elseif action == "Collect" then
-							on = mine[id] == true
-						end
-						if pp.Enabled ~= on then
-							pp.Enabled = on
-						end
-					end
-				end
-			end)
+	-- A tune purchase landed: take taps again, light up the buttons it changed and redraw the TUNE page
+	-- (the bars glide to their new lengths there).
+	local function tuneLanded(id, buttons)
+		tuneSent, tuneBusyUntil = nil, 0
+		local keys = {}
+		for _, b in ipairs(buttons) do
+			keys[tostring(id) .. "/" .. tostring(b)] = true
 		end
-	end)
-	-- New Coast Feed posts: refresh the FEED page, or the unread badge on the home screen.
-	FeedController.OnPost(function()
-		if phone.Visible and (current == "Feed" or current == "Home") then
-			show(current)
-		end
-	end)
+		tuneFlash = { At = os.clock(), Keys = keys }
+		refreshIf("Tune")
+	end
+	-- Like a tuning shop: once new parts are fitted the engine revs, in this car's own exhaust note (the
+	-- tune doesn't change the exhaust, so the attribute already holds the right one), instead of an
+	-- arcade cash sound.
+	local function revFitted(id)
+		previewExhaust(Garage.ParseTune(player:GetAttribute("Tune_" .. tostring(id))).Exhaust)
+	end
 	Remotes.OnClient("GarageResult", function(result)
+		if type(result) ~= "table" then
+			return
+		end
 		local def = Vehicles.ById[result.Id]
 		local name = def and (def.DisplayName or def.Id) or "car"
 		if result.Kind == "Bought" then
-			HUDController.Stamp("NEW RIDE!", name .. " is in your Garage", PINK)
+			HUDController.Stamp("NEW RIDE!", name .. " is in your Garage", C.Brand)
 		elseif result.Kind == "Painted" then
-			local what = tostring(result.Name or "New")
-			NotifyController.Show(result.Bought and (what .. " paint is yours on the " .. name .. "! Switch back free any time.")
-				or (what .. " paint on your " .. name .. "."), PINK)
+			NotifyController.Show("Fresh paint on your " .. name .. "!", nil, "success")
 		elseif result.Kind == "Rims" then
-			local what = tostring(result.Name or "New")
-			NotifyController.Show(result.Bought and (what .. " rims are yours on the " .. name .. "! Switch back free any time.")
-				or (what .. " rims on your " .. name .. "."), CYAN)
+			NotifyController.Show("New rims on your " .. name .. "!", nil, "success")
 		elseif result.Kind == "Glow" then
-			NotifyController.Show(result.Bought and ("Underglow installed on your " .. name .. "! Colour swaps are free now.")
-				or (tostring(result.Name or "New") .. " underglow on your " .. name .. "."), PURPLE)
+			NotifyController.Show("Underglow set on your " .. name .. "!", nil, "success")
+		elseif result.Kind == "Tuned" then
+			tuneLanded(result.Id, { result.Track })
+			NotifyController.Show(tostring(result.Track) .. " stage " .. tostring(result.Stage) .. " fitted to your " .. name .. "!",
+				nil, "success")
+			revFitted(result.Id)
+		elseif result.Kind == "AutoTuned" then
+			local buttons = { "Auto" }
+			for key in pairs(type(result.Tracks) == "table" and result.Tracks or {}) do
+				table.insert(buttons, key)
+			end
+			tuneLanded(result.Id, buttons)
+			NotifyController.Show("AUTO TUNE on your " .. name .. ": " .. tostring(result.Text) .. " ("
+				.. money(tonumber(result.Total) or 0) .. ")", nil, "success")
+			revFitted(result.Id)
+		elseif result.Kind == "Exhaust" then
+			if exhaustPick == tostring(result.Id) .. "/X:" .. tostring(result.Key) then
+				exhaustPick = nil -- it's fitted: BUY has nothing to offer (even if Tune_ arrives a moment later)
+			end
+			tuneLanded(result.Id, { "X:" .. tostring(result.Key) })
+			local exhaust = Garage.ExhaustByKey[result.Key]
+			local which = exhaust and exhaust.Name or "NEW"
+			if result.Bought then
+				NotifyController.Show(which .. " exhaust fitted to your " .. name .. "!", nil, "success")
+				sfx("Cash") -- the purchase itself...
+				previewExhaust(result.Key) -- ...and the new sound (BUY's own tap is silent; a swap's tap played it)
+			else
+				NotifyController.Show(which .. " exhaust back on your " .. name .. ".", nil, "info")
+			end
 		end
 	end)
 	task.spawn(function()
@@ -1493,10 +3355,26 @@ function PhoneUI.Init()
 			-- On touch screens the PHONE button sits where the steering thumb goes: hide it while driving.
 			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 			local driving = hum ~= nil and hum.SeatPart ~= nil
-			openButton.Visible = player:GetAttribute("Side") ~= "Prisoner"
+			ui.openButton.Visible = player:GetAttribute("Side") ~= "Prisoner"
 				and not (driving and UserInputService.TouchEnabled and not UserInputService.MouseEnabled)
-			if phone.Visible and os.clock() % 5 < 0.5 then
-				refreshStatus()
+			if S.open then
+				refreshStatus() -- the clock keeps the game's time
+				holdPhone(true) -- (sat down or stood up with the phone out)
+				if current == "Crew" then
+					askFriends() -- at most once per K.FriendsFresh; the page redraws only if the list changed
+					-- THE BIG SCORE's line: a countdown is rewritten in place; a change of meaning (ready now,
+					-- lost the cops, cooldown over) redraws the page so START follows it.
+					local line = crew.bigScoreLine
+					if line and line.Parent then
+						local text, color, _, _, key = crew.bigScoreStatus()
+						if key ~= crew.bigScoreKey then
+							refreshIf("Crew")
+						elseif line.Text ~= text then
+							line.Text = text
+							line.TextColor3 = color
+						end
+					end
+				end
 			end
 		end
 	end)

@@ -55,7 +55,8 @@ function CityGen.BoatPads(spawns)
 	local WATER_Y = -1.5
 	local function pad(side, color, x, z, i)
 		local p = box(spawns, "BoatPad", Vector3.new(26, 0.2, 13), CFrame.new(x, WATER_Y + 0.05, z), color, Enum.Material.Neon,
-			{ CanCollide = false, CanQuery = false, CanTouch = false, Transparency = 0.7 })
+			-- (invisible: a flat neon slab lying in the sea cut straight through the waves; boats just appear on the water)
+			{ CanCollide = false, CanQuery = false, CanTouch = false, Transparency = 1 })
 		p:SetAttribute("Side", side)
 		p:SetAttribute("Index", i)
 		p:SetAttribute("FacingYaw", 270)
@@ -196,7 +197,7 @@ local function label(parent, text, color)
 	local t = Instance.new("TextLabel")
 	t.Size = UDim2.fromScale(1, 1)
 	t.BackgroundTransparency = 1
-	t.Font = Enum.Font.FredokaOne
+	t.Font = Enum.Font.Oswald
 	t.TextScaled = true
 	t.TextColor3 = color
 	t.TextStrokeTransparency = 0.3
@@ -265,10 +266,10 @@ function CityGen.Build()
 	terrain:FillBlock(CFrame.new(2200, -11.25, 0), Vector3.new(1400, 19.5, 4800), Enum.Material.Water)
 	terrain:FillBlock(CFrame.new(-1425, -11, 1375), Vector3.new(950, 6, 1050), Enum.Material.Mud)
 	terrain:FillBlock(CFrame.new(-1425, -4.75, 1375), Vector3.new(950, 6.5, 1050), Enum.Material.Water)
-	terrain.WaterColor = Color3.fromRGB(40, 190, 200)
-	terrain.WaterTransparency = 0.6
-	terrain.WaterWaveSize = 0.15
-	terrain.WaterWaveSpeed = 8
+	terrain.WaterColor = Color3.fromRGB(18, 150, 170) -- a deep Gulf turquoise (Look 4.0; was a pale 40, 190, 200)
+	terrain.WaterTransparency = 0.45
+	terrain.WaterWaveSize = 1 -- the most the engine draws: the owner asked for waves (boats ride CarPhysics' own swell on top)
+	terrain.WaterWaveSpeed = 14
 
 	-- Roads
 	local roads = folder(city, "Roads")

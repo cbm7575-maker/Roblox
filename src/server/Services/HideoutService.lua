@@ -1,11 +1,11 @@
 -- HideoutService (ModuleScript, ServerScriptService.Services.HideoutService)
 -- Hideouts (models named "Hideout" in Workspace.Spawns, with a Pad): where Wanted players bank loot.
--- A civilian inside a hideout, unseen by any cop right now (HeatSpotted false), lays low:
---   * cash in the bag is banked (the "Banked" event), and
---   * any heat is cleared. That counts as an escape (ProgressService "Escape" XP and the "lose the
---     cops" challenge, the Escapes stat), with or without loot; heat from a phone mission's
---     "lose the cops" step (attribute MissionHeat) clears too but earns no escape credit.
--- While a cop can see them they get the "ShakeCopsFirst" toast instead. On foot or in a car both count.
+-- A robber inside a hideout with cash in the bag banks it, as long as no cop can see them right now
+-- (HeatSpotted). Banking also clears their heat: they laid low. On foot or in a car both count.
+-- The client moves its own character, so the trip is sanity-checked too: banking waits until the
+-- time since cash last went into the bag covers the distance from there at the fastest car's nitro
+-- speed (+30%). A cheat who teleports from a robbery onto the pad still has to wait out that trip,
+-- wanted, before the bag banks and the heat clears.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,12 +13,16 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
+local Vehicles = require(ReplicatedStorage.Shared.Config.Vehicles)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
 
 local HideoutService = {}
 
 local CHECK_EVERY = 0.5
+local MAX_TRIP_SPEED = Vehicles.TopSpeed * (Vehicles.Defaults.NitroSpeed or 1.2) * 1.3 -- studs/s
+local TRIP_SLACK = 100 -- studs: robbing and hideout spots aren't points
 local lastWarn = {}
+local lootFrom = {} -- [player] = { pos, t }: where and when cash last went into their bag
 
 local function hideouts()
 	local list = {}
@@ -41,6 +45,33 @@ function HideoutService.IsInside(position)
 	return false
 end
 
+-- Remember where the bag last grew (a robbery, a delivered hot car, a grabbed duffel).
+local function watchBag(player)
+	local last = EconomyService.GetCarried(player)
+	player:GetAttributeChangedSignal("Carried"):Connect(function()
+		local carried = EconomyService.GetCarried(player)
+		if carried > last then
+			local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if r then
+				lootFrom[player] = { pos = r.Position, t = os.clock() }
+			end
+		end
+		last = carried
+	end)
+end
+
+-- Got here faster than any car could have since the bag last grew? (Flat distance: ramps and
+-- bridges don't matter.)
+local function arrivedTooFast(player, position)
+	local from = lootFrom[player]
+	if not from then
+		return false
+	end
+	local d = position - from.pos
+	local flat = Vector3.new(d.X, 0, d.Z).Magnitude
+	return flat > TRIP_SLACK + MAX_TRIP_SPEED * (os.clock() - from.t)
+end
+
 local function clearHeat(player)
 	local ok, HeatService = pcall(require, ServerScriptService.Services:FindFirstChild("HeatService"))
 	if ok and HeatService and HeatService.Clear then
@@ -51,72 +82,46 @@ local function clearHeat(player)
 	end
 end
 
--- Laying low with heat > 0 is an escape: read the stars BEFORE clearing them.
-local function escape(player)
-	local heat = player:GetAttribute("Heat") or 0
-	if heat <= 0 then
-		return
-	end
-	if not player:GetAttribute("MissionHeat") then
-		player:SetAttribute("Escapes", (player:GetAttribute("Escapes") or 0) + 1)
-	end
-	-- ProgressService itself skips mission heat (no XP, no challenge).
-	local ok, err = pcall(function()
-		require(ServerScriptService.Services.ProgressService).Event(player, "Escape", heat)
-	end)
-	if not ok then
-		warn("[HideoutService] " .. tostring(err))
-	end
-	clearHeat(player)
-end
-
-local notify, banked
-
-local function check(player)
-	-- InHideout drives the client's WARDROBE button.
-	local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	local inside = r ~= nil and player:GetAttribute("Side") == "Civilian" and HideoutService.IsInside(r.Position)
-	if player:GetAttribute("InHideout") ~= inside then
-		player:SetAttribute("InHideout", inside)
-	end
-	local carried = EconomyService.GetCarried(player)
-	local heat = player:GetAttribute("Heat") or 0
-	if not inside or (carried <= 0 and heat <= 0) then
-		return
-	end
-	if player:GetAttribute("HeatSpotted") then
-		local t = os.clock()
-		if not lastWarn[player] or t - lastWarn[player] > 6 then
-			lastWarn[player] = t
-			notify:FireClient(player, "ShakeCopsFirst")
-		end
-		return
-	end
-	local amount = carried > 0 and EconomyService.BankCarried(player, "hideout") or 0
-	escape(player)
-	if amount > 0 then
-		banked:FireClient(player, amount)
-	elseif heat > 0 then
-		notify:FireClient(player, "LostTheCops")
-	end
-end
-
 function HideoutService.Init()
-	notify = Remotes.Event("Notify")
-	banked = Remotes.Event("Banked")
+	local notify = Remotes.Event("Notify")
+	local banked = Remotes.Event("Banked")
+	Players.PlayerAdded:Connect(watchBag)
+	for _, p in ipairs(Players:GetPlayers()) do
+		watchBag(p)
+	end
 	task.spawn(function()
 		while true do
 			task.wait(CHECK_EVERY)
 			for _, player in ipairs(Players:GetPlayers()) do
-				local ok, err = pcall(check, player)
-				if not ok then
-					warn("[HideoutService] " .. tostring(err))
+				-- InHideout drives the client's WARDROBE button.
+				local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+				local inside = r ~= nil and player:GetAttribute("Side") == "Civilian" and HideoutService.IsInside(r.Position)
+				if player:GetAttribute("InHideout") ~= inside then
+					player:SetAttribute("InHideout", inside)
+				end
+				if player:GetAttribute("Side") == "Civilian" and EconomyService.GetCarried(player) > 0 then
+					local root = r
+					if root and inside then
+						if player:GetAttribute("HeatSpotted") then
+							local t = os.clock()
+							if not lastWarn[player] or t - lastWarn[player] > 6 then
+								lastWarn[player] = t
+								notify:FireClient(player, "ShakeCopsFirst")
+							end
+						elseif not arrivedTooFast(player, root.Position) then -- else wait: checked again next tick
+							local amount = EconomyService.BankCarried(player, "hideout")
+							clearHeat(player)
+							player:SetAttribute("Escapes", (player:GetAttribute("Escapes") or 0) + 1)
+							banked:FireClient(player, amount)
+						end
+					end
 				end
 			end
 		end
 	end)
 	Players.PlayerRemoving:Connect(function(p)
 		lastWarn[p] = nil
+		lootFrom[p] = nil
 	end)
 end
 

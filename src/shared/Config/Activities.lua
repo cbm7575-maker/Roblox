@@ -1,18 +1,32 @@
 -- Activities (ModuleScript, ReplicatedStorage.Shared.Config.Activities)
--- Open-world activities around Port Solana: street races (one on the water), stunt jumps, the drift
--- zone, taxi/courier shifts and the car meet. Coordinates are world studs (y ignored).
--- Economy rule of thumb: risk-free activities pay about $500 a minute at best, so crime (heists, about
--- $1,000-2,000 a minute) always pays at least twice as much. The UTC-day limits below are per player.
+-- Open-world activities around Port Solana: street races (one on the water), stunt jumps, the drift zone.
+-- Coordinates are world studs (y ignored).
 
 local Activities = {}
 
 -- Street races: solo time trials with a server leaderboard. Drive onto the start pad and press E.
--- Checkpoints are passed within 30 studs, in order. Par = a good time; beating it pays the bonus.
--- The first finish of each race per UTC day pays Reward (+ ParBonus under par); later finishes that day
--- pay RaceRepeatShare of it (XP too). After a finish the same race can't start again for RaceCooldown s.
-Activities.RaceRepeatShare = 0.3
-Activities.RaceCooldown = 30
-
+-- Checkpoints are passed in order, within CheckRadius studs (or the race's own Radius). Par = a good
+-- time; beating it pays the bonus.
+-- Laying out a race: put every checkpoint ON a road, and keep each pair of neighbours on one street (or
+-- one highway stretch), so the shortest way between them is the only sensible one. ActivityClient draws
+-- the guide line along the roads between them (RoadGraph), and its turn arrows come from that line, so
+-- a turn at a crossing belongs AT a checkpoint, never somewhere between two of them (a road that bends
+-- by itself, like the highway's corners, is fine).
+-- The road line runs on the centre line. A race laid out in its own lanes sets LineOffset (studs right
+-- of the centre line, in the way it is driven): the line is drawn there, so the chevrons never lead
+-- into the oncoming lanes (where the stunt ramps sit, see Stunts below). Put its checkpoints in those
+-- lanes too, so the rings and the line agree.
+-- Boat races (Boat = true) are drawn as straight lines over the water (in white: cyan is lost on the
+-- sea): keep those clear of piers. Nothing fences a ring in out there, so a boat can go round one: the
+-- client then turns its line back to the ring that was missed.
+-- Route check (2026-10, against CityGen's roads):
+--   OceanSprint   one straight run south down Ocean Drive (Highway 1's east side, x = 1000).
+--   DowntownDash  every leg is one street; the turn is always at the checkpoint's crossing
+--                 (right, left, left, right, right, right, right).
+--   HighwayLoop   every leg stays on Highway 1; the four bends are the highway's own corners. Driven
+--                 clockwise (right-hand bends), all of it 12 studs right of the centre line.
+--   SurfSprint    open water; the last leg passes 120 studs east of the Ferris pier's end.
+Activities.CheckRadius = 32
 Activities.Races = {
 	{
 		Id = "OceanSprint",
@@ -43,15 +57,21 @@ Activities.Races = {
 		ParBonus = 600,
 	},
 	{
+		-- The whole loop runs 12 studs right of the centre line (the racer's own lanes): on the north and
+		-- south straights that keeps it clear of the Northern Lights and Rustwater Rocket ramps in the
+		-- oncoming lanes. Start, checkpoints and the guide line (LineOffset) all sit in those lanes.
+		-- Radius 44: the checkpoints sit off-centre on a 60-stud road, and the far lane must count too.
 		Id = "HighwayLoop",
 		Name = "Highway 1 Loop",
-		Start = Vector3.new(-600, 0, -1850),
+		Radius = 44,
+		LineOffset = 12,
+		Start = Vector3.new(-600, 0, -1838),
 		Heading = Vector3.new(1, 0, 0),
 		Checkpoints = {
-			Vector3.new(780, 0, -1850), Vector3.new(1000, 0, -1100), Vector3.new(1000, 0, 800),
-			Vector3.new(780, 0, 1850), Vector3.new(-1000, 0, 1850), Vector3.new(-1630, 0, 1850),
-			Vector3.new(-1850, 0, 700), Vector3.new(-1850, 0, -1000), Vector3.new(-1630, 0, -1850),
-			Vector3.new(-700, 0, -1850),
+			Vector3.new(780, 0, -1838), Vector3.new(988, 0, -1100), Vector3.new(988, 0, 800),
+			Vector3.new(780, 0, 1838), Vector3.new(-1000, 0, 1838), Vector3.new(-1630, 0, 1838),
+			Vector3.new(-1838, 0, 700), Vector3.new(-1838, 0, -1000), Vector3.new(-1630, 0, -1838),
+			Vector3.new(-700, 0, -1838),
 		},
 		Par = 110,
 		Reward = 1200,
@@ -76,49 +96,34 @@ Activities.Races = {
 }
 
 -- Stunt jumps: ramp (low edge first, you drive up it along Travel) and how far you must fly.
+-- Ramps on a road sit in the lanes that drive along Travel (traffic keeps right), so nobody
+-- driving the other way meets the tall back face. Moving one means re-running CityGen in Studio.
 Activities.Stunts = {
 	{ Id = "BeachLaunch", Name = "Beach Launch", Ramp = Vector3.new(1250, 0, -1780), Travel = Vector3.new(0, 0, 1), MinDist = 50 },
 	{ Id = "BoardwalkHop", Name = "Boardwalk Hop", Ramp = Vector3.new(1320, 0, -250), Travel = Vector3.new(0, 0, -1), MinDist = 50 },
-	{ Id = "SolanaAve", Name = "Solana Avenue Air", Ramp = Vector3.new(38, 0, 1400), Travel = Vector3.new(0, 0, -1), MinDist = 55 },
+	{ Id = "SolanaAve", Name = "Solana Avenue Air", Ramp = Vector3.new(62, 0, 1400), Travel = Vector3.new(0, 0, -1), MinDist = 55 },
 	{ Id = "PalmBlvdLeap", Name = "Palm Blvd Leap", Ramp = Vector3.new(-1600, 0, -138), Travel = Vector3.new(1, 0, 0), MinDist = 55 },
-	{ Id = "DocksDrop", Name = "Rustwater Rocket", Ramp = Vector3.new(-200, 0, 1838), Travel = Vector3.new(1, 0, 0), MinDist = 60 },
-	{ Id = "CausewayFlyer", Name = "Causeway Flyer", Ramp = Vector3.new(1500, 0, -1350), Travel = Vector3.new(1, 0, 0), MinDist = 65 },
+	{ Id = "DocksDrop", Name = "Rustwater Rocket", Ramp = Vector3.new(-200, 0, 1862), Travel = Vector3.new(1, 0, 0), MinDist = 60 },
+	{ Id = "CausewayFlyer", Name = "Causeway Flyer", Ramp = Vector3.new(1500, 0, -1340), Travel = Vector3.new(1, 0, 0), MinDist = 65 },
 	{ Id = "GladesHopper", Name = "Glades Hopper", Ramp = Vector3.new(-1500, 0, 150), Travel = Vector3.new(0, 0, -1), MinDist = 50 },
 	{ Id = "HighwayNorth", Name = "Northern Lights", Ramp = Vector3.new(-500, 0, -1862), Travel = Vector3.new(-1, 0, 0), MinDist = 60 },
 }
--- First landing ever on a ramp: StuntFirstReward (counts toward 8/8). After that the first landing on
--- each ramp per UTC day pays StuntDailyReward (+ XP); more landings that day pay nothing.
 Activities.StuntFirstReward = 250
-Activities.StuntDailyReward = 100
+Activities.StuntRepeatReward = 50
 
--- Drift zone: $1 per PointsPerDollar points, at most MaxChainPay a chain (XP is capped the same way).
--- The first DailyFull dollars each UTC day pay in full, then AfterShare (cash and XP).
--- Circling on the spot (every position of the last CircleSeconds within CircleRadius studs) scores nothing.
+-- The drift zone on Lighthouse Key. The pad itself is Workspace.Activities.DriftZone (built by CityGen
+-- with these numbers); the client uses them while that part isn't streamed in yet.
+Activities.DriftZone = {
+	Center = Vector3.new(2200, 0, -1350),
+	Size = Vector3.new(190, 0, 340),
+}
+-- How drift points turn into cash: $1 per PointsPerDollar, at most MaxPayout a chain, nothing under
+-- MinScore points. DriftService pays by these numbers and ActivityClient shows "worth so far" from
+-- them while you slide: this table is the only place to change them.
 Activities.Drift = {
 	PointsPerDollar = 25,
-	MaxChainPay = 600,
-	DailyFull = 5000,
-	AfterShare = 0.25,
-	CircleRadius = 40,
-	CircleSeconds = 6,
-}
-
--- Taxi and courier shifts (JobService): Base + PerStud x route length, + Tip for beating the estimate.
--- A typical fare (about 1,200 studs in 40-50 s) pays about $350-400: roughly $500 a minute.
-Activities.Jobs = {
-	Taxi = { Base = 80, PerStud = 0.18, Tip = 50 },
-	Courier = { Base = 70, PerStud = 0.2, Tip = 60 },
-}
-
--- Neon Nights car meet (CarMeetService). LikeCap = paid player likes per car per meet; NPC fans add up
--- to NpcCap likes. Crowd Favourite needs at least one like from a real player (no AFK solo wins).
--- ShowXP goes to every shown car that got a real like.
-Activities.CarMeet = {
-	LikePay = 150,
-	LikeCap = 10,
-	NpcCap = 3,
-	FavouriteBonus = 1000,
-	ShowXP = 40,
+	MaxPayout = 600,
+	MinScore = 50,
 }
 
 return Activities

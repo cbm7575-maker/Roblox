@@ -1,10 +1,11 @@
 -- TeamService (ModuleScript, ServerScriptService.Services.TeamService)
--- Civilians (default, free roam), Cops (an optional job) and Prisoners. Everyone joins as a citizen:
--- there's no role picker at join (HasPicked is set on join; TutorialService, DailyService and the
--- objective bar still read it). Police duty is a card in the phone's JOBS app.
+-- Civilians (default, free roam), Cops (a job) and Prisoners. The role picker shows on first join
+-- (not for a prisoner who left mid-sentence and rejoined: PrisonService.Rejoined sends them back).
 -- Switching (RequestTeam) is allowed when: not a prisoner, no heat, not on cooldown, and for cops,
 -- the cop cap (about 1 cop per 2 robbers) has room. Switching respawns you at your side's spawn
--- with that side's starter car waiting on a pad (citizens who own a house spawn inside it).
+-- with that side's starter car waiting on a pad.
+-- TeamService.IsFreeRoaming(player): a Civilian who isn't wanted and isn't inside their home (only then
+-- does FriendsService move a friend who just arrived to stand beside them).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -37,6 +38,12 @@ end
 
 function TeamService.GetSide(player)
 	return player:GetAttribute("Side") or "Civilian"
+end
+
+-- Free roam, not wanted, not inside a home (HousingService's InHome). Prisoners are never Civilians.
+function TeamService.IsFreeRoaming(player)
+	return TeamService.GetSide(player) == "Civilian" and (player:GetAttribute("Heat") or 0) <= 0
+		and player:GetAttribute("InHome") ~= true
 end
 
 function TeamService.Count(side)
@@ -104,8 +111,11 @@ function TeamService.Init()
 
 	local function onPlayer(player)
 		player:SetAttribute("Side", "Civilian")
-		player:SetAttribute("HasPicked", true) -- free roam: no picker, everyone starts as a citizen
+		player:SetAttribute("HasPicked", false)
 		player.Team = teamBySide.Civilian
+		-- Left mid-sentence and came back? Straight back to prison (required here, not at the top:
+		-- PrisonService requires this module).
+		require(ServerScriptService.Services.PrisonService).Rejoined(player)
 	end
 	Players.PlayerAdded:Connect(onPlayer)
 	for _, p in ipairs(Players:GetPlayers()) do

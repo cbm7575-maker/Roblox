@@ -3,7 +3,6 @@
 --   Smoke (RequestSmoke): while wanted and driving, lays a smoke trail behind the car for 4 s.
 --     The clouds are invisible blockers plus smoke particles in Workspace.Smoke: they block cop sight
 --     lines (HeatService, AI police) and tasers, but car suspension rays and cameras ignore them.
---     Phone-friendly particles: few, big puffs (about a third of the old count, twice the size).
 --     1 charge (SmokeCharges), refills every 30 s.
 
 local Players = game:GetService("Players")
@@ -40,11 +39,11 @@ local function puff(position)
 	local e = Instance.new("ParticleEmitter")
 	e.Texture = "rbxasset://textures/particles/smoke_main.dds"
 	e.Color = ColorSequence.new(Color3.fromRGB(230, 200, 255), Color3.fromRGB(255, 170, 220))
-	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 14), NumberSequenceKeypoint.new(1, 28) })
-	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 1) })
-	e.Lifetime = NumberRange.new(3.5, 5.5)
-	e.Rate = 6
-	e.Speed = NumberRange.new(1.5, 4)
+	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 8), NumberSequenceKeypoint.new(1, 16) })
+	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 1) })
+	e.Lifetime = NumberRange.new(3, 5)
+	e.Rate = 18
+	e.Speed = NumberRange.new(2, 5)
 	e.SpreadAngle = Vector2.new(180, 180)
 	e.Parent = a
 	p.Parent = folder

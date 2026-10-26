@@ -1,22 +1,23 @@
 -- Vehicles (ModuleScript, ReplicatedStorage.Shared.Config.Vehicles)
 -- One entry per vehicle. Accelerations are in studs/s^2 so tuning doesn't depend on part mass.
 -- Stats come from the Game Design Spec; they are starting values for playtest tuning.
--- Brake / ReverseSpeed differ by class (heavy trucks stop later, sports cars sooner). Palmetto,
--- Vortex and the Sunray Patrol (also the AI police car) keep the defaults they were tested with.
---
--- Cabin layout (CarBuilder places the seats from it; all studs, relative to the chassis centre, +Z = rear):
---   Seats = 2 (driver + front passenger) or 4 (two more on a back row; up to 3 passengers).
---   Cabin = { Y = seat top surface height, Z = front-row seat centre, X = how far the seats sit from the
---             centre line (driver left, passenger right; 0 = one behind the other, then Inline = how far
---             back the passenger sits), Tilt = recline in degrees (low cars lean the rider back),
---             Rear = { Y, Z, X, Tilt } for the back row }.
---   Worked out from each mesh body's real bounds (ServerStorage.CarBodies) for a seated R15 avatar at 1.05
---   height scale (head top ~4.1 studs over the seat): the head stays under the roof / window line, the
---   hips on the floor, the feet inside the body. Open cars (Flamingo, Sandpiper, Splash) just sit naturally.
---   BodyScale = visual mesh body scale (default 1) for cabins too low even with the seat down and leaned
---   back; the wheels and arches scale with it (physics never change).
---   Hull (boats) = { Turn = degrees, Size = Vector3 }: turns the stored hull about its pivot and refits it to
---   Size (Splash and Harbor Patrol were stored sideways: their long axis ran across the boat).
+-- Hidden = true: not a car anyone can buy, own or spawn (the carjack street cars and the Big Score's
+-- armored van at the end); every list shown to players skips it.
+-- UnlockHeists = N: bought with cash as usual, but only after N big heists (Coastal Bank / Sea Dream,
+-- your own or your crew's: player attribute BigHeists, HeistService). GarageService refuses before
+-- that (CarNeedsHeists); the dealer tags and card show "N BIG HEISTS (x/N)".
+-- SeatDrop / SeatZ / SeatTilt (optional): a hand-tuned seat fit for a car with a mesh body, checked by eye
+-- in game (CarBuilder.fitSeats). SeatDrop: studs the seat top sits below the greybox seat top (negative
+-- raises it; also turns the automatic recline off). SeatZ: seat centre along the car (studs, front is -Z).
+-- SeatTilt: degrees the seat leans back (0-45). The ServerStorage.CarBodies templates carry the same
+-- values as attributes (tools/CAR_BODIES.md) and theirs win; these copies keep the fix when a body is
+-- re-prepared and loses its attributes. Change both together.
+-- Drift feel (CarPhysics, its header explains the model): Grip is the everyday sideways grip, DriftGrip
+-- the grip once the handbrake has let the tyres go, DriftSteer how much harder the car steers while it
+-- slides. The slide settles near atan(SteerRate x DriftSteer x 0.75 / DriftGrip): about 37 degrees with
+-- the defaults at half speed. Lower DriftGrip = wider, lazier slides. DriftPower is the share of the
+-- speed lost to sliding that the engine pays back on the throttle (0 = every drift dies in a second,
+-- 1 = sliding costs no speed).
 
 local Vehicles = {}
 
@@ -34,7 +35,9 @@ Vehicles.Defaults = {
 	Coast = 10, -- rolling slow-down with no throttle
 	TireFriction = 1.7, -- max grip force = friction x wheel load
 	Grip = 14, -- how fast sideways sliding is cancelled (per second); higher = grippier
-	DriftGrip = 2, -- the same while handbraking; low = long slides
+	DriftGrip = 2.6, -- the same while sliding (handbrake, then throttle + steer); low = wide slides
+	DriftSteer = 1.35, -- steering multiplier while sliding (swings the tail out)
+	DriftPower = 0.55, -- share of the speed scrubbed off by a slide that the throttle gives back
 	YawResponse = 9, -- how fast the car reaches the steering yaw rate
 	HighSpeedSteer = 0.5, -- steering multiplier at top speed
 	UprightStrength = 14,
@@ -64,61 +67,100 @@ end
 
 Vehicles.List = {
 	car("Palmetto", { Class = "Compact", Price = 0, Starter = "Civilian", MaxSpeed = 120, AccelRating = 2, HandlingRating = 3, Toughness = 2,
-		Color = Color3.fromRGB(110, 242, 196), Size = Vector3.new(6.8, 1.8, 13.5), Seats = 4,
-		BodyScale = 1.02, Cabin = { Y = -0.76, Z = -0.3, X = 1.3, Tilt = 14, Rear = { Y = -0.76, Z = 1.95, X = 1.3, Tilt = 14 } } }),
+		Color = Color3.fromRGB(110, 242, 196), Size = Vector3.new(6.8, 1.8, 13.5) }),
 	car("SunrayPatrol", { DisplayName = "Sunray Patrol", Class = "Police", Price = 0, Starter = "Cop", Police = true, MaxSpeed = 135, AccelRating = 3, HandlingRating = 3, Toughness = 3,
-		Color = Color3.fromRGB(245, 245, 250), Size = Vector3.new(7.2, 1.8, 13.5), Seats = 4,
-		BodyScale = 1.02, Cabin = { Y = -1.22, Z = -0.15, X = 1.5, Tilt = 14, Rear = { Y = -1.22, Z = 1.9, X = 1.5, Tilt = 14 } } }),
-	car("Gatorback", { Class = "Pickup", Price = 10000, MaxSpeed = 125, Brake = 105, ReverseSpeed = 35, AccelRating = 2, HandlingRating = 2, Toughness = 4, OffRoad = true, Seats = 4,
+		Color = Color3.fromRGB(245, 245, 250), Size = Vector3.new(7.2, 1.8, 13.5) }),
+	car("Gatorback", { Class = "Pickup", Price = 10000, MaxSpeed = 125, AccelRating = 2, HandlingRating = 2, Toughness = 4, OffRoad = true, Seats = 4,
 		Color = Color3.fromRGB(86, 120, 72), Size = Vector3.new(7.6, 2.2, 16), RestLength = 1.8,
-		Cabin = { Y = -0.45, Z = -0.65, X = 1.7, Tilt = 0, Rear = { Y = -0.45, Z = 1.5, X = 1.7, Tilt = 0 } } }),
-	car("Mangrove", { Class = "SUV", Price = 14000, MaxSpeed = 130, Brake = 108, ReverseSpeed = 36, AccelRating = 2, HandlingRating = 2, Toughness = 5,
-		Color = Color3.fromRGB(40, 70, 90), Size = Vector3.new(7.8, 2.4, 15.5), RestLength = 1.7, Seats = 4,
-		Cabin = { Y = -0.6, Z = -0.6, X = 1.8, Tilt = 0, Rear = { Y = -0.6, Z = 1.75, X = 1.8, Tilt = 0 } } }),
-	car("Sandpiper", { Class = "Buggy", Price = 22000, MaxSpeed = 130, Brake = 125, ReverseSpeed = 45, AccelRating = 4, HandlingRating = 4, Toughness = 2, OffRoad = true,
-		Color = Color3.fromRGB(255, 138, 61), Size = Vector3.new(7, 1.4, 12.5), RestLength = 2,
-		Cabin = { Y = -1.05, Z = 0.9, X = 1.4, Tilt = 5 } }),
-	car("Flamingo", { Class = "Convertible", Price = 28000, MaxSpeed = 150, Brake = 128, ReverseSpeed = 42, AccelRating = 3, HandlingRating = 5, Toughness = 2,
-		Color = Color3.fromRGB(255, 62, 165), Size = Vector3.new(7.2, 1.6, 13),
-		Cabin = { Y = -1.2, Z = 1.3, X = 1.5, Tilt = 8 } }),
-	car("NightHeron", { DisplayName = "Night Heron", Class = "Muscle", Price = 38000, MaxSpeed = 165, Brake = 112, ReverseSpeed = 40, AccelRating = 3, HandlingRating = 2, Toughness = 3,
-		Color = Color3.fromRGB(123, 47, 255), DriftGrip = 1.4,
-		Cabin = { Y = -1.23, Z = 0.1, X = 1.5, Tilt = 22 } }),
-	car("Voltline", { Class = "Sports", Price = 45000, MaxSpeed = 160, Brake = 135, ReverseSpeed = 45, AccelRating = 5, HandlingRating = 4, Toughness = 2,
-		Color = Color3.fromRGB(34, 225, 255), Size = Vector3.new(7.2, 1.7, 13),
-		Cabin = { Y = -0.8, Z = 1.25, X = 1.5, Tilt = 4 } }),
-	car("SolanaGT", { DisplayName = "Solana GT", Class = "Super", Price = 95000, MaxSpeed = 190, Brake = 145, ReverseSpeed = 48, AccelRating = 4, HandlingRating = 4, Toughness = 2,
+		SeatDrop = -1.35, SeatTilt = 6, SeatZ = 0.9 }), -- open roll cage: the auto fit put the driver low in the bed
+	car("Mangrove", { Class = "SUV", Price = 14000, MaxSpeed = 130, AccelRating = 2, HandlingRating = 2, Toughness = 5,
+		Color = Color3.fromRGB(40, 70, 90), Size = Vector3.new(7.8, 2.4, 15.5), RestLength = 1.7 }),
+	-- OpenTop: no roof (buggy, convertible). CarBuilder's seat fit then never treats the glass as a
+	-- closed cabin and keeps the old seat height (the driver's head is meant to be out in the air).
+	car("Sandpiper", { Class = "Buggy", Price = 22000, MaxSpeed = 130, AccelRating = 4, HandlingRating = 4, Toughness = 2, OffRoad = true,
+		OpenTop = true, Color = Color3.fromRGB(255, 138, 61), Size = Vector3.new(7, 1.4, 12.5), RestLength = 2,
+		SeatDrop = -0.35 }), -- sits up in the cage, hair under the top bar
+	car("Flamingo", { Class = "Convertible", Price = 28000, MaxSpeed = 150, AccelRating = 3, HandlingRating = 5, Toughness = 2,
+		OpenTop = true, Color = Color3.fromRGB(255, 62, 165), Size = Vector3.new(7.2, 1.6, 13),
+		SeatDrop = -0.5 }), -- shoulders above the doors, legs inside
+	car("NightHeron", { DisplayName = "Night Heron", Class = "Muscle", Price = 38000, MaxSpeed = 165, AccelRating = 3, HandlingRating = 2, Toughness = 3,
+		Color = Color3.fromRGB(123, 47, 255), DriftGrip = 1.95 }), -- muscle: the widest slides (about 43 degrees)
+	car("Voltline", { Class = "Sports", Price = 45000, MaxSpeed = 160, AccelRating = 5, HandlingRating = 4, Toughness = 2,
+		Color = Color3.fromRGB(34, 225, 255), Size = Vector3.new(7.2, 1.7, 13) }),
+	car("SolanaGT", { DisplayName = "Solana GT", Class = "Super", Price = 95000, MaxSpeed = 190, AccelRating = 4, HandlingRating = 4, Toughness = 2,
 		Color = Color3.fromRGB(255, 214, 10), Size = Vector3.new(7.4, 1.5, 15.5), RestLength = 1.1,
-		BodyScale = 1.08, Cabin = { Y = -1.26, Z = -0.55, X = 1.6, Tilt = 30 } }),
-	car("PursuitSpecial", { DisplayName = "Pursuit Special", Class = "Police", Price = 0, Police = true, UnlockCopRank = 5, MaxSpeed = 175, Brake = 138, ReverseSpeed = 45, AccelRating = 4, HandlingRating = 4, Toughness = 4,
-		Color = Color3.fromRGB(20, 24, 40), Size = Vector3.new(7.2, 1.7, 13.5),
-		BodyScale = 1.08, Cabin = { Y = -1.27, Z = -0.8, X = 1.5, Tilt = 22 } }),
-	car("RiotTruck", { DisplayName = "Riot Truck", Class = "Police", Price = 0, Police = true, Pass = "SWATUnit", MaxSpeed = 125, Brake = 100, ReverseSpeed = 32, AccelRating = 2, HandlingRating = 2, Toughness = 5,
-		Color = Color3.fromRGB(30, 34, 44), Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8, Seats = 4,
-		Cabin = { Y = 0.45, Z = -0.85, X = 2.1, Tilt = 0, Rear = { Y = 0.2, Z = 1.6, X = 2.1, Tilt = 0 } } }),
+		SeatTilt = 40 }), -- low wedge roof: the head poked through at the auto 30 deg recline
+	car("PursuitSpecial", { DisplayName = "Pursuit Special", Class = "Police", Price = 0, Police = true, UnlockCopRank = 5, MaxSpeed = 175, AccelRating = 4, HandlingRating = 4, Toughness = 4,
+		Color = Color3.fromRGB(20, 24, 40), Size = Vector3.new(7.2, 1.7, 13.5) }),
+	car("RiotTruck", { DisplayName = "Riot Truck", Class = "Police", Price = 0, Police = true, Pass = "SWATUnit", MaxSpeed = 125, AccelRating = 2, HandlingRating = 2, Toughness = 5,
+		Color = Color3.fromRGB(30, 34, 44), Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8 }),
 	car("Vortex", { Class = "Hyper", Price = 0, Pass = "Hypercar", MaxSpeed = 200, AccelRating = 5, HandlingRating = 4, Toughness = 3,
-		Color = Color3.fromRGB(20, 20, 24), Size = Vector3.new(7.6, 1.4, 12.5), RestLength = 1.05,
-		BodyScale = 1.12, Cabin = { Y = -1.38, Z = -0.85, X = 1.7, Tilt = 30 } }),
+		Color = Color3.fromRGB(20, 20, 24), Size = Vector3.new(7.6, 1.4, 12.5), RestLength = 1.05, SeatTilt = 40 }), -- low roof: head clipped at 30 deg
 	-- Boats (Boat = true): CarPhysics rides the water surface and beaches on land; they spawn on the
 	-- marina's boat pads. Low grip = long, splashy slides.
 	car("Splash", { DisplayName = "Splash Jet Ski", Class = "Jet Ski", Price = 0, Boat = true, MaxSpeed = 110, AccelRating = 5,
 		HandlingRating = 5, Toughness = 1, Grip = 5, DriftGrip = 1.5, Color = Color3.fromRGB(255, 62, 165),
-		Size = Vector3.new(4, 1.2, 9), RestLength = 1.2, WheelRadius = 0.5,
-		Hull = { Turn = 90, Size = Vector3.new(5, 5.4, 10) }, Cabin = { Y = 1.45, Z = 0.3, X = 0, Inline = 2.3, Tilt = 0 } }),
+		Size = Vector3.new(4, 1.2, 9), RestLength = 1.2, WheelRadius = 0.5 }),
 	car("Marlin", { Class = "Speedboat", Price = 16000, Boat = true, MaxSpeed = 140, AccelRating = 3, HandlingRating = 3,
 		Toughness = 3, Grip = 4, DriftGrip = 1.2, Color = Color3.fromRGB(245, 245, 250),
-		Size = Vector3.new(8, 1.8, 20), RestLength = 1.4, WheelRadius = 0.6,
-		Cabin = { Y = 1.3, Z = 0.5, X = 1.5, Tilt = 0 } }),
+		Size = Vector3.new(8, 1.8, 20), RestLength = 1.4, WheelRadius = 0.6 }),
 	car("HarborPatrol", { DisplayName = "Harbor Patrol", Class = "Police Boat", Price = 0, Police = true, Boat = true, MaxSpeed = 140,
 		AccelRating = 3, HandlingRating = 3, Toughness = 4, Grip = 4, DriftGrip = 1.2, Color = Color3.fromRGB(245, 245, 250),
-		Size = Vector3.new(8.5, 2, 21), RestLength = 1.4, WheelRadius = 0.6,
-		Hull = { Turn = -90, Size = Vector3.new(9.5, 10.2, 22) }, Cabin = { Y = 1.9, Z = -1.5, X = 1.6, Tilt = 0 } }),
+		Size = Vector3.new(8.5, 2, 21), RestLength = 1.4, WheelRadius = 0.6 }),
+	-- Premium cars and boats (civilian, cash only). The Solana GT ($95,000) used to be the top car and a
+	-- heist pays $900-$16,000, so these take many big heists to afford. Kept at the end of the list so
+	-- the Studio test keys (first 12 entries) don't move. The top three (Riptide R, Storm Petrel,
+	-- Moonstone Yacht) also need big heists (UnlockHeists), so a cash pack can't skip the crime game;
+	-- the Silver Egret and Albatross GT stay cash-only.
+	car("SilverEgret", { DisplayName = "Silver Egret", Class = "Luxury", Price = 120000, MaxSpeed = 185, AccelRating = 4,
+		HandlingRating = 3, Toughness = 5, Color = Color3.fromRGB(236, 232, 222), Size = Vector3.new(7.8, 1.8, 16),
+		RestLength = 1.3 }),
+	car("AlbatrossGT", { DisplayName = "Albatross GT", Class = "Grand Tourer", Price = 180000, MaxSpeed = 198, AccelRating = 4,
+		HandlingRating = 4, Toughness = 3, Color = Color3.fromRGB(150, 24, 58), Size = Vector3.new(7.8, 1.6, 15.5),
+		RestLength = 1.2 }),
+	-- Track car: extra grip (above the Handling 5 value) and tidy slides (it also steers the hardest).
+	car("Riptide", { DisplayName = "Riptide R", Class = "Track", Price = 260000, UnlockHeists = 3, MaxSpeed = 205, AccelRating = 5,
+		HandlingRating = 5, Toughness = 2, Grip = 20, DriftGrip = 3.1, Color = Color3.fromRGB(150, 255, 60),
+		Size = Vector3.new(7.8, 1.4, 14.5), RestLength = 1.05, SeatTilt = 40 }), -- low roof: head clipped at the auto 30 deg recline
+	-- Electric hypercar: the fastest car you can buy, with a longer, quicker-charging boost.
+	car("StormPetrel", { DisplayName = "Storm Petrel", Class = "Electric Hyper", Price = 450000, UnlockHeists = 6, MaxSpeed = 215, AccelRating = 5,
+		HandlingRating = 4, Toughness = 3, Color = Color3.fromRGB(40, 110, 255), Size = Vector3.new(8, 1.4, 15),
+		RestLength = 1.0, NitroSeconds = 4, NitroRecharge = 14 }),
+	car("Swordfish", { Class = "Offshore Racer", Price = 85000, Boat = true, MaxSpeed = 175, AccelRating = 5, HandlingRating = 4,
+		Toughness = 3, Grip = 5, DriftGrip = 1.2, Color = Color3.fromRGB(255, 90, 40),
+		Size = Vector3.new(8, 1.8, 20), RestLength = 1.4, WheelRadius = 0.6 }),
+	car("Moonstone", { DisplayName = "Moonstone Yacht", Class = "Luxury Yacht", Price = 300000, UnlockHeists = 4, Boat = true, MaxSpeed = 160,
+		AccelRating = 3, HandlingRating = 2, Toughness = 5, Grip = 3, DriftGrip = 1.2, Color = Color3.fromRGB(230, 236, 255),
+		Size = Vector3.new(10, 2.4, 26), RestLength = 1.4, WheelRadius = 0.6 }),
+	-- Street cars (Hidden = true): the city's everyday traffic cars, only ever driven after a carjacking
+	-- (CarjackService). Never sold or owned, so dealerships, the phone, garages, homes and the Studio test
+	-- keys all skip Hidden entries. TrafficModel: the ReplicatedStorage.TrafficModels body CarBuilder puts
+	-- on it, at the body's own size (the chassis is fitted to it; Size is only the no-body fallback).
+	-- Seat heights come from the body's roof (CarBuilder.fitSeats). Traffic bodies have no CarBodies template,
+	-- so their hand-tuned SeatZ / SeatDrop / SeatTilt (see the top of the file) live here only.
+	car("StreetHatch", { DisplayName = "Hatchback", Class = "Compact", Price = 0, Hidden = true, TrafficModel = "Hatchback",
+		MaxSpeed = 118, AccelRating = 2, HandlingRating = 3, Toughness = 2, Color = Color3.fromRGB(220, 220, 224),
+		Size = Vector3.new(6.6, 1.8, 13) }),
+	car("StreetSedan", { DisplayName = "Sedan", Class = "Sedan", Price = 0, Hidden = true, TrafficModel = "Sedan",
+		MaxSpeed = 124, AccelRating = 2, HandlingRating = 2, Toughness = 3, Color = Color3.fromRGB(34, 70, 140),
+		Size = Vector3.new(7, 1.8, 14), SeatZ = -1.3 }), -- front seat (0.4 put the driver in the back)
+	car("StreetPickup", { DisplayName = "Pickup", Class = "Pickup", Price = 0, Hidden = true, TrafficModel = "Pickup",
+		MaxSpeed = 112, AccelRating = 2, HandlingRating = 2, Toughness = 4, OffRoad = true, Color = Color3.fromRGB(150, 24, 40),
+		Size = Vector3.new(7.4, 2, 15.5), RestLength = 1.6, SeatZ = -3.0 }), -- head behind the cab window
+	-- The Big Score's armored van (Hidden = true): BigScoreService builds the one van a crew hacks; nobody
+	-- owns it. Riot Truck build with a lower top speed: heavy, tough and slow. No TrafficModel: its mesh
+	-- body is a ServerStorage.CarBodies template named "ArmoredVan" (the greybox until there is one).
+	car("ArmoredVan", { DisplayName = "Armored Van", Class = "Armored", Price = 0, Hidden = true, MaxSpeed = 112,
+		AccelRating = 2, HandlingRating = 2, Toughness = 5, Color = Color3.fromRGB(196, 190, 172),
+		Size = Vector3.new(8.4, 3.2, 15), RestLength = 1.8 }),
 }
 
 Vehicles.ById = {}
+Vehicles.TopSpeed = 0 -- the fastest MaxSpeed in the list (e.g. to scale the dealer's speed bars)
 for _, v in ipairs(Vehicles.List) do
 	setmetatable(v, { __index = Vehicles.Defaults })
 	Vehicles.ById[v.Id] = v
+	Vehicles.TopSpeed = math.max(Vehicles.TopSpeed, v.MaxSpeed or 0)
 end
 
 -- Plain table of every tuning field for a vehicle (defaults filled in), for copying onto model attributes.

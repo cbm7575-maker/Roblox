@@ -31,18 +31,13 @@ Progression.XP = {
 	RaceUnderPar = 40,
 	Stunt = 25,
 	Drift = 1, -- per 250 points
-	TaxiFare = 10, -- ~80 fares an hour: risk-free XP stays below a heist loop's (~1,700 XP/h)
+	TaxiFare = 15,
 	CarBoost = 40,
 	Arrest = 60, -- + ArrestPerStar x stars
 	ArrestPerStar = 20,
 	SpikeHit = 10,
 	TaserHit = 5,
 	PatrolMinute = 5,
-	Collectible = 25, -- a hidden Gus figurine (CollectibleService), either side
-	PropertyBought = 100, -- buying a safehouse (PropertyService), once per property
-	-- Phone missions pass their own XP (Config.Missions). Cop missions + patrol minutes give about
-	-- 1,200 XP an hour without any robbers around: police rank 5 in about 30-40 minutes, rank 10 in
-	-- about 3 hours (it was ~3 h and ~11 h on patrol pay alone).
 }
 
 -- What each rank unlocks (shown on rank-up and in the phone's GOALS app).

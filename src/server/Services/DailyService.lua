@@ -4,12 +4,6 @@
 -- day resets to day 1. Reaching day 7 unlocks the streak-only paint (player attribute
 -- "Unlock_Streak7", saved in data.flags.streak7).
 -- Saved in data.daily = { last = day number, streak = n }.
--- Paid once the save has loaded AND the client says it listens (remote DailyReady from ShopClient),
--- or 60 s after the load, so the DAY N STREAK stamp is never fired before anyone can show it.
--- Shared day helpers for other services (all clock-skew safe: a record only rolls over when the day
--- number is GREATER than the saved one, so a server clock a little behind never pays a day twice):
---   DailyService.Today()               UTC day number
---   DailyService.DayRecord(data, key)  data.flags[key] = { day = today, ... }, a fresh table each new day
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -26,19 +20,6 @@ local MAX_DAY = 7
 
 local function today()
 	return math.floor(os.time() / 86400)
-end
-
-DailyService.Today = today
-
-function DailyService.DayRecord(data, key)
-	data.flags = data.flags or {}
-	local rec = data.flags[key]
-	local day = today()
-	if type(rec) ~= "table" or type(rec.day) ~= "number" or rec.day < day then
-		rec = { day = day }
-		data.flags[key] = rec
-	end
-	return rec
 end
 
 local function onLoaded(player, data)
@@ -73,36 +54,17 @@ end
 
 function DailyService.Init()
 	Remotes.Event("DailyReward")
-	-- ShopClient fires DailyReady once it listens for DailyReward (it starts late in ClientMain's
-	-- order): paying before that would lose the streak stamp. No word within 60 s: pay anyway.
-	local ready = {} -- [player] = true once their client listens
-	local waiting = {} -- [player] = data, loaded and waiting for the client
-	Remotes.Event("DailyReady").OnServerEvent:Connect(function(player)
-		if ready[player] then
-			return
-		end
-		ready[player] = true
-		local data = waiting[player]
-		waiting[player] = nil
-		if data then
-			onLoaded(player, data)
-		end
-	end)
-	Players.PlayerRemoving:Connect(function(player)
-		ready[player], waiting[player] = nil, nil
-	end)
 	DataService.OnLoaded(function(player, data)
-		if ready[player] then
-			onLoaded(player, data)
-			return
-		end
-		waiting[player] = data
-		task.delay(60, function()
-			if waiting[player] == data and player.Parent == Players then
-				waiting[player] = nil
-				onLoaded(player, data)
+		-- Wait until they've picked a side so the reward isn't hidden behind the picker.
+		for _ = 1, 120 do
+			if player:GetAttribute("HasPicked") or player.Parent ~= Players then
+				break
 			end
-		end)
+			task.wait(0.5)
+		end
+		if player.Parent == Players then
+			onLoaded(player, data)
+		end
 	end)
 end
 

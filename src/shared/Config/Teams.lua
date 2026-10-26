@@ -8,7 +8,7 @@ local Teams = {}
 
 Teams.List = {
 	{ Side = "Civilian", TeamName = "Citizens", Color = BrickColor.new("Hot pink"), Starter = "Palmetto",
-		Label = "CITIZEN", Pitch = "Drive, race, explore... and rob if you dare." },
+		Label = "FREE ROAM", Pitch = "Drive, race, explore... and rob if you dare." },
 	{ Side = "Cop", TeamName = "Police", Color = BrickColor.new("Cyan"), Starter = "SunrayPatrol",
 		Label = "POLICE", Pitch = "Chase wanted players. Earn bounties." },
 	{ Side = "Prisoner", TeamName = "Prisoners", Color = BrickColor.new("Deep orange"), Starter = nil,

@@ -1,113 +1,227 @@
 -- PedClient (ModuleScript, StarterPlayerScripts.Controllers.PedClient)
--- Pedestrians around you, simulated on your own device (like TrafficClient), from the looks in
--- ReplicatedStorage.PedTemplates (PedService):
---   * Walkers (MAX_PEDS, fewer in Performance mode and late at night) stroll the sidewalks beside the
---     RoadGraph. Each stretch stops short of the crossing street, then a corner waypoint, so they turn
---     on the pavement and cross streets straight; at dead ends they turn back or cross over. Far-away
---     walkers are recycled near the camera. In the rain they hurry.
---   * They react (checked ~10 times a second): a wanted player (Heat > 0) close by, a siren (a cop car
---     with Siren on, or an AI police car on a chase), or a fast car heading their way makes them panic
---     and run away along the sidewalk
---     for a few seconds. A car on course to hit them is dodged early (time to closest approach), at a
---     run; if one still overlaps, they hop aside and fade out (and a fresh walker appears elsewhere).
---     Nobody is ever knocked down, hurt or launched: this is a kid-friendly game.
---   * Hangout peds: anchored and cheap (no physics, no MoveTo), sitting at bus stops and benches, lying
---     on loungers, standing round the Solana Plaza fountain and watching the car meet. Spots come from
---     MapService (ReplicatedStorage attribute "HangoutSpots").
---   * Speech bubbles with lines from Config.PedLines (panic, sirens, rain, night, nice cars, the car
---     meet...): TextChatService bubbles (a BillboardGui fallback), at most one every 4 s, within 60 studs.
---   * Event peds from EventService (Models in Workspace.Events with attributes Anim and Lines) are
---     animated here and chat too.
--- Walkers' root parts are handed to TrafficClient (TrafficClient.PedSource) so traffic stops for them.
+-- Pedestrians on the sidewalks around you, simulated on your own device (like TrafficClient):
+--   * Up to MAX_PEDS walkers cloned from ReplicatedStorage.PedTemplates (PedService), strolling
+--     beside the roads of the RoadGraph (a sidewalk offset from each road edge). At a turn they walk
+--     round the corner where the two sidewalks meet, so they only step into a road to cross it at a
+--     junction; turning back, they stay on their own side.
+--   * A mixed crowd: each walker gets a walk / run / idle set from Config.Animations picked for the
+--     district they appear in (Animations.Pick), and their own pace and build (Animations.PedVariation:
+--     track speed, body height and width).
+--   * Never in the water: spawn spots and the next stretch of sidewalk must be over dry ground
+--     (the Causeway and Prison Bridge sidewalks hang over the sea).
+--   * PedClient.Positions() -> { Vector3 }: where they are (TrafficClient stops for them).
+--   * They dive out of the way of fast cars, and anyone who gets bumped just falls over and gets back
+--     up. No damage, nothing gory: this is a kid-friendly game. A fall is the shared limp body
+--     (Shared.Util.Ragdoll: proper elbow and knee limits, a cap on how many at once); when that says no
+--     (the cap) or isn't there, a simpler loose-jointed fall made here.
+--   * Far-away walkers are recycled near the camera.
+--   * Fights (numbers in Config.Combat.Ped). CombatClient calls the first two only for the local
+--     citizen's own swing or shot:
+--       PedClient.KnockNear(position, lookVector) -> bool: a punch. The nearest walker within 7 studs in
+--         front falls over for 2 s, then runs off, and drops a wallet.
+--       PedClient.ShotAt(origin, dir, maxDistance) -> hitPos or nil: a bullet. Walkers can't be seen by
+--         raycasts (CanQuery is off), so this finds the nearest one standing within HitRadius of the shot's
+--         line, no farther than maxDistance (where the shot ends). They fall along the shot, run off and
+--         drop a wallet. Returns where the shot met them, so the tracer can stop there.
+--       PedClient.Scare(position): gunfire (anyone's: it only makes them react). Every walker within
+--         ScareRange who is on their feet does one of three things, and the same walker always the same
+--         one: most sprint away (45 studs), arms thrown over their heads (PoseClient "Brace" held for the
+--         run); some drop into a crouch where they stand with their arms over their heads (PoseClient
+--         "Cower"); a few who are at least 25 studs from the shot stop, turn to it and hold a phone up
+--         (PoseClient "PhoneLook") until it comes closer.
+--       PedClient.AimedAt(origin, dir): a raised gun points along dir (CombatClient, twice a second
+--         while the local player aims). Up to three walkers within 20 studs and close to that line stop,
+--         turn and put their hands up (PoseClient "HandsUp"); the nervous ones run instead. When the gun
+--         moves off them they hurry away.
+--     Poses are only for walkers within 70 studs of the camera, six at a time; the rest just run. Without
+--     PoseClient everyone just runs (or stands), arms as the animation has them.
+--   * Wallets: a little billfold prop (Workspace.Peds.PedWallet, this device only) where a walker fell,
+--     gone after WalletLife seconds. Walk within PickupRange on foot and the server is asked
+--     ("PedLoot", position; one question at a time, given up after 3 s). PedService decides and answers:
+--       "Paid", amount, stars   the prop goes, "+$N" pops up, the cash sound plays (the money is in your bag)
+--       "Empty"                 the street has gone quiet: every wallet goes, none drop for QuietFor seconds
+--       "No"                    not now (too soon, bag full, safe zone...): it stays, asked again in 2.5 s
+--     Nothing here pays anything: the wallet is only a prop until the server says "Paid".
+--   * PedClient.Flee(position, direction) -> bool: a carjacked driver (TrafficClient) jumps out at
+--     `position` and sprints off along `direction` for a few seconds, then is gone.
 
-local Lighting = game:GetService("Lighting")
-local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TextChatService = game:GetService("TextChatService")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+local Animations = require(ReplicatedStorage.Shared.Config.Animations)
+local Combat = require(ReplicatedStorage.Shared.Config.Combat)
+local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
-local PedLines = require(ReplicatedStorage.Shared.Config.PedLines)
-local Vehicles = require(ReplicatedStorage.Shared.Config.Vehicles)
-local TrafficClient = require(script.Parent:WaitForChild("TrafficClient"))
+local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 
 local player = Players.LocalPlayer
 
 local PedClient = {}
 
-local MAX_PEDS, PERF_PEDS = 12, 5
+local MAX_PEDS = 16 -- (Look 4.0: busier sidewalks; performance mode keeps 5)
 local SPAWN_MIN, SPAWN_MAX = 60, 230
 local DESPAWN = 320
-local MAX_HANG, PERF_HANG = 10, 5
-local HANG_RANGE = 140 -- hangout peds exist within this many studs of you
-local HANG_POP = 55 -- ...and never pop in on screen closer than this
+local WALK_ANIM = "rbxassetid://507777826" -- Roblox's default R15 walk (when Config.Animations has nothing)
+local RUN_ANIM = "rbxassetid://507767714" -- Roblox's default R15 run (the walk's pair)
+local IDLE_ANIM = "rbxassetid://507766388" -- Roblox's default R15 idle
 local ROAD_TOP = 0.1
-local BUBBLE_GAP = 4 -- seconds between speech bubbles (all peds together)
-local BUBBLE_RANGE = 60
-local PANIC_PLAYER, PANIC_SIREN = 40, 70 -- studs
-local DODGE_HORIZON = 1.6 -- seconds of look-ahead for cars on course to hit a walker
-local RUN_SPEED = { 18, 22 }
-local SIT_LIFT = 1.45 -- root above the seat top, for a HipHeight-2 rig (scaled by HipHeight)
 
--- Roblox's default R15 animations (from the stock Animate script).
-local ANIMS = {
-	walk = "rbxassetid://507777826",
-	run = "rbxassetid://507767714",
-	idle = "rbxassetid://507766388",
-	sit = "rbxassetid://2506281703",
-	dance = "rbxassetid://507771019",
-	dance2 = "rbxassetid://507776043",
-	dance3 = "rbxassetid://507777268",
-	cheer = "rbxassetid://507770677",
-	wave = "rbxassetid://507770239",
-	point = "rbxassetid://507770453",
-	laugh = "rbxassetid://507770818",
+local PED = Combat.Ped or {}
+local WALLET_LIFE = PED.WalletLife or 20
+local PICKUP_RANGE = PED.PickupRange or 6
+local QUIET_FOR = PED.QuietFor or 60
+local SCARE_RANGE = PED.ScareRange or 60
+local HIT_RADIUS = PED.HitRadius or 2.2
+local MAX_WALLETS = 6 -- props on the ground at once (the oldest goes first)
+local LOOT_TIMEOUT = 3 -- seconds to wait for the server's answer
+local LOOT_RETRY = 2.5 -- seconds before asking again about the same wallet
+local RUN_SPEED = 18
+local SCARE_TIME = 4
+local WALLET_DARK = Color3.fromRGB(34, 30, 28)
+-- How walkers take gunfire and a gun pointed at them (see the header). Each walker has a "nerve"
+-- between 0 and 1, rolled once: it decides which of these they do, every time.
+local REACT = {
+	Film = 0.12, -- nerve under this: stops and films (only from FilmMin studs or more)
+	Cower = 0.27, -- ...under this: cowers on the spot; everyone else runs
+	Cover = 0.85, -- runners with nerve under this run with their arms over their heads
+	FilmMin = 25,
+	FilmTime = 6, -- seconds a phone stays up after the last shot
+	CowerTime = 5,
+	AimRange = 20, -- studs: a gun pointed at a walker this close counts
+	AimCone = 0.95, -- dot product: how close to the gun's line they must stand (about 18 degrees)
+	Hands = 0.6, -- nerve under this: hands up when aimed at; over it: runs
+	HandsTime = 1.6, -- seconds the hands stay up after the gun last pointed at them
+	MaxHands = 3,
+	PoseRange = 70, -- studs from the camera: further away nobody is posed
+	MaxPosed = 6, -- walkers posed at once
 }
 
--- Share of hangout spots with someone on them (percent), by group.
-local OCCUPANCY = { Bench = 40, BusStop = 55, Lounger = 40, Plaza = 60, CarMeet = 75 }
-
-local folder, idleFolder
-local peds = {} -- walkers
+local folder
+local peds = {}
 local ready = false
-local animations = {} -- [name] = Animation
+local anims = {} -- [asset id] = its Animation (made once, shared by every walker)
+local wallets = {} -- oldest first: { model, pos, dieAt, retryAt }
+local pendingLoot -- { wallet, at }: the one question the server hasn't answered yet
+local quietUntil = 0 -- os.clock(): no wallets drop before this (the server said "Empty")
+local lootRemote
+local downRemote -- "PedDown": one of ours went down (PedService counts them: the police come after the second)
+local spawnRetryAt = 0 -- os.clock(): no new walkers before this (the last one failed to start)
+local lazyPose -- PoseClient's module (required when first needed), false if this place doesn't have it
+local Ragdoll = nil -- Shared.Util.Ragdoll, if this place has it (looked up below: a missing util must not stop the walkers)
+do
+	local shared = ReplicatedStorage:FindFirstChild("Shared")
+	local util = shared and shared:FindFirstChild("Util")
+	local module = util and util:FindFirstChild("Ragdoll")
+	if module then
+		local ok, result = pcall(require, module)
+		Ragdoll = (ok and type(result) == "table") and result or nil
+	end
+end
 
------------------------------------------------------------------- helpers
-
-local function anim(name)
-	local a = animations[name]
-	if not a and ANIMS[name] then
+-- The Animation for an asset id ("rbxassetid://..."), made the first time it is asked for.
+local function animFor(id)
+	local a = anims[id]
+	if not a then
 		a = Instance.new("Animation")
-		a.AnimationId = ANIMS[name]
-		animations[name] = a
+		a.AnimationId = id
+		anims[id] = a
 	end
 	return a
 end
 
-local function loadTrack(hum, name, looped)
-	local a = anim(name)
-	if not a then
-		return nil
+-- PoseClient, or nil if this place doesn't have it (never an error: it starts before us and doesn't
+-- need us).
+local function poseClient()
+	if lazyPose == nil then
+		local module = script.Parent:FindFirstChild("PoseClient")
+		local ok, result = pcall(require, module)
+		lazyPose = (module ~= nil and ok and type(result) == "table" and type(result.Play) == "function") and result or false
 	end
-	local animator = hum:FindFirstChildOfClass("Animator")
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = hum
-	end
-	local ok, track = pcall(function()
-		return animator:LoadAnimation(a)
-	end)
-	if not ok or not track then
-		return nil
-	end
-	track.Looped = looped ~= false
-	return track
+	return lazyPose or nil
 end
 
-local function flat(v)
-	return Vector3.new(v.X, 0, v.Z)
+local function neighbours(i)
+	local list = {}
+	for j in pairs(RoadGraph.Edges[i] or {}) do
+		table.insert(list, j)
+	end
+	return list
+end
+
+-- A point on the sidewalk beside the road a->b, t studs along it, on `side` (+1 right, -1 left).
+local function sidewalk(a, b, t, side)
+	local na, nb = RoadGraph.Nodes[a], RoadGraph.Nodes[b]
+	local dir = (nb - na)
+	local len = dir.Magnitude
+	dir = len > 0 and dir / len or Vector3.new(0, 0, 1)
+	local right = Vector3.new(-dir.Z, 0, dir.X)
+	local off = RoadGraph.Width(a, b) / 2 + 5
+	local p = na + dir * math.clamp(t, 0, len) + right * off * side
+	return Vector3.new(p.X, ROAD_TOP + 3, p.Z), len
+end
+
+-- The corner at b where the sidewalks of a->b and b->k meet on `side`, or nil when the roads run
+-- (nearly) straight on or double back.
+local function corner(a, b, k, side)
+	local nodes = RoadGraph.Nodes
+	local nb = nodes[b]
+	local d1, d2 = nb - nodes[a], nodes[k] - nb
+	if d1.Magnitude < 1 or d2.Magnitude < 1 then
+		return nil
+	end
+	d1, d2 = d1.Unit, d2.Unit
+	local cross = d1.X * d2.Z - d1.Z * d2.X
+	if math.abs(cross) < 0.2 then
+		return nil
+	end
+	local r1, r2 = Vector3.new(-d1.Z, 0, d1.X), Vector3.new(-d2.Z, 0, d2.X)
+	local o1 = (RoadGraph.Width(a, b) / 2 + 5) * side
+	local o2 = (RoadGraph.Width(b, k) / 2 + 5) * side
+	-- Where the two sidewalk lines cross: nb + r1*o1 + d1*l = nb + r2*o2 + d2*m.
+	local q = r2 * o2 - r1 * o1
+	local l = (q.X * d2.Z - q.Z * d2.X) / cross
+	local p = nb + r1 * o1 + d1 * l
+	if (p - nb).Magnitude > 3 * math.max(math.abs(o1), math.abs(o2)) then
+		return nil -- a hairpin: the lines meet too far away
+	end
+	return Vector3.new(p.X, ROAD_TOP + 3, p.Z)
+end
+
+-- What's under this spot: the ground hit if it's dry land, false over water (or below sea level),
+-- nil if there's nothing there (not streamed in yet).
+local groundParams = RaycastParams.new()
+groundParams.IgnoreWater = false -- water must be hit, so it can be refused
+local function dryGround(pos)
+	local hit = Workspace:Raycast(pos + Vector3.new(0, 20, 0), Vector3.new(0, -40, 0), groundParams)
+	if not hit then
+		return nil
+	end
+	if hit.Material == Enum.Material.Water or hit.Position.Y < -1 then
+		return false
+	end
+	return hit
+end
+
+-- Head for the end of the stretch a->b: pick the road after it now, and stop at the corner where the
+-- two sidewalks meet (or at the end of this sidewalk when going straight on or turning back).
+local function planLeg(ped)
+	local options = {}
+	for _, k in ipairs(neighbours(ped.b)) do
+		if k ~= ped.a then
+			-- Skip roads whose sidewalk on this side is over water (bridges); not-yet-streamed ground is fine.
+			local mid = sidewalk(ped.b, k, (RoadGraph.Edges[ped.b][k] or 0) / 2, ped.side)
+			if dryGround(mid) ~= false then
+				table.insert(options, k)
+			end
+		end
+	end
+	ped.k = #options > 0 and options[math.random(#options)] or ped.a
+	local _, len = sidewalk(ped.a, ped.b, 0, ped.side)
+	ped.target = (ped.k ~= ped.a and corner(ped.a, ped.b, ped.k, ped.side)) or sidewalk(ped.a, ped.b, len, ped.side)
+	ped.hum:MoveTo(ped.target)
 end
 
 local function focus()
@@ -115,364 +229,100 @@ local function focus()
 	return root and root.Position or Workspace.CurrentCamera.Focus.Position
 end
 
-local function onScreen(pos)
-	local cam = Workspace.CurrentCamera
-	local _, visible = cam:WorldToViewportPoint(pos)
-	return visible
-end
-
-local function settings()
-	local s = script.Parent:FindFirstChild("SettingsClient")
-	return s and require(s)
-end
-
-local function performance()
-	local s = settings()
-	return s ~= nil and s.Get("Performance") == true
-end
-
-local function template()
+local function spawnPed()
 	local templates = ReplicatedStorage:FindFirstChild("PedTemplates")
 	local list = templates and templates:GetChildren() or {}
-	return #list > 0 and list[math.random(#list)] or nil
-end
-
------------------------------------------------------------------- speech bubbles
-
-local bubbleNext = 0
-local billboards = {} -- pooled fallback bubbles
-local billboardIndex = 0
-
-local function bubbleChatOn()
-	local ok, on = pcall(function()
-		local config = TextChatService:FindFirstChildOfClass("BubbleChatConfiguration")
-		return TextChatService.ChatVersion == Enum.ChatVersion.TextChatService and (config == nil or config.Enabled)
-	end)
-	return ok and on == true
-end
-
-local function billboardBubble(adornee, text)
-	if #billboards < 3 then
-		local gui = Instance.new("BillboardGui")
-		gui.Name = "PedBubble"
-		gui.Size = UDim2.fromOffset(190, 46)
-		gui.StudsOffset = Vector3.new(0, 2.6, 0)
-		gui.MaxDistance = BUBBLE_RANGE + 10
-		gui.LightInfluence = 0
-		gui.Enabled = false
-		local label = Instance.new("TextLabel")
-		label.Size = UDim2.fromScale(1, 1)
-		label.BackgroundColor3 = Color3.fromRGB(250, 248, 255)
-		label.BackgroundTransparency = 0.05
-		label.Font = Enum.Font.FredokaOne
-		label.TextScaled = true
-		label.TextWrapped = true
-		label.TextColor3 = Color3.fromRGB(30, 24, 44)
-		label.Parent = gui
-		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, 12)
-		c.Parent = label
-		local pad = Instance.new("UIPadding")
-		pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
-		pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 4), UDim.new(0, 4)
-		pad.Parent = label
-		gui.Parent = player:WaitForChild("PlayerGui")
-		table.insert(billboards, { gui = gui, label = label, token = 0 })
-	end
-	billboardIndex = billboardIndex % #billboards + 1
-	local b = billboards[billboardIndex]
-	b.token += 1
-	local token = b.token
-	b.gui.Adornee = adornee
-	b.label.Text = text
-	b.gui.Enabled = true
-	task.delay(3.5, function()
-		if b.token == token then
-			b.gui.Enabled = false
-			b.gui.Adornee = nil
-		end
-	end)
-end
-
--- Say a random line from PedLines[category] over this ped, if a bubble is due and you're close.
-local function say(model, category, now)
-	if now < bubbleNext or not model or not model.Parent then
-		return false
-	end
-	local lines = PedLines[category]
-	if type(lines) ~= "table" or #lines == 0 then
-		return false
-	end
-	local head = model:FindFirstChild("Head")
-	local adornee = (head and head:IsA("BasePart")) and head or model.PrimaryPart
-	if not adornee or (adornee.Position - focus()).Magnitude > BUBBLE_RANGE then
-		return false
-	end
-	bubbleNext = now + BUBBLE_GAP
-	local text = lines[math.random(#lines)]
-	local shown = false
-	if bubbleChatOn() then
-		shown = pcall(function()
-			TextChatService:DisplayBubble(adornee, text)
-		end)
-	end
-	if not shown then
-		billboardBubble(adornee, text)
-	end
-	return true
-end
-
------------------------------------------------------------------- sidewalk routes
-
--- The Causeway to Lighthouse Key crosses open water (about x 1520-2090 at z -1350): its sidewalks
--- hang over the sea, so walkers never use it (traffic still does).
-local SEA_MIN, SEA_MAX = Vector2.new(1520, -1390), Vector2.new(2090, -1310)
-
-local function overSea(a, b)
-	for k = 0, 10 do
-		local p = a:Lerp(b, k / 10)
-		if p.X > SEA_MIN.X and p.X < SEA_MAX.X and p.Z > SEA_MIN.Y and p.Z < SEA_MAX.Y then
-			return true
-		end
-	end
-	return false
-end
-
-local function neighbours(i)
-	local list = {}
-	for j in pairs(RoadGraph.Edges[i] or {}) do
-		local a, b = RoadGraph.Nodes[i], RoadGraph.Nodes[j]
-		if TrafficClient.EdgeAllowed(i, j) and a and b and not overSea(a, b) then
-			table.insert(list, j)
-		end
-	end
-	return list
-end
-
-local function degree(i)
-	local n = 0
-	for _ in pairs(RoadGraph.Edges[i] or {}) do
-		n += 1
-	end
-	return n
-end
-
-local function frame(a, b)
-	local na, nb = RoadGraph.Nodes[a], RoadGraph.Nodes[b]
-	local d = nb - na
-	local len = d.Magnitude
-	local dir = len > 0 and d / len or Vector3.new(0, 0, 1)
-	return na, dir, Vector3.new(-dir.Z, 0, dir.X), len
-end
-
--- Widest road crossing at node n, seen from the road towards `except` (the straight continuation of
--- that road doesn't count).
-local function crossWidth(n, except)
-	local w = 0
-	local _, back = frame(n, except)
-	for j in pairs(RoadGraph.Edges[n] or {}) do
-		if j ~= except then
-			local _, d = frame(n, j)
-			if d:Dot(back) > -0.9 then
-				w = math.max(w, RoadGraph.Width(n, j))
-			end
-		end
-	end
-	return w
-end
-
--- How far along a->b the sidewalk stretch starts and ends: short of the crossing street at each end.
-local function legSpan(a, b)
-	local _, _, _, len = frame(a, b)
-	local t0 = degree(a) <= 1 and 2 or crossWidth(a, b) / 2 + 5
-	local t1 = len - (degree(b) <= 1 and 2 or crossWidth(b, a) / 2 + 5)
-	if t1 < t0 then
-		t0 = len / 2
-		t1 = len / 2
-	end
-	return t0, t1, len
-end
-
--- A point on the sidewalk beside the road a->b, t studs along it, on `side` (+1 right, -1 left).
-local function sidewalk(a, b, t, side)
-	local na, dir, right, len = frame(a, b)
-	local off = RoadGraph.Width(a, b) / 2 + 5
-	local p = na + dir * math.clamp(t, 0, len) + right * off * side
-	return Vector3.new(p.X, ROAD_TOP + 3, p.Z)
-end
-
--- Where two lines (point + direction, flat) cross, or nil if they're nearly parallel.
-local function intersect(p1, d1, p2, d2)
-	local denom = d1.X * d2.Z - d1.Z * d2.X
-	if math.abs(denom) < 0.15 then
-		return nil
-	end
-	local q = p2 - p1
-	local u = (q.X * d2.Z - q.Z * d2.X) / denom
-	return p1 + d1 * u
-end
-
--- Plan the way from the end of the current stretch (ped.a -> ped.b) onto the next one: queue the
--- corner (when the sidewalks meet at an angle), the start of the next stretch and its end.
-local function planNext(ped)
-	local a, b, side = ped.a, ped.b, ped.side
-	local options = {}
-	for _, k in ipairs(neighbours(b)) do
-		if k ~= a then
-			table.insert(options, k)
-		end
-	end
-	local deadEnd = #options == 0
-	local k = deadEnd and a or options[math.random(#options)]
-	local _, t1 = legSpan(a, b)
-	local p1 = sidewalk(a, b, t1, side)
-	local t0n, t1n = legSpan(b, k)
-	local newSide
-	if deadEnd then
-		-- Turn back on this pavement (side flips with the direction), or cross over and walk back.
-		newSide = math.random() < 0.5 and -side or side
-	else
-		-- The start of the next stretch that's nearest: fewest streets to cross.
-		local qR, qL = sidewalk(b, k, t0n, 1), sidewalk(b, k, t0n, -1)
-		newSide = (flat(qR - p1).Magnitude <= flat(qL - p1).Magnitude) and 1 or -1
-	end
-	local q = sidewalk(b, k, t0n, newSide)
-	local queue = {}
-	if not deadEnd then
-		local _, d1 = frame(a, b)
-		local _, d2 = frame(b, k)
-		local c = intersect(flat(p1), d1, flat(q), d2)
-		local nb = RoadGraph.Nodes[b]
-		if c then
-			c = Vector3.new(c.X, p1.Y, c.Z)
-			local limit = math.max(RoadGraph.Width(a, b), RoadGraph.Width(b, k)) * 1.2 + 12
-			if flat(c - nb).Magnitude < limit and (c - p1):Dot(d1) > 0.5 and (q - c):Dot(d2) > 0.5 then
-				table.insert(queue, c)
-			end
-		end
-	end
-	table.insert(queue, q)
-	table.insert(queue, sidewalk(b, k, t1n, newSide))
-	ped.a, ped.b, ped.side = b, k, newSide
-	ped.queue = queue
-end
-
-local function moveOn(ped)
-	if #ped.queue == 0 then
-		planNext(ped)
-	end
-	ped.target = table.remove(ped.queue, 1)
-	ped.lastMove = os.clock()
-	ped.hum:MoveTo(ped.target)
-end
-
------------------------------------------------------------------- walkers
-
-local function setGait(ped, running)
-	if running == ped.running then
-		return
-	end
-	ped.running = running
-	if running then
-		if ped.track then
-			ped.track:Stop(0.2)
-		end
-		if ped.runTrack then
-			ped.runTrack:Play(0.2)
-		end
-	else
-		if ped.runTrack then
-			ped.runTrack:Stop(0.2)
-		end
-		if ped.track then
-			ped.track:Play(0.2)
-		end
-	end
-end
-
-local function applySpeed(ped, now)
-	local speed = ped.baseSpeed
-	local running = false
-	if ped.dodgeUntil and now < ped.dodgeUntil then
-		speed, running = 22, true
-	elseif ped.panicUntil and now < ped.panicUntil then
-		speed, running = ped.panicSpeed, true
-	elseif Workspace:GetAttribute("Raining") == true then
-		speed = ped.baseSpeed * 1.6 -- hurrying out of the rain
-		running = speed > 11
-	end
-	ped.hum.WalkSpeed = speed
-	setGait(ped, running)
-	local track = running and ped.runTrack or ped.track
-	if track then
-		pcall(function()
-			track:AdjustSpeed(math.clamp(speed / (running and 20 or 10), 0.6, 1.3))
-		end)
-	end
-end
-
-local function spawnPed()
-	local look = template()
-	if not look then
+	if #list == 0 then
 		return
 	end
 	local here = focus()
-	local flatHere = flat(here)
+	local flat = Vector3.new(here.X, 0, here.Z)
 	local nodes = RoadGraph.Nodes
 	for _ = 1, 10 do
 		local i = math.random(#nodes)
 		local nb = neighbours(i)
 		if #nb > 0 then
 			local j = nb[math.random(#nb)]
-			local t0, t1 = legSpan(i, j)
-			local t = t0 + math.random() * (t1 - t0)
+			local _, len = sidewalk(i, j, 0, 1)
+			local t = math.random() * len
 			local side = math.random(2) == 1 and 1 or -1
 			local pos = sidewalk(i, j, t, side)
-			local d = (flat(pos) - flatHere).Magnitude
-			-- Only where the ground is actually there (streamed in) and not right on top of the player.
-			local ground = d > SPAWN_MIN and d < SPAWN_MAX and Workspace:Raycast(pos + Vector3.new(0, 20, 0), Vector3.new(0, -40, 0))
+			local d = (Vector3.new(pos.X, 0, pos.Z) - flat).Magnitude
+			-- Only where dry ground is actually there (streamed in) and not right on top of the player,
+			-- and not on a stretch that runs out over the water.
+			local ground = d > SPAWN_MIN and d < SPAWN_MAX and dryGround(pos)
+			if ground and dryGround((sidewalk(i, j, len / 2, side))) == false then
+				ground = nil
+			end
 			if ground then
-				local model = look:Clone()
+				local model = list[math.random(#list)]:Clone()
 				local hum = model:FindFirstChildOfClass("Humanoid")
 				local root = model:FindFirstChild("HumanoidRootPart")
-				if not hum or not root or not root:IsA("BasePart") then
+				if not hum or not root then
 					model:Destroy()
 					return
 				end
+				hum.WalkSpeed = 5 + math.random() * 3
 				for _, part in ipairs(model:GetDescendants()) do
 					if part:IsA("BasePart") then
 						part.CanQuery = false
-						part.CanTouch = false -- never sits in seats or sets off touch triggers
 						part.CastShadow = false
-						-- "Traffic" group: players' cars pass through (walkers dodge them instead).
+						-- "Traffic" group: players' cars pass through (react() handles the bump).
 						part.CollisionGroup = "Traffic"
 					end
 				end
-				-- Never fall over or ragdoll, whatever bumps into them.
-				for _, state in ipairs({ Enum.HumanoidStateType.FallingDown, Enum.HumanoidStateType.Ragdoll,
-					Enum.HumanoidStateType.Seated, Enum.HumanoidStateType.PlatformStanding }) do
-					hum:SetStateEnabled(state, false)
+				-- A mixed crowd: the walk set goes with the district, the pace and the build with the walker.
+				local seed = math.random(1, 1000000000)
+				local set = Animations.Pick(seed, Animations.DistrictAt(pos.X, pos.Z))
+				local vary = Animations.PedVariation(seed)
+				for name, value in pairs({ BodyHeightScale = vary.Height, BodyWidthScale = vary.Width }) do
+					local scale = hum:FindFirstChild(name)
+					if scale and scale:IsA("NumberValue") then
+						scale.Value = value
+					end
 				end
-				model:PivotTo(CFrame.new(ground.Position + Vector3.new(0, hum.HipHeight + root.Size.Y / 2, 0)))
-				model.Parent = folder
-				local ped = {
-					model = model, hum = hum, root = root, a = i, b = j, side = side, queue = {},
-					baseSpeed = 5 + math.random() * 3, panicSpeed = RUN_SPEED[1] + math.random() * (RUN_SPEED[2] - RUN_SPEED[1]),
-				}
-				ped.track = loadTrack(hum, "walk")
-				ped.runTrack = loadTrack(hum, "run")
-				if ped.track then
-					ped.track:Play()
+				model:PivotTo(CFrame.new(ground.Position + Vector3.new(0, 3, 0)))
+				model.Parent = folder -- (an Animator only loads animations once it is in the world)
+				-- From here the walker is standing in the street: if anything below goes wrong it is taken out
+				-- again, so a failed start can never leave a body there that nothing moves or removes.
+				local ok, ped = pcall(function()
+					local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+					local function load(slot, fallback)
+						local track = animator:LoadAnimation(animFor(Animations.Asset(set, slot) or fallback))
+						track.Looped = true
+						return track
+					end
+					-- walk: the strolling speed to go back to after running away. track / run / idle: the walk,
+					-- run and standing cycles (only one plays at a time: setGait), played at this walker's own
+					-- pace (speed). nerve: how they take gunfire (REACT), the same every time.
+					local new = { model = model, hum = hum, root = root, a = i, b = j, t = t, side = side,
+						track = load("walk", WALK_ANIM), run = load("run", RUN_ANIM), idle = load("idle", IDLE_ANIM),
+						walk = hum.WalkSpeed, speed = vary.Speed, nerve = math.random() }
+					new.track:Play()
+					new.track:AdjustSpeed(new.speed)
+					-- Walk to the end of this stretch.
+					planLeg(new)
+					return new
+				end)
+				if ok and ped then
+					table.insert(peds, ped)
+				else
+					model:Destroy()
+					spawnRetryAt = os.clock() + 5 -- (not five tries, and five warnings, a second)
+					warn("[PedClient] a walker failed to start: " .. tostring(ped))
 				end
-				ped.running = false
-				table.insert(ped.queue, sidewalk(i, j, t1, side))
-				applySpeed(ped, os.clock())
-				moveOn(ped)
-				table.insert(peds, ped)
 				return
 			end
 		end
 	end
+end
+
+local function nextLeg(ped)
+	if ped.k == ped.a then
+		ped.side = -ped.side -- turning back: the road's right flips, so this keeps them on the same pavement
+	end
+	ped.a, ped.b = ped.b, ped.k
+	planLeg(ped)
 end
 
 local function removePed(i)
@@ -481,528 +331,814 @@ local function removePed(i)
 	table.remove(peds, i)
 end
 
--- Run away along the sidewalk from `from` for a few seconds.
-local function panic(ped, from, now, category)
-	local fresh = not (ped.panicUntil and now < ped.panicUntil)
-	ped.panicUntil = now + 3.5 + math.random() * 2
-	if fresh then
-		-- Threat ahead on this stretch? Turn round (same pavement: the side flips with the direction).
-		local _, dir = frame(ped.a, ped.b)
-		if (from - ped.root.Position):Dot(dir) > 0 then
-			ped.a, ped.b, ped.side = ped.b, ped.a, -ped.side
-			local _, t1 = legSpan(ped.a, ped.b)
-			ped.queue = { sidewalk(ped.a, ped.b, t1, ped.side) }
-			if ped.dodgeUntil and now < ped.dodgeUntil then
-				ped.target = table.remove(ped.queue, 1) -- walk() heads there once the dodge is over
-			else
-				moveOn(ped)
-			end
+------------------------------------------------------------------ bodies
+
+-- "walk", "run" or "idle" (standing): only one of the three cycles plays, so a scared walker really
+-- runs (never the stroll at double speed) and one who stops stands like a person. nil = none (lying on
+-- the ground: no legs pedalling in the air).
+local function setGait(ped, gait)
+	local tracks = { walk = ped.track, run = ped.run, idle = ped.idle }
+	for name, track in pairs(tracks) do
+		if name ~= gait and track.IsPlaying then
+			track:Stop(gait and 0.25 or 0.1)
 		end
-		applySpeed(ped, now)
-		say(ped.model, category, now)
+	end
+	local want = gait and tracks[gait]
+	if want and not want.IsPlaying then
+		want:Play(gait == "run" and 0.15 or 0.3)
+		if gait ~= "idle" then
+			want:AdjustSpeed(ped.speed or 1) -- (after Play: Play sets the speed back to 1)
+		end
 	end
 end
 
--- Sidestep a car on course to hit us: run perpendicular to its path, away from it.
-local function dodge(ped, away, now)
-	ped.dodgeUntil = now + 0.75
-	applySpeed(ped, now)
-	ped.hum:MoveTo(ped.root.Position + away * 10)
-	ped.lastMove = now
-	if not ped.saidDodge then
-		ped.saidDodge = true
-		task.delay(0.8, function()
-			if ped.model.Parent then
-				say(ped.model, "Dodge", os.clock())
-			end
-		end)
-	end
-end
-
--- Too late to dodge: a quick hop aside and a fade, then a fresh walker appears elsewhere.
-local function hopAway(ped, away)
-	if ped.leaving then
+-- A PoseClient pose on a walker (name = nil: none). One at a time; asking for the one already showing
+-- changes nothing. Without PoseClient, or on a body it can't pose, nothing shows and nothing breaks.
+local function setPose(ped, name, opts)
+	local old, oldName = ped.pose, ped.poseName
+	if old and name ~= nil and oldName == name and old:IsPlaying() and not (opts and opts.Duration) then
 		return
 	end
-	ped.leaving = true
-	ped.hum.WalkSpeed = 20
-	ped.hum.Jump = true
-	ped.hum:MoveTo(ped.root.Position + away * 8)
-	setGait(ped, true)
-	task.spawn(function()
-		for k = 1, 8 do
-			task.wait(0.05)
-			if not ped.model.Parent then
-				return
+	ped.pose, ped.poseName = nil, nil
+	if old and oldName ~= name then
+		old:Stop() -- (a timed pose asked for again is just played again below: it starts its time over)
+	end
+	local pose = name and poseClient()
+	if pose then
+		local ok, handle = pcall(pose.Play, ped.model, name, opts)
+		if ok and type(handle) == "table" and handle:IsPlaying() then
+			ped.pose, ped.poseName = handle, name
+		end
+	end
+end
+
+-- How many walkers are posed right now (REACT.MaxPosed is the most).
+local function posedCount()
+	local n = 0
+	for _, ped in ipairs(peds) do
+		if ped.pose and ped.pose:IsPlaying() then
+			n += 1
+		end
+	end
+	return n
+end
+
+-- Go limp for `seconds` (a bullet, a punch, a car), thrown along `push` (studs/s): every joint but the
+-- root and the neck becomes a loose ball joint, so the body folds and rolls where it's sent instead of
+-- tipping over stiff. Then the joints lock again, the walker gets up and `onUp` runs. Walkers live on
+-- this device only, so none of this costs the server anything. Nothing gory: a fall and a get-up.
+local function topple(ped, push, seconds, onUp, brace)
+	local token = (ped.fallToken or 0) + 1 -- (becomes ped.fallToken once this fall has really started)
+	ped.runToken = (ped.runToken or 0) + 1 -- (whatever they were doing is over: nothing puts them back to strolling mid-fall)
+	ped.mood = nil
+	setPose(ped, nil)
+	setGait(ped, nil)
+	local hum = ped.hum
+	-- The shared limp body first (proper elbow and knee limits, a brace, a cap on how many at once). It
+	-- says no when the cap is reached: then the simpler fall below does it. (A walker already down in
+	-- the simple fall stays in it.)
+	if Ragdoll and type(ped.limp) ~= "table" then
+		local ok, started = pcall(Ragdoll.Start, ped.model, push, {
+			Seconds = seconds,
+			Brace = brace == true, -- a car coming: arms up for a moment before going limp (not for a punch or a shot)
+			OnStop = function()
+				if ped.fallToken ~= token then
+					return
+				end
+				ped.limp = nil
+				if ped.model.Parent and onUp then
+					onUp()
+				end
+			end,
+		})
+		if ok and started then
+			ped.fallToken = token
+			ped.limp = true -- (everything else only asks whether it is set)
+			-- Should the get-up never be reported, they are stood up anyway: nobody lies there for good.
+			task.delay(seconds + 3, function()
+				if ped.fallToken == token and ped.limp == true then
+					ped.limp = nil
+					if ped.model.Parent then
+						pcall(Ragdoll.Stop, ped.model)
+						if onUp then
+							onUp()
+						end
+					end
+				end
+			end)
+			return
+		end
+		if ped.limp == true then
+			return -- still down in the shared fall, which wouldn't take this push: that fall's own get-up stands
+		end
+	end
+	ped.fallToken = token
+	if not ped.limp then
+		local limp = { joints = {}, collide = {} }
+		for _, d in ipairs(ped.model:GetDescendants()) do
+			if d:IsA("Motor6D") and d.Name ~= "Root" and d.Name ~= "Neck" and d.Part0 and d.Part1 then
+				local a0 = d.Part0:FindFirstChild(d.Name .. "RigAttachment")
+				local a1 = d.Part1:FindFirstChild(d.Name .. "RigAttachment")
+				if a0 and a1 then
+					local ball = Instance.new("BallSocketConstraint")
+					ball.Attachment0, ball.Attachment1 = a0, a1
+					ball.LimitsEnabled = true
+					ball.UpperAngle = 55
+					ball.TwistLimitsEnabled = true
+					ball.TwistLowerAngle, ball.TwistUpperAngle = -35, 35
+					ball.Parent = d.Part1
+					local apart = Instance.new("NoCollisionConstraint") -- (the two parts overlap at the joint)
+					apart.Part0, apart.Part1 = d.Part0, d.Part1
+					apart.Parent = d.Part1
+					d.Enabled = false
+					table.insert(limp.joints, { d, ball, apart })
+				end
+			elseif d:IsA("BasePart") and d.Parent == ped.model and d ~= ped.root then
+				limp.collide[d] = d.CanCollide
+				d.CanCollide = true -- limbs rest on the pavement instead of sinking into it
 			end
-			for _, d in ipairs(ped.model:GetDescendants()) do
-				if d:IsA("BasePart") or d:IsA("Decal") then
-					d.LocalTransparencyModifier = k / 8
+		end
+		ped.limp = limp
+		hum:ChangeState(Enum.HumanoidStateType.Physics)
+	end
+	ped.root.AssemblyLinearVelocity = push
+	local upper = ped.model:FindFirstChild("UpperTorso")
+	if upper and upper:IsA("BasePart") then
+		upper.AssemblyLinearVelocity = push
+	end
+	task.delay(seconds, function()
+		if ped.fallToken ~= token or not ped.model.Parent then
+			return
+		end
+		local limp = ped.limp
+		ped.limp = nil
+		if limp then
+			for _, j in ipairs(limp.joints) do
+				j[1].Enabled = true
+				j[2]:Destroy()
+				j[3]:Destroy()
+			end
+			for part, was in pairs(limp.collide) do
+				if part.Parent then
+					part.CanCollide = was
 				end
 			end
 		end
-		ped.gone = true
+		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+		if onUp then
+			onUp()
+		end
 	end)
 end
 
------------------------------------------------------------------- threats (10 Hz)
-
-local movers = {} -- cars this tick: { pos, vel, halfW, siren }
-local hotPlayers = {} -- positions of wanted players
-
-local function gatherThreats()
-	table.clear(movers)
-	table.clear(hotPlayers)
+-- Fast cars nearby: jump aside. Bumped: fall over, get up after a moment.
+local function react(ped, now)
 	local vehicles = Workspace:FindFirstChild("Vehicles")
-	if vehicles then
-		for _, v in ipairs(vehicles:GetChildren()) do
-			local chassis = v:IsA("Model") and v.PrimaryPart
-			if chassis and not v:GetAttribute("Boat") then
-				-- Sirens: a cop car with the siren on, or an AI police car on a chase (the ones that wail).
-				local siren = v:GetAttribute("Siren") == true or (v:GetAttribute("AIPolice") == true and v:GetAttribute("AITarget") ~= nil)
-				table.insert(movers, {
-					pos = chassis.Position, vel = flat(chassis.AssemblyLinearVelocity),
-					halfW = math.max(chassis.Size.X, 4) / 2 + 0.8, siren = siren, model = v,
-				})
+	if not vehicles then
+		return
+	end
+	-- Being busy (diving, scared, hands up, punched) used to switch this whole look off, and the dive
+	-- itself makes them busy: cars at driving speed went straight through walkers. Now busy only stops a
+	-- new dive, and a car that reaches them still knocks them over. bumpedUntil: one car knocks a walker
+	-- over once, not on every look.
+	local busy = ped.busyUntil ~= nil and now < ped.busyUntil
+	local canBump = now >= (ped.bumpedUntil or 0)
+	for _, car in ipairs(vehicles:GetChildren()) do
+		local chassis = car.PrimaryPart
+		if chassis then
+			local rel = ped.root.Position - chassis.Position
+			local vel = chassis.AssemblyLinearVelocity
+			local speed = vel.Magnitude
+			local dist = rel.Magnitude
+			-- Bumped: touching now, or standing in the strip the car drives over before the next look
+			-- (this runs five times a second: a fast car would be past them between two looks). The strip
+			-- is only as wide as the car, so walkers on the pavement beside a passing car are left alone.
+			local hit, along = false, 0 -- along: how many studs ahead of the car they are
+			if canBump and speed > 8 then
+				along = rel:Dot(vel) / speed
+				hit = dist < 7 or (along > 0 and along < 7 + speed * 0.25 and (rel - vel * (along / speed)).Magnitude < 4.5)
 			end
-		end
-	end
-	for _, car in ipairs(TrafficClient.Cars()) do
-		if not car.wrecked and car.pos and car.heading and car.speed then
-			-- Ambient traffic brakes for walkers anyway: they only sidestep it, no panic.
-			table.insert(movers, {
-				pos = car.pos, vel = flat(car.heading * car.speed), halfW = car.half.X + 0.8, siren = false, traffic = true,
-			})
-		end
-	end
-	for _, p in ipairs(Players:GetPlayers()) do
-		local heat = p:GetAttribute("Heat")
-		local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-		if type(heat) == "number" and heat > 0 and root and root:IsA("BasePart") then
-			table.insert(hotPlayers, root.Position)
-		end
-	end
-end
-
-local function react(now)
-	gatherThreats()
-	for _, ped in ipairs(peds) do
-		if ped.leaving or not ped.model.Parent then
-			continue
-		end
-		local here = ped.root.Position
-		local flatHere = flat(here)
-		local threat, category
-		for _, m in ipairs(movers) do
-			local rel = flatHere - flat(m.pos)
-			local dist2 = rel:Dot(rel)
-			local speed2 = m.vel:Dot(m.vel)
-			if m.siren and dist2 < PANIC_SIREN * PANIC_SIREN and math.abs(here.Y - m.pos.Y) < 20 then
-				threat, category = m.pos, "Siren"
-			end
-			if speed2 > 64 then
-				local reach = math.sqrt(speed2) * (DODGE_HORIZON + 0.4) + 12
-				if dist2 < reach * reach and math.abs(here.Y - m.pos.Y) < 10 then
-					-- Time to closest approach and how close the car's centre line passes.
-					local tca = rel:Dot(m.vel) / speed2
-					local closest = rel - m.vel * tca
-					local miss = closest.Magnitude
-					local horizon = m.traffic and 1 or DODGE_HORIZON
-					if tca > -0.05 and tca < horizon and miss < m.halfW + 3 then
-						local away = miss > 0.3 and closest / miss or Vector3.new(-m.vel.Z, 0, m.vel.X).Unit
-						if tca < 0.12 and miss < m.halfW + 0.6 then
-							hopAway(ped, away)
-							break
-						elseif not (ped.dodgeUntil and now < ped.dodgeUntil) then
-							dodge(ped, away, now)
-						end
-						if not m.traffic then
-							threat, category = threat or m.pos, category or "Panic"
-						end
-					elseif not m.traffic and speed2 > 900 and tca > 0 and tca < 2.5 and miss < 12 then
-						-- A fast car heading our way: run.
-						threat, category = threat or m.pos, category or "Panic"
+			if hit then
+				ped.bumpedUntil = now + 2.5
+				ped.busyUntil = math.max(ped.busyUntil or 0, now + 2.5)
+				local function bump()
+					if not ped.model.Parent then
+						return -- (recycled while the car was on its way)
 					end
+					topple(ped, vel * 0.5 + Vector3.new(0, 25, 0), 2.2, function()
+						-- (whatever they were busy with ended when they fell: step() takes them back now)
+						ped.busyUntil = nil
+						ped.hum.WalkSpeed = ped.walk
+						setGait(ped, "walk")
+						ped.hum:MoveTo(ped.target)
+					end, true)
 				end
-			end
-		end
-		if not threat then
-			for _, pos in ipairs(hotPlayers) do
-				if flat(pos - here).Magnitude < PANIC_PLAYER then
-					threat, category = pos, "Panic"
-					break
+				-- Seen from a few studs off: they fall when the car gets to them, not before it does.
+				if along > 7 then
+					task.delay((along - 7) / speed, bump)
+				else
+					bump()
 				end
+				return
+			elseif not busy and dist < 26 and speed > 30 and vel.Unit:Dot(rel.Unit) > 0.7 then
+				-- Dive sideways out of the car's path.
+				local side = vel.Unit:Cross(Vector3.yAxis)
+				if side:Dot(rel) < 0 then
+					side = -side
+				end
+				ped.hum.Jump = true
+				ped.hum:MoveTo(ped.root.Position + side * 10)
+				ped.busyUntil = now + 1.2
+				task.delay(1.3, function()
+					if ped.hum.Parent then
+						ped.hum:MoveTo(ped.target)
+					end
+				end)
+				return
 			end
-		end
-		if threat and not ped.leaving then
-			panic(ped, threat, now, category)
 		end
 	end
 end
 
------------------------------------------------------------------- walkers: the 5 Hz loop
+------------------------------------------------------------------ wallets
 
-local function walkerCap()
-	local cap = performance() and PERF_PEDS or MAX_PEDS
-	local clock = Lighting.ClockTime
-	if clock >= 0.5 and clock < 5 then
-		cap = math.max(2, math.floor(cap * 0.45)) -- the small hours: just a few night owls
+local dropParams = RaycastParams.new()
+dropParams.FilterType = Enum.RaycastFilterType.Exclude
+dropParams.IgnoreWater = false -- (a wallet never lands on the sea)
+
+local function removeWallet(w)
+	local i = table.find(wallets, w)
+	if i then
+		table.remove(wallets, i)
 	end
-	return cap
+	if pendingLoot and pendingLoot.wallet == w then
+		pendingLoot = nil
+	end
+	w.model:Destroy()
 end
 
-local function walk(now)
-	local flatHere = flat(focus())
+local function clearWallets()
+	for i = #wallets, 1, -1 do
+		removeWallet(wallets[i])
+	end
+end
+
+local function propPart(parent, name, size, cf, color)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Parent = parent
+	return p
+end
+
+-- A wallet on the ground near where a walker fell. Only citizens get one (the server pays nobody
+-- else), and none while the street is quiet.
+local function dropWallet(pos)
+	if not folder or os.clock() < quietUntil or player:GetAttribute("Side") ~= "Civilian" then
+		return
+	end
+	local a = math.random() * math.pi * 2
+	local spot = pos + Vector3.new(math.cos(a) * 1.5, 0, math.sin(a) * 1.5)
+	-- Onto the ground, not onto a car roof, a dropped bag or our own head. (Built with insert: a missing
+	-- one must not leave a hole in the list.)
+	local ignore = { folder }
+	for _, inst in ipairs({ player.Character or false, Workspace:FindFirstChild("Vehicles") or false, Workspace:FindFirstChild("DroppedBags") or false }) do
+		if inst then
+			table.insert(ignore, inst)
+		end
+	end
+	dropParams.FilterDescendantsInstances = ignore
+	local hit = Workspace:Raycast(spot + Vector3.new(0, 3, 0), Vector3.new(0, -14, 0), dropParams)
+	if not hit or hit.Material == Enum.Material.Water then
+		return
+	end
+	while #wallets >= MAX_WALLETS do
+		removeWallet(wallets[1])
+	end
+	local at = hit.Position
+	local m = Instance.new("Model")
+	m.Name = "PedWallet"
+	local base = CFrame.new(at + Vector3.new(0, 0.1, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
+	local body = propPart(m, "Wallet", Vector3.new(1.1, 0.18, 0.75), base, WALLET_DARK)
+	m.PrimaryPart = body
+	propPart(m, "Strip", Vector3.new(1.12, 0.2, 0.16), base * CFrame.new(0, 0, 0.1), Theme.Color.Cash)
+	-- A small "$" over it, so it can be found in the grass.
+	local tag = Instance.new("BillboardGui")
+	tag.Name = "Tag"
+	tag.Size = UDim2.fromOffset(26, 26)
+	tag.StudsOffset = Vector3.new(0, 1.4, 0)
+	tag.MaxDistance = 70
+	tag.LightInfluence = 0
+	local sign = Instance.new("TextLabel")
+	sign.Size = UDim2.fromScale(1, 1)
+	sign.Text = "$"
+	Theme.Text(sign, 22, "Display")
+	sign.TextColor3 = Theme.Color.Cash
+	sign.Parent = tag
+	tag.Parent = body
+	m.Parent = folder
+	local now = os.clock()
+	table.insert(wallets, { model = m, pos = at, dieAt = now + WALLET_LIFE, retryAt = now + 0.4 })
+end
+
+-- "+$45" floating up from where the wallet was.
+local function payPop(pos, amount, stars)
+	local anchor = propPart(folder, "WalletPop", Vector3.new(0.2, 0.2, 0.2), CFrame.new(pos + Vector3.new(0, 1.5, 0)), WALLET_DARK)
+	anchor.Transparency = 1
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(150, 34)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = 120
+	bb.LightInfluence = 0
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.Text = "+$" .. tostring(amount) .. (stars > 0 and "  +★" or "")
+	Theme.Text(label, 26, "Display")
+	label.TextColor3 = Theme.Color.Cash
+	label.Parent = bb
+	bb.Parent = anchor
+	TweenService:Create(bb, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { StudsOffset = Vector3.new(0, 2.5, 0) }):Play()
+	task.delay(0.7, function()
+		TweenService:Create(label, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
+		local shadow = label:FindFirstChild("Shadow")
+		if shadow then
+			TweenService:Create(shadow, TweenInfo.new(0.3), { Transparency = 1 }):Play()
+		end
+	end)
+	task.delay(1.1, function()
+		anchor:Destroy()
+	end)
+end
+
+-- The wallet nearest to the local player (for an answer that came after we stopped waiting for it).
+local function nearestWallet()
+	local here = focus()
+	local best, bestDist
+	for _, w in ipairs(wallets) do
+		local d = (w.pos - here).Magnitude
+		if not bestDist or d < bestDist then
+			best, bestDist = w, d
+		end
+	end
+	return best
+end
+
+-- PedService's answer to our last "PedLoot".
+local function onLoot(result, amount, stars)
+	local asked = pendingLoot and pendingLoot.wallet or nil
+	pendingLoot = nil
+	if result == "Paid" then
+		local w = asked or nearestWallet()
+		amount = math.floor(tonumber(amount) or 0)
+		if w then
+			if amount > 0 then
+				payPop(w.pos, amount, tonumber(stars) or 0)
+			end
+			removeWallet(w)
+		end
+		task.spawn(function()
+			pcall(function()
+				require(script.Parent:WaitForChild("SoundClient")).Play("Cash")
+			end)
+		end)
+	elseif result == "Empty" then
+		-- The street has gone quiet (the server's toast says so): wallets are empty for a while.
+		quietUntil = os.clock() + QUIET_FOR
+		clearWallets()
+	elseif asked then
+		asked.retryAt = os.clock() + LOOT_RETRY
+	end
+end
+
+-- Five times a second: old wallets go; on foot next to one, ask the server for it.
+local function checkWallets(now)
+	if #wallets == 0 then
+		return
+	end
+	for i = #wallets, 1, -1 do
+		local w = wallets[i]
+		if now >= w.dieAt or not w.model.Parent then
+			removeWallet(w)
+		end
+	end
+	if pendingLoot then
+		if now - pendingLoot.at < LOOT_TIMEOUT then
+			return
+		end
+		pendingLoot.wallet.retryAt = now + LOOT_RETRY -- no answer: stop waiting, try again in a moment
+		pendingLoot = nil
+	end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not lootRemote or not hum or not root or hum.Health <= 0 or hum.SeatPart
+		or player:GetAttribute("Side") ~= "Civilian" or player:GetAttribute("Passive") == true then
+		return
+	end
+	local here = root.Position
+	for _, w in ipairs(wallets) do
+		if now >= w.retryAt then
+			local rel = w.pos - here
+			if math.abs(rel.Y) < 6 and Vector3.new(rel.X, 0, rel.Z).Magnitude <= PICKUP_RANGE then
+				pendingLoot = { wallet = w, at = now }
+				lootRemote:FireServer(w.pos)
+				return
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------ the loop
+
+local function step()
+	local now = os.clock()
+	checkWallets(now)
+	if not ready then
+		return
+	end
+	local here = focus()
+	local flat = Vector3.new(here.X, 0, here.Z)
 	for i = #peds, 1, -1 do
 		local ped = peds[i]
-		local pos = ped.root.Position
-		if ped.gone or not ped.model.Parent or (flat(pos) - flatHere).Magnitude > DESPAWN or pos.Y < -20 then
+		if not ped.model.Parent or (Vector3.new(ped.root.Position.X, 0, ped.root.Position.Z) - flat).Magnitude > DESPAWN
+			or ped.root.Position.Y < -20 then
 			removePed(i)
-		elseif not ped.leaving then
-			if ped.dodgeUntil and now >= ped.dodgeUntil then
-				-- Dodge over: back on the route.
-				ped.dodgeUntil = nil
-				ped.hum:MoveTo(ped.target)
-				ped.lastMove = now
-			end
-			if not ped.dodgeUntil then
-				local toTarget = flat(ped.target - pos)
-				if toTarget.Magnitude < 3 then
-					moveOn(ped)
+		else
+			if not (ped.busyUntil and now < ped.busyUntil) then
+				local toTarget = (ped.target - ped.root.Position) * Vector3.new(1, 0, 1)
+				if toTarget.Magnitude < 4 then
+					nextLeg(ped)
 				elseif now - (ped.lastMove or 0) > 6 then
 					-- Humanoid:MoveTo gives up after 8 s; keep nudging it.
 					ped.lastMove = now
 					ped.hum:MoveTo(ped.target)
 				end
 			end
-			if ped.panicUntil and now >= ped.panicUntil then
-				ped.panicUntil = nil
-			end
-			applySpeed(ped, now)
+			react(ped, now)
 		end
 	end
-	local cap = walkerCap()
-	if #peds < cap then
+	local perf = require(script.Parent:WaitForChild("SettingsClient")).Get("Performance")
+	if #peds < (perf and 5 or MAX_PEDS) then
 		spawnPed()
-	elseif #peds > cap then
-		-- Drop one that's off screen (or the farthest).
-		local pick, pickD = nil, -1
-		for i, ped in ipairs(peds) do
-			local d = (flat(ped.root.Position) - flatHere).Magnitude
-			local score = d + (onScreen(ped.root.Position) and 0 or 1000)
-			if score > pickD then
-				pick, pickD = i, score
-			end
-		end
-		if pick then
-			removePed(pick)
-		end
+	elseif perf and #peds > 5 then
+		removePed(#peds)
 	end
 end
 
------------------------------------------------------------------- hangout peds (anchored)
-
-local spots = {} -- { pos, yaw, kind, group, hash }
-local hangs = {} -- [spot index] = { model, track }
-
-local function loadSpots()
-	local ok, list = pcall(function()
-		return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("HangoutSpots") or "[]")
-	end)
-	table.clear(spots)
-	if not ok or type(list) ~= "table" then
-		return
-	end
-	for i, s in ipairs(list) do
-		if type(s) == "table" and type(s.x) == "number" and type(s.y) == "number" and type(s.z) == "number" then
-			table.insert(spots, {
-				pos = Vector3.new(s.x, s.y, s.z), yaw = math.rad(tonumber(s.r) or 0), kind = s.k or "stand",
-				group = s.g or "Bench", hash = (i * 7919 + math.floor(s.x * 13 + s.z * 7)) % 1000,
-			})
-		end
-	end
-end
-
--- Is someone at this spot right now? Stable per spot, reshuffled every 5 minutes.
-local function wanted(s, epoch)
-	local share = OCCUPANCY[s.group] or 40
-	local night = Workspace:GetAttribute("IsNight") == true
-	local rain = Workspace:GetAttribute("Raining") == true
-	if s.group == "CarMeet" then
-		local state = Workspace:GetAttribute("CarMeetState")
-		if state ~= "Live" and state ~= "Soon" then
-			return false
-		end
-	elseif s.group == "Lounger" then
-		if night or rain then
-			return false
-		end
-	elseif s.group == "Plaza" or s.group == "Bench" then
-		if rain then
-			return false
-		end
-		if night then
-			share *= 0.5
-		end
-	end
-	return (s.hash + epoch * 37) % 100 < share
-end
-
-local function removeHang(index)
-	local h = hangs[index]
-	if h then
-		h.model:Destroy()
-		hangs[index] = nil
-	end
-end
-
-local function spawnHang(index, s)
-	local look = template()
-	if not look then
-		return
-	end
-	local model = look:Clone()
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	local root = model:FindFirstChild("HumanoidRootPart")
-	if not hum or not root or not root:IsA("BasePart") then
-		model:Destroy()
-		return
-	end
-	for _, d in ipairs(model:GetDescendants()) do
-		if d:IsA("BasePart") then
-			d.CanCollide = false
-			d.CanQuery = false
-			d.CanTouch = false
-			d.CastShadow = false
-			d.CollisionGroup = "Traffic"
-		end
-	end
-	root.Anchored = true -- no physics at all: the animation poses the body
-	local scale = hum.HipHeight / 2
-	local yawCF = CFrame.Angles(0, s.yaw, 0)
-	local cf
-	local animName = "idle"
-	if s.kind == "sit" then
-		cf = CFrame.new(s.pos + Vector3.new(0, SIT_LIFT * scale, 0)) * yawCF
-		animName = "sit"
-	elseif s.kind == "lie" then
-		-- Flat on the lounger, face up, head toward the backrest.
-		local h = yawCF.LookVector
-		local p = s.pos + h * 0.2 + Vector3.new(0, root.Size.Z / 2 + 0.05, 0)
-		cf = CFrame.fromMatrix(p, Vector3.new(h.Z, 0, -h.X), h, Vector3.new(0, -1, 0))
-	else
-		cf = CFrame.new(s.pos + Vector3.new(0, hum.HipHeight + root.Size.Y / 2, 0)) * yawCF
-		if s.group == "CarMeet" then
-			animName = ({ "idle", "cheer", "point", "idle" })[math.random(4)]
-		elseif math.random() < 0.15 then
-			animName = "wave"
-		end
-	end
-	model:PivotTo(cf)
-	model.Parent = idleFolder
-	local track = loadTrack(hum, animName)
-	if track then
-		track:Play()
-		pcall(function()
-			track:AdjustSpeed(0.85 + math.random() * 0.3)
-		end)
-	end
-	hangs[index] = { model = model, track = track, kind = s.kind, group = s.group }
-end
-
-local function updateHangouts()
-	if #spots == 0 then
-		return
-	end
-	local here = focus()
-	local epoch = math.floor(os.time() / 300)
-	local cap = performance() and PERF_HANG or MAX_HANG
-	local count = 0
-	for index, h in pairs(hangs) do
-		local s = spots[index]
-		local d = s and (s.pos - here).Magnitude or math.huge
-		local root = h.model.PrimaryPart
-		-- Leave when far, or when no longer wanted (only when you can't see it go).
-		if not s or not h.model.Parent or d > HANG_RANGE + 30
-			or (not wanted(s, epoch) and (d > 80 or not (root and onScreen(root.Position)))) then
-			removeHang(index)
-		else
-			count += 1
-		end
-	end
-	if count >= cap then
-		return
-	end
-	local candidates = {}
-	for index, s in ipairs(spots) do
-		if not hangs[index] then
-			local d = (s.pos - here).Magnitude
-			if d < HANG_RANGE and wanted(s, epoch) and (d > HANG_POP or not onScreen(s.pos)) then
-				table.insert(candidates, { index = index, d = d })
-			end
-		end
-	end
-	table.sort(candidates, function(x, y)
-		return x.d < y.d
-	end)
-	-- At most two new rigs per tick: each is a fresh R15 clone, and a burst of them stutters phones.
-	local spawned = 0
-	for _, c in ipairs(candidates) do
-		if count >= cap or spawned >= 2 then
-			break
-		end
-		spawnHang(c.index, spots[c.index])
-		count += 1
-		spawned += 1
-	end
-end
-
------------------------------------------------------------------- event peds (EventService)
-
-local eventPeds = {} -- [model] = { lines }
-
-local function watchEventPed(model)
-	if not model:IsA("Model") or eventPeds[model] or type(model:GetAttribute("Anim")) ~= "string" then
-		return
-	end
-	eventPeds[model] = { lines = model:GetAttribute("Lines") }
-	task.spawn(function()
-		local hum = model:WaitForChild("Humanoid", 10)
-		if not hum or not hum:IsA("Humanoid") or not model.Parent then
-			return
-		end
-		local track = loadTrack(hum, model:GetAttribute("Anim"))
-		if track and eventPeds[model] then
-			track:Play()
-			eventPeds[model].track = track
-		end
-	end)
-end
-
-local function watchEvents()
-	local events = Workspace:WaitForChild("Events", 60)
-	if not events then
-		return
-	end
-	for _, d in ipairs(events:GetDescendants()) do
-		watchEventPed(d)
-	end
-	events.DescendantAdded:Connect(watchEventPed)
-	events.DescendantRemoving:Connect(function(d)
-		eventPeds[d] = nil
-	end)
-end
-
------------------------------------------------------------------- chatter (1 Hz)
-
-local complimented = setmetatable({}, { __mode = "k" }) -- [car model] = time
-
-local function niceCar(car)
-	if car:GetAttribute("Police") or car:GetAttribute("AIPolice") or car:GetAttribute("Boat") then
-		return false
-	end
-	local ownerId = car:GetAttribute("OwnerUserId")
-	local id = car:GetAttribute("VehicleId")
-	if type(ownerId) ~= "number" or type(id) ~= "string" then
-		return false
-	end
-	local def = Vehicles.ById[id]
-	if def and ((def.Price or 0) >= 28000 or def.Pass ~= nil) then
-		return true
-	end
-	local owner = Players:GetPlayerByUserId(ownerId)
-	local custom = owner and owner:GetAttribute("Custom_" .. id)
-	return type(custom) == "string" and custom ~= "0,0,0"
-end
-
-local function chatter(now)
-	if now < bubbleNext then
-		return
-	end
-	local here = focus()
-	-- Everyone who could talk, near you.
-	local talkers = {}
+-- Where the walkers are (TrafficClient stops for them when they cross in front of a car).
+function PedClient.Positions()
+	local list = {}
 	for _, ped in ipairs(peds) do
-		if not ped.leaving and (ped.root.Position - here).Magnitude < BUBBLE_RANGE then
-			table.insert(talkers, { model = ped.model, root = ped.root, kind = "walk" })
+		if ped.model.Parent then
+			table.insert(list, ped.root.Position)
 		end
 	end
-	for _, h in pairs(hangs) do
-		local root = h.model.PrimaryPart
-		if root and (root.Position - here).Magnitude < BUBBLE_RANGE then
-			table.insert(talkers, { model = h.model, root = root, kind = h.kind, group = h.group })
-		end
+	return list
+end
+
+------------------------------------------------------------------ fights
+
+-- Back to strolling, once whatever they were doing is over. Only the latest scare (or fall) does it:
+-- token is ped.runToken as it was when that one began, so an older one never ends a newer one early.
+local function settle(ped, token)
+	if not ped.hum.Parent or ped.runToken ~= token or ped.limp then
+		return
 	end
-	-- Event peds talk first (that's the show).
-	for model, info in pairs(eventPeds) do
-		local root = model.PrimaryPart
-		if model.Parent and root and type(info.lines) == "string" and (root.Position - here).Magnitude < 45
-			and math.random() < 0.6 then
-			if say(model, info.lines, now) then
-				return
+	ped.mood = nil
+	-- (a run can now end before its busy time does: step() takes them back from here, or one who
+	-- reached the end of their stretch early would stand there walking on the spot)
+	ped.busyUntil = nil
+	setPose(ped, nil)
+	ped.hum.WalkSpeed = ped.walk
+	setGait(ped, "walk")
+	ped.hum:MoveTo(ped.target)
+end
+
+-- Sprint away from `from` for `seconds` (no longer than the run itself takes), then go back to
+-- strolling. cover: run with both arms thrown over the head (PoseClient's "Brace" held for the whole
+-- run: arms and a hunch only, the legs keep running).
+local function runFrom(ped, from, seconds, fallback, cover)
+	local away = ped.root.Position - from
+	away = Vector3.new(away.X, 0, away.Z)
+	away = away.Magnitude > 0.1 and away.Unit or fallback
+	-- They run 45 studs, which takes 2.5 s. With a longer timer they got there, stopped, and stood
+	-- sprinting on the spot with their arms over their heads until it ran out: the run ends on arrival.
+	local far = 45
+	seconds = math.min(seconds, far / RUN_SPEED)
+	local token = (ped.runToken or 0) + 1
+	ped.runToken = token
+	ped.mood = "flee"
+	ped.hum.WalkSpeed = RUN_SPEED
+	setGait(ped, "run")
+	if cover then
+		setPose(ped, "Brace", { Duration = seconds, FadeIn = 0.15, FadeOut = 0.3 })
+	else
+		setPose(ped, nil)
+	end
+	ped.hum:MoveTo(ped.root.Position + away * far)
+	task.delay(seconds, function()
+		settle(ped, token)
+	end)
+end
+
+-- Stop where they are for `seconds` in a pose (cowering, hands up, filming), turned toward `toward` if
+-- given. Afterwards they stroll on, or, with fleeFrom, hurry away from that spot first. Asked again
+-- while it lasts, the time simply starts over.
+local function freeze(ped, mood, poseName, seconds, toward, fleeFrom)
+	local token = (ped.runToken or 0) + 1
+	ped.runToken = token
+	local here = ped.root.Position
+	if ped.mood ~= mood then
+		ped.mood = mood
+		ped.hum.WalkSpeed = ped.walk
+		ped.hum:MoveTo(here) -- (stops them)
+		setGait(ped, "idle")
+		if toward then
+			local look = Vector3.new(toward.X - here.X, 0, toward.Z - here.Z)
+			if look.Magnitude > 0.5 then
+				ped.root.CFrame = CFrame.lookAt(here, here + look)
 			end
 		end
 	end
-	if #talkers == 0 then
-		return
+	setPose(ped, poseName)
+	ped.moodUntil = os.clock() + seconds
+	task.delay(seconds, function()
+		if fleeFrom and ped.hum.Parent and ped.runToken == token and not ped.limp then
+			runFrom(ped, fleeFrom, 3, Vector3.new(0, 0, 1), false)
+		else
+			settle(ped, token)
+		end
+	end)
+end
+
+-- A walker is hit (a punch or a bullet, coming from `from`): they go limp along `dir` (flat unit vector)
+-- for 2 s, then get up, run away (45 studs) and go back to strolling. A wallet drops where they fell.
+local function knockDown(ped, dir, from)
+	local now = os.clock()
+	ped.busyUntil = now + 5 -- step() leaves it alone until then, and it won't dive (a car can still bump it)
+	ped.punchedUntil = now + 2.5 -- on the ground for 2 s, half a second to stand: then a punch or a bullet counts again (was 5: three seconds on their feet that nothing could touch)
+	topple(ped, dir * 16 + Vector3.new(0, 10, 0), 2, function()
+		runFrom(ped, from, 3, dir, ped.nerve < REACT.Cover and posedCount() < REACT.MaxPosed)
+	end)
+	dropWallet(ped.root.Position)
+	if downRemote then
+		downRemote:FireServer()
 	end
-	-- A nice car rolling past someone.
-	local vehicles = Workspace:FindFirstChild("Vehicles")
-	if vehicles then
-		for _, car in ipairs(vehicles:GetChildren()) do
-			local chassis = car:IsA("Model") and car.PrimaryPart
-			if chassis and now - (complimented[car] or -100) > 25 and (chassis.Position - here).Magnitude < BUBBLE_RANGE
-				and chassis.AssemblyLinearVelocity.Magnitude < 30 and niceCar(car) then
-				for _, t in ipairs(talkers) do
-					if (t.root.Position - chassis.Position).Magnitude < 28 then
-						complimented[car] = now
-						if say(t.model, "NiceCar", now) then
-							return
-						end
-					end
+end
+
+-- A punch thrown at `position` facing `lookVector`: the nearest walker within 7 studs in front (who
+-- isn't already down) falls over for 2 s, then runs away for a few seconds and goes back to strolling.
+function PedClient.KnockNear(position, lookVector)
+	if typeof(position) ~= "Vector3" or typeof(lookVector) ~= "Vector3" then
+		return false
+	end
+	local look = Vector3.new(lookVector.X, 0, lookVector.Z)
+	if look.Magnitude < 0.05 then
+		return false
+	end
+	look = look.Unit
+	local now = os.clock()
+	local best, bestDist
+	for _, ped in ipairs(peds) do
+		if ped.model.Parent and not (ped.punchedUntil and now < ped.punchedUntil) then
+			local rel = ped.root.Position - position
+			local flatRel = Vector3.new(rel.X, 0, rel.Z)
+			local d = flatRel.Magnitude
+			if d <= 7 and math.abs(rel.Y) < 6 and (d < 0.5 or flatRel.Unit:Dot(look) > 0.35) and (not bestDist or d < bestDist) then
+				best, bestDist = ped, d
+			end
+		end
+	end
+	if not best then
+		return false
+	end
+	knockDown(best, look, position)
+	return true
+end
+
+-- The walker under the crosshair: the nearest one on their feet whose body the line from `origin` along
+-- `dir` passes through (a column from their feet to just over their head, a little wider far away),
+-- no further than maxDistance. Returns the middle of their body, or nil.
+-- CombatClient aims the bullet there. Walkers can't be seen by raycasts, so the crosshair's own ray went
+-- straight through them to the wall behind, and the bullet (it starts at the shooter's head, 2.4 studs
+-- to the side of the camera's line) then passed just outside HitRadius: in an open street a shot with the
+-- crosshair dead on a walker MISSED, and the owner found it "takes a long time" to drop anyone.
+function PedClient.Under(origin, dir, maxDistance)
+	if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" or type(maxDistance) ~= "number" or dir.Magnitude < 0.05 then
+		return nil
+	end
+	dir = dir.Unit
+	local now = os.clock()
+	local best, bestAlong
+	for _, ped in ipairs(peds) do
+		if ped.model.Parent and not (ped.punchedUntil and now < ped.punchedUntil) then
+			local centre = ped.root.Position
+			local along = (centre - origin):Dot(dir)
+			if along > 0 and along <= maxDistance and (not bestAlong or along < bestAlong) then
+				local off = origin + dir * along - centre -- where the line passes them, from their middle
+				if Vector3.new(off.X, 0, off.Z).Magnitude <= 1.7 + along * 0.012 and off.Y >= -3.4 and off.Y <= 2.8 then
+					best, bestAlong = ped, along
 				end
 			end
 		end
 	end
-	if math.random() > 0.3 then
-		return
-	end
-	local t = talkers[math.random(#talkers)]
-	local category = "Idle"
-	if t.group == "CarMeet" then
-		category = "CarMeet"
-	elseif Workspace:GetAttribute("Raining") == true and math.random() < 0.7 then
-		category = "Rain"
-	elseif Workspace:GetAttribute("IsNight") == true and math.random() < 0.5 then
-		category = "Night"
-	elseif (t.kind == "sit" or t.kind == "lie") and math.random() < 0.5 then
-		category = "Sit"
-	end
-	say(t.model, category, now)
+	return best and best.root.Position or nil
 end
 
------------------------------------------------------------------- init
-
--- Walkers' root parts, for TrafficClient (it stops for them).
-local pedRoots = {}
-local function roots()
-	table.clear(pedRoots)
+-- A bullet from `origin` along `dir` that ends maxDistance studs away (at a wall, or at the end of the
+-- gun's range). The nearest standing walker within HitRadius of that line falls. Returns the point on
+-- the line where the shot met them, or nil when it met nobody.
+function PedClient.ShotAt(origin, dir, maxDistance)
+	if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" or type(maxDistance) ~= "number" or dir.Magnitude < 0.05 then
+		return nil
+	end
+	dir = dir.Unit
+	local now = os.clock()
+	local best, bestAlong
 	for _, ped in ipairs(peds) do
-		if not ped.leaving and ped.root.Parent then
-			table.insert(pedRoots, ped.root)
+		if ped.model.Parent and not (ped.punchedUntil and now < ped.punchedUntil) then
+			local to = ped.root.Position - origin
+			local along = to:Dot(dir) -- how far down the shot they are
+			if along > 0 and along <= maxDistance and (to - dir * along).Magnitude <= HIT_RADIUS
+				and (not bestAlong or along < bestAlong) then
+				best, bestAlong = ped, along
+			end
 		end
 	end
-	return pedRoots
+	if not best then
+		return nil
+	end
+	local push = Vector3.new(dir.X, 0, dir.Z)
+	push = push.Magnitude > 0.05 and push.Unit or Vector3.new(0, 0, -1)
+	knockDown(best, push, origin)
+	return origin + dir * bestAlong
+end
+
+-- May this walker react to something right now? (In the world, on their feet, not just knocked over.)
+local function canReact(ped, now)
+	return ped.model.Parent ~= nil and not ped.limp and not (ped.punchedUntil and now < ped.punchedUntil)
+end
+
+-- Gunfire at `position`: every walker within ScareRange who is on their feet reacts (see the header):
+-- most sprint away (45 studs) with their arms over their heads, some cower where they stand, a few far
+-- enough away stop and film it. Which one is the walker's own nerve, so they do the same every time.
+-- Poses only near the camera and only REACT.MaxPosed at once; everyone else simply runs.
+function PedClient.Scare(position)
+	if typeof(position) ~= "Vector3" then
+		return
+	end
+	local now = os.clock()
+	local cam = Workspace.CurrentCamera
+	local camPos = cam and cam.CFrame.Position or position
+	local posed = posedCount()
+	for _, ped in ipairs(peds) do
+		local here = ped.root.Position
+		local dist = (here - position).Magnitude
+		if canReact(ped, now) and dist <= SCARE_RANGE then
+			ped.busyUntil = math.max(ped.busyUntil or 0, now + SCARE_TIME)
+			local mayPose = ped.pose ~= nil or (posed < REACT.MaxPosed and (here - camPos).Magnitude <= REACT.PoseRange)
+			local nerve = ped.nerve or 1
+			local before = ped.pose
+			if mayPose and nerve < REACT.Film and dist >= REACT.FilmMin then
+				ped.busyUntil = math.max(ped.busyUntil, now + REACT.FilmTime)
+				freeze(ped, "film", "PhoneLook", REACT.FilmTime, position)
+			elseif mayPose and nerve >= REACT.Film and nerve < REACT.Cower then
+				ped.busyUntil = math.max(ped.busyUntil, now + REACT.CowerTime)
+				freeze(ped, "cower", "Cower", REACT.CowerTime)
+			else
+				-- (someone filming who now finds the shots too close runs like everybody else)
+				runFrom(ped, position, SCARE_TIME, Vector3.new(0, 0, 1), mayPose and nerve < REACT.Cover)
+			end
+			if ped.pose and not before then
+				posed += 1
+			end
+		end
+	end
+end
+
+-- A raised gun points along `dir` from `origin` (CombatClient calls this about twice a second while
+-- the local player aims). Walkers within REACT.AimRange who stand close to that line stop, turn to the
+-- gun and put their hands up, REACT.MaxHands of them at most; the nervous ones run instead. The hands
+-- stay up while the gun stays on them, and when it moves away they hurry off.
+function PedClient.AimedAt(origin, dir)
+	if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" or dir.Magnitude < 0.05 then
+		return
+	end
+	dir = dir.Unit
+	local now = os.clock()
+	local hands = 0
+	for _, ped in ipairs(peds) do
+		if ped.mood == "hands" then
+			hands += 1
+		end
+	end
+	local posed = posedCount()
+	for _, ped in ipairs(peds) do
+		local to = ped.root.Position - origin
+		local dist = to.Magnitude
+		if canReact(ped, now) and dist > 2 and dist <= REACT.AimRange and to.Unit:Dot(dir) > REACT.AimCone then
+			local after = REACT.HandsTime + 3 -- (the hands, then the run)
+			if ped.mood == "hands" then
+				ped.busyUntil = math.max(ped.busyUntil or 0, now + after)
+				freeze(ped, "hands", "HandsUp", REACT.HandsTime, origin, origin) -- still on them: the time starts over
+			elseif ped.mood == nil then
+				ped.busyUntil = math.max(ped.busyUntil or 0, now + after)
+				if (ped.nerve or 1) < REACT.Hands and hands < REACT.MaxHands and posed < REACT.MaxPosed then
+					hands += 1
+					posed += 1
+					freeze(ped, "hands", "HandsUp", REACT.HandsTime, origin, origin)
+				else
+					runFrom(ped, origin, 3, Vector3.new(0, 0, 1), false)
+				end
+			end
+		end
+	end
+end
+
+-- A driver thrown out of their car by a carjacking: a walker (not one of the strolling peds) who jumps out
+-- at `position`, runs off along `direction` and fades away after FLEE_TIME seconds.
+local FLEE_TIME = 4
+function PedClient.Flee(position, direction)
+	if typeof(position) ~= "Vector3" or typeof(direction) ~= "Vector3" or not folder then
+		return false
+	end
+	local templates = ReplicatedStorage:FindFirstChild("PedTemplates")
+	local list = templates and templates:GetChildren() or {}
+	if #list == 0 then
+		return false
+	end
+	local dir = Vector3.new(direction.X, 0, direction.Z)
+	dir = dir.Magnitude > 0.05 and dir.Unit or Vector3.new(0, 0, 1)
+	local model = list[math.random(#list)]:Clone()
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then
+		model:Destroy()
+		return false
+	end
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanQuery = false
+			part.CastShadow = false
+			part.CollisionGroup = "Traffic"
+		end
+	end
+	model:PivotTo(CFrame.lookAt(position, position + dir))
+	model.Parent = folder
+	-- A real run cycle (never the stroll played fast). A failed load only costs the animation.
+	pcall(function()
+		local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+		local track = animator:LoadAnimation(animFor(Animations.Asset("Default", "run") or RUN_ANIM))
+		track.Looped = true
+		track:Play()
+		track:AdjustSpeed(1.15)
+	end)
+	hum.WalkSpeed = 20
+	hum.Jump = true -- a panicked hop out of the door
+	hum:MoveTo(position + dir * 80)
+	task.delay(FLEE_TIME, function()
+		for i = 1, 10 do
+			if not model.Parent then
+				return
+			end
+			for _, part in ipairs(model:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.LocalTransparencyModifier = i / 10
+				end
+			end
+			task.wait(0.05)
+		end
+		model:Destroy()
+	end)
+	return true
 end
 
 function PedClient.Init()
 	folder = Instance.new("Folder")
 	folder.Name = "Peds"
 	folder.Parent = Workspace
-	idleFolder = Instance.new("Folder")
-	idleFolder.Name = "PedsIdle"
-	idleFolder.Parent = Workspace
-	TrafficClient.PedSource = roots
+	groundParams.FilterDescendantsInstances = { folder }
+	-- Wallet pickups: the server decides (PedService). Each remote is fetched in its own thread, so a
+	-- remote the server hasn't made yet never holds up the other controllers.
+	task.spawn(function()
+		lootRemote = Remotes.Event("PedLoot")
+	end)
+	task.spawn(function()
+		downRemote = Remotes.Event("PedDown")
+	end)
+	Remotes.OnClient("PedLoot", onLoot)
+	-- A new character starts with a clean street (a side switch respawns you: cops get no wallets).
+	player.CharacterAdded:Connect(clearWallets)
 	task.spawn(function()
 		for _ = 1, 60 do
 			if RoadGraph.LoadPublished() and #RoadGraph.Nodes > 0 then
@@ -1012,43 +1148,12 @@ function PedClient.Init()
 			task.wait(1)
 		end
 	end)
-	loadSpots()
-	ReplicatedStorage:GetAttributeChangedSignal("HangoutSpots"):Connect(function()
-		for index in pairs(hangs) do
-			removeHang(index)
-		end
-		loadSpots()
-	end)
-	task.spawn(watchEvents)
-	local reactAcc, walkAcc, slowAcc = 0, 0, 0
-	local lastWarn = 0
-	local function guarded(fn, ...)
-		local ok, err = pcall(fn, ...)
-		if not ok and os.clock() - lastWarn > 10 then
-			lastWarn = os.clock()
-			warn("[PedClient] " .. tostring(err))
-		end
-	end
+	local acc = 0
 	RunService.Heartbeat:Connect(function(dt)
-		if not ready then
-			return
-		end
-		local now = os.clock()
-		reactAcc += dt
-		walkAcc += dt
-		slowAcc += dt
-		if reactAcc >= 0.1 then
-			reactAcc = 0
-			guarded(react, now)
-		end
-		if walkAcc >= 0.2 then
-			walkAcc = 0
-			guarded(walk, now)
-		end
-		if slowAcc >= 1 then
-			slowAcc = 0
-			guarded(updateHangouts)
-			guarded(chatter, now)
+		acc += dt
+		if acc >= 0.2 then
+			acc = 0
+			step()
 		end
 	end)
 end

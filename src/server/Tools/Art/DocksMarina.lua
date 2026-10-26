@@ -30,8 +30,8 @@ local RESERVED = {
 	{ -880, -670, 1460, 1650 }, -- Chop Shop (-780, 1580)
 	{ 70, 430, 740, 900 }, -- Spray & Go (250, 820)
 	{ 160, 240, 1445, 1515 }, -- ATM3 kiosk (200, 1480)
-	{ 8, 68, 1365, 1435 }, -- Solana Avenue Air ramp (38, 1400)
-	{ -235, -165, 1805, 1870 }, -- Rustwater Rocket ramp (-200, 1838)
+	{ 32, 92, 1365, 1435 }, -- Solana Avenue Air ramp (62, 1400)
+	{ -235, -165, 1830, 1895 }, -- Rustwater Rocket ramp (-200, 1862)
 	{ 1690, 1750, 1270, 1330 }, -- Sea Dream heist pad
 }
 
@@ -95,7 +95,7 @@ function Art.Build(folder, ArtKit, Layout)
 		t.BackgroundTransparency = 1
 		t.Position = UDim2.fromScale(0.03, yScale or 0)
 		t.Size = UDim2.fromScale(0.94, hScale or 1)
-		t.Font = Enum.Font.FredokaOne
+		t.Font = Enum.Font.Oswald
 		t.TextScaled = true
 		t.TextColor3 = color
 		t.TextStrokeTransparency = 0.5

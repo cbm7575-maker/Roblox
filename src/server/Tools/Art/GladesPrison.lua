@@ -95,7 +95,7 @@ local function textPanel(parent, size, cf, bg, fg, text)
 	label.Size = UDim2.fromScale(0.92, 0.84)
 	label.Position = UDim2.fromScale(0.04, 0.08)
 	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.FredokaOne
+	label.Font = Enum.Font.Oswald
 	label.TextScaled = true
 	label.TextWrapped = true
 	label.TextColor3 = fg

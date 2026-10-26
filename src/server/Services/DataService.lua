@@ -3,14 +3,18 @@
 --   * Load with retries and a session lock (a record another server touched in the last 5 minutes is
 --     retried a few times, then taken over), autosave every 60 s, save on leave and on shutdown.
 --   * Before the place is published (Studio without API access) it falls back to memory, so testing
---     still works; a Studio session then starts everyone fresh.
+--     still works; a Studio session then starts everyone fresh. ReplicatedStorage attribute SavesOff
+--     says which (true = memory only, false = really saving), so HUDController can tell the tester.
 --   * Carried cash is never saved: leaving with a full bag is like getting caught.
 -- Saved: cash, look (hat/mask), stats, owned cars and car customisations (garage, phase 4), XP and
 -- ranks (phase 4), daily streak (phase 4), one-time flags.
+-- Stats (STATS) live on the player as attributes while playing (e.g. "Heists", and "BigHeists": the
+-- Coastal Bank / Sea Dream jobs that unlock the heist-locked cars) and are copied back on every save.
 
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -21,7 +25,7 @@ local DataService = {}
 local VERSION = 1
 local AUTOSAVE = 60
 local LOCK_TIMEOUT = 300
-local STATS = { "Heists", "Escapes", "Arrests", "TimesCaught", "Breakouts", "CarsBoosted", "Evasions", "RacesWon" }
+local STATS = { "Heists", "Escapes", "Arrests", "TimesCaught", "Breakouts", "CarsBoosted", "Evasions", "RacesWon", "BigHeists" }
 
 local store
 local memory = {} -- fallback when DataStores are unavailable
@@ -42,6 +46,7 @@ local function default()
 		flags = {},
 		races = {}, -- [raceId] = best time in seconds
 		stunts = {}, -- [stuntId] = true once completed
+		gear = { guns = {}, armor = 0 }, -- owned guns ([id] = true) and body armor 0-100 (CombatService)
 	}
 end
 
@@ -186,15 +191,18 @@ function DataService.Init()
 	if not store then
 		useMemory = true
 	elseif RunService:IsStudio() then
-		-- Unpublished places can't reach DataStores; test once and fall back quietly.
+		-- Unpublished places can't reach DataStores; test once and fall back to memory.
 		local probe = pcall(function()
 			store:GetAsync("probe")
 		end)
 		useMemory = not probe
 	end
 	if useMemory then
-		warn("[DataService] DataStores unavailable (unpublished place?) - using memory; progress won't persist")
+		warn("[DataService] DataStores unavailable - using memory; progress won't persist. In Studio: publish the"
+			.. " place and turn on Game Settings > Security > Enable Studio Access to API Services.")
 	end
+	-- Clients show a one-time "progress isn't saved" note when this is true (HUDController).
+	ReplicatedStorage:SetAttribute("SavesOff", useMemory)
 
 	local function onPlayer(player)
 		local data = load(player)

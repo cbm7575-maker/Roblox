@@ -8,8 +8,16 @@
 --     the mesh's own wheel layout is saved as attributes WheelX, WheelZ, WheelRadius so CarBuilder
 --     can move the spinning visual wheels into its wheel arches
 --   * box collision (the chassis does the physics; the body is visual only)
+-- CarBuilder fits the seats into the cabin from the Windows (glass) part, so keep the glass as its own
+-- part; the result line says whether any was found.
 -- Usage (command bar / MCP):  require(ServerStorage.Tools.BodyPrep).Prepare(model, "Flamingo", opts)
---   opts: Turn (degrees, fix facing), Scale (extra multiplier), ExtraWidth (studs over chassis), SeatDrop
+--   opts: Turn (degrees, fix facing), Scale (extra multiplier), ExtraWidth (studs over chassis),
+--   and hand-tuned seat overrides for when the automatic fit looks wrong (false clears one):
+--   SeatDrop (seat top this far below the greybox seat top; also turns the automatic recline off),
+--   SeatZ (seat centre along the car, studs from the wheel centre point, front is -Z) and SeatTilt
+--   (degrees the seat leans back, 0-45). CarBuilder prints each car's seat fit once in Studio.
+--   Clearing a template value (false) falls back to the car's Config.Vehicles copy (SeatDrop/SeatZ/SeatTilt);
+--   remove that too to return a car to the automatic fit.
 --   Boats: opts.Boat = true (no wheels; pivot at the hull bottom; scaled to the chassis length; Draft,
 --   SeatY, SeatZ saved for CarBuilder)
 
@@ -24,6 +32,7 @@ local BodyPrep = {}
 
 local NAMES = {
 	{ "headlight", "Headlight" }, { "taillight", "Taillight" }, { "window", "Windows" },
+	{ "windshield", "Windows" }, { "glass", "Windows" },
 	{ "wheel", "Wheels" }, { "bumper", "Trim" }, { "body", "Body" },
 }
 
@@ -135,8 +144,10 @@ function BodyPrep.Prepare(model, carId, opts)
 	model:SetAttribute("WheelX", wheelX * scale)
 	model:SetAttribute("WheelZ", wheelZ * scale)
 	model:SetAttribute("WheelRadius", radius * scale)
-	if opts.SeatDrop then
-		model:SetAttribute("SeatDrop", opts.SeatDrop)
+	for _, key in ipairs({ "SeatDrop", "SeatZ", "SeatTilt" }) do
+		if opts[key] ~= nil then
+			model:SetAttribute(key, opts[key] or nil) -- false removes an old override
+		end
 	end
 	local folder = ServerStorage:FindFirstChild("CarBodies") or Instance.new("Folder")
 	folder.Name = "CarBodies"
@@ -148,8 +159,9 @@ function BodyPrep.Prepare(model, carId, opts)
 	model.Name = carId
 	model.Parent = folder
 	local _, size = model:GetBoundingBox()
-	return string.format("%s: scale %.2f, size %.1f x %.1f x %.1f (car %.1f x %.1f), wheels x%.1f z%.1f r%.2f",
-		carId, scale, size.X, size.Y, size.Z, cfg.Size.X, cfg.Size.Z, wheelX * scale, wheelZ * scale, radius * scale)
+	local glass = model:FindFirstChild("Windows") and "found" or "NONE (seats keep the old Z; set SeatZ if needed)"
+	return string.format("%s: scale %.2f, size %.1f x %.1f x %.1f (car %.1f x %.1f), wheels x%.1f z%.1f r%.2f, glass %s",
+		carId, scale, size.X, size.Y, size.Z, cfg.Size.X, cfg.Size.Z, wheelX * scale, wheelZ * scale, radius * scale, glass)
 end
 
 -- Boats, second pass: turn the prepared body by `yaw` degrees about its pivot (so the bow faces -Z),

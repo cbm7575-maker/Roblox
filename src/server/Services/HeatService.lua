@@ -1,39 +1,37 @@
 -- HeatService (ModuleScript, ServerScriptService.Services.HeatService)
--- The wanted system, GTA 6 style: cops only know what they've seen. Tunables: Config.Police.
+-- The wanted system: cops only know what they've seen.
 --   Heat 1-5 (player attribute "Heat") comes from crimes; only citizens get heat.
---   Eyes: player cops, AI police cars and roadblocks (RegisterEye). A suspect is seen when an eye within
---     250 studs has a clear line of sight (cars and characters never block it; walls and smoke do), or
---     near a heist site with a live alarm. While seen: HeatSpotted = true and LastSeen follows them.
---   Unseen for 8 s -> hollow stars (HeatSpotted = false): the police only know the search circle around
---     LastSeen (attributes SearchX, SearchZ, SearchR). The escape countdown runs (attributes EscapeEnd =
---     server time the stars clear if they stay unseen, EscapeTotal = the full window at the current
---     rate, so (EscapeEnd - now) / EscapeTotal is the bar's fill). It runs twice as fast outside the
---     circle. At 0: heat gone ("You lost the cops!"). All five attributes are nil while spotted.
---   At 4+ stars the helicopter re-centres the circle on them every 20 s while hollow (not "seen").
---   Crimes found here: ramming a police car (+1, 20 s cooldown; hits confirmed by our own check or
---     VehicleDamageService.CarHit) and evading (+1 per 60 s of continuous seen-and-moving chase, up to
---     4 stars). Neither applies to a TutorialChase player.
--- Bounty for arresting someone = $500 per star + 25% of their carried cash.
--- API for other services:
---   Add(player, amount, reason)     a crime was seen: more heat, and it counts as a sighting
---   Reduce(player, amount, reason)  Clear(player, reason)   GetHeat(player)   Bounty(player)
---   IsSeen(player) -> bool          an eye sees them right now (or a crime just happened)
---   LastSeenPos(player) -> Vector3? the spot the police know about
---   LastSeenAgo(player) -> seconds since any eye saw them (math.huge if never)
---   SeenAgo(player, who) -> seconds since `who` (a cop Player or an eye BasePart) saw them
---   SearchArea(player) -> center, radius while hollow (nil while spotted)
---   EngagedCops(player) -> count, { cops } near them (400 studs) or who saw them in the last 20 s
---   Ping(player, pos) -> a tip-off (tracker, helicopter): moves LastSeen without counting as seen
---   RegisterEye(part) / UnregisterEye(part)
+--   HeatSpotted = true while a cop (player or AI "eye") can see you: within 250 studs and a clear
+--     line of sight. Cops then see your exact position (attribute LastSeen follows you).
+--   Not seen for 8 s -> hollow stars: cops only see a search circle around LastSeen.
+--   Not seen for 30 + 10 x heat seconds -> heat gone ("You lost the cops!").
+--   EscapeFrom / EscapeAt (server times, GetServerTimeNow) are set only while the stars are hollow: when
+--     the unseen clock started (the last sighting or crime report) and when it will let you go. The
+--     HUD's LOSING THEM meter fills from one to the other; both clear the moment you're seen again.
+--   A heist site with an active alarm is a hot zone: a wanted player within 60 studs is spotted.
+--   At 4+ stars LastSeen updates every 20 s even while hollow (the helicopter-style ping).
+--   WantedSince (server time, GetServerTimeNow) is set when heat goes from 0 to more, and cleared
+--     with the heat. AIPoliceService uses it for the head start before patrols come.
+-- Bounty for arresting someone = $500 per paid star + 25% of their carried cash. Stars that cost the
+--   wanted player nothing pay no bounty and no arrest XP: fight stars (CombatStars, CombatService) and
+--   breakout / hot-car stars (NoBountyStars, counted here). Both are trimmed as the heat goes down.
+-- Chase radar (MinimapClient's cop blips and screen arrows): ReplicatedStorage attribute ChaseRadar =
+--   "On" (AI patrols the whole chase, player cops only while seen), "Seen" (every cop only while a cop
+--   sees you) or "Off". RADAR below picks it; "Split" = each live server picks On or Off at random, so
+--   escape rates with and without the radar can be compared in the same week (Studio always gets On).
+-- Analytics: every chase end is logged (value = stars) as ChaseEnd_<how>_<radar>_<PvP|AI>, e.g.
+--   ChaseEnd_Escaped_On_AI. <how> = Escaped (unseen timer, disguise, respray or banking at the Hideout),
+--   Arrested or Left (quit while wanted); PvP = a player cop was on the server at some point in the chase.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Disguises = require(ReplicatedStorage.Shared.Config.Disguises)
-local Police = require(ReplicatedStorage.Shared.Config.Police)
+local Telemetry = require(ServerScriptService.Services.Telemetry)
 
 local HeatService = {}
 
@@ -81,22 +79,20 @@ local function noteClues(player)
 	end
 end
 
-local SIGHT_RANGE = Police.SightRange
-local HOLLOW_AFTER = Police.HollowAfter
+local SIGHT_RANGE = 250
+local HOLLOW_AFTER = 8
 local HOT_ZONE = 60
-local CHECK_EVERY = 0.4
-local SEEN_FRESH = CHECK_EVERY * 1.5 + 0.1 -- IsSeen: a sighting this recent counts as "now"
-local RAM_EVERY = 0.1
+local PING_EVERY = 20
+local CHECK_EVERY = 0.5
+local ESCAPE_BASE, ESCAPE_PER_STAR = 30, 10 -- unseen for 30 + 10 x heat seconds -> heat gone
+-- Chase radar mode (see the header): "On", "Seen", "Off" or "Split". After a week or so of Split data,
+-- set the winner here.
+local RADAR = "On"
 
-local lastSeenAt = {} -- [player] = os.clock() of the last sighting (or crime)
-local lastSeenPos = {} -- [player] = Vector3 the police know about
-local written = {} -- [player] = the LastSeen value this service last wrote (to spot outside pings)
+local lastSeenAt = {} -- [player] = os.clock()
 local lastPing = {} -- [player] = os.clock()
-local escapeLeft = {} -- [player] = seconds of unseen countdown left (at the inside-the-circle rate)
-local chaseFor = {} -- [player] = seconds of continuous seen-and-moving chase (evading)
-local ramAt = {} -- [player] = os.clock() of their last ramming crime
-local sightings = {} -- [player] = { [cop Player or eye BasePart] = os.clock() } (weak keys)
-local eyes = {} -- [BasePart] = true: extra eyes (AI police cars, roadblocks)
+local pvpChase = {} -- [player] = true once a player cop has been on the server during this chase
+local eyes = {} -- [BasePart] = true: extra eyes (AI police cars)
 
 local notify, feed
 
@@ -113,79 +109,103 @@ local function rootOf(player)
 	return char:FindFirstChild("HumanoidRootPart")
 end
 
-local function setAttr(player, key, value)
-	if player:GetAttribute(key) ~= value then
-		player:SetAttribute(key, value)
-	end
-end
-
-local function clearEscape(player)
-	escapeLeft[player] = nil
-	for _, key in ipairs({ "EscapeEnd", "EscapeTotal", "SearchX", "SearchZ", "SearchR" }) do
-		setAttr(player, key, nil)
-	end
-end
-
-local function forget(player)
-	lastSeenAt[player] = nil
-	lastSeenPos[player] = nil
-	written[player] = nil
-	lastPing[player] = nil
-	escapeLeft[player] = nil
-	chaseFor[player] = nil
-	sightings[player] = nil
-end
-
-local function progress()
-	return require(ServerScriptService.Services.ProgressService)
-end
-
 function HeatService.GetHeat(player)
 	return player:GetAttribute("Heat") or 0
 end
 
-function HeatService.Bounty(player)
-	return 500 * HeatService.GetHeat(player) + math.floor((player:GetAttribute("Carried") or 0) * 0.25)
+local function escapeSeconds(heat)
+	return ESCAPE_BASE + ESCAPE_PER_STAR * heat
 end
 
-local function setLastSeen(player, pos)
-	lastSeenPos[player] = pos
-	written[player] = pos
-	setAttr(player, "LastSeen", pos)
-end
-
--- Someone saw them (an eye, a camera, a witness): solid stars, the escape countdown stops.
-local function markSeen(player, root, clock)
-	lastSeenAt[player] = clock
-	if root then
-		setLastSeen(player, root.Position)
+-- The LOSING THEM meter's two ends (see the header); from = nil clears them. os.clock and server time
+-- meet here, so drifts under a quarter second are ignored (no attribute spam every tick).
+local function setEscape(player, from, at)
+	local oldAt, oldFrom = player:GetAttribute("EscapeAt"), player:GetAttribute("EscapeFrom")
+	if from == nil then
+		if oldAt ~= nil or oldFrom ~= nil then
+			player:SetAttribute("EscapeFrom", nil)
+			player:SetAttribute("EscapeAt", nil)
+		end
+	elseif typeof(oldAt) ~= "number" or typeof(oldFrom) ~= "number" or math.abs(oldAt - at) > 0.25
+		or math.abs(oldFrom - from) > 0.25 then
+		player:SetAttribute("EscapeFrom", from) -- before EscapeAt, so the meter never sees half a pair
+		player:SetAttribute("EscapeAt", at)
 	end
-	noteClues(player)
-	setAttr(player, "HeatSpotted", true)
-	clearEscape(player)
 end
 
--- A crime was seen (store camera, witness, a cop car rammed): add heat and mark where it happened.
+-- Stars that earn a bounty and arrest XP. Fight stars (CombatStars, set by CombatService) and
+-- breakout / hot-car stars (NoBountyStars) don't, so friends can't stage them and arrest each
+-- other for cash.
+function HeatService.PaidStars(player)
+	local free = (player:GetAttribute("CombatStars") or 0) + (player:GetAttribute("NoBountyStars") or 0)
+	return math.max(0, HeatService.GetHeat(player) - free)
+end
+
+function HeatService.Bounty(player)
+	return 500 * HeatService.PaidStars(player) + math.floor((player:GetAttribute("Carried") or 0) * 0.25)
+end
+
+-- Reasons whose stars cost the wanted player nothing yet (an empty bag): they pay no bounty.
+-- carjack: taking a street car (CarjackService), so friends can't jack cars to be arrested for cash.
+local NO_BOUNTY = { breakout = true, carboost = true, carjack = true }
+
+-- A crime was seen (store camera, witness): add heat and mark where it happened.
 function HeatService.Add(player, amount, reason)
 	if player:GetAttribute("Side") ~= "Civilian" then
 		return
 	end
-	local heat = math.clamp(HeatService.GetHeat(player) + amount, 0, 5)
-	player:SetAttribute("Heat", heat)
-	player:SetAttribute("HeatReason", reason)
-	if heat > 0 then
-		markSeen(player, rootOf(player), os.clock())
+	local before = HeatService.GetHeat(player)
+	local heat = math.clamp(before + amount, 0, 5)
+	if before <= 0 and heat > 0 then
+		player:SetAttribute("WantedSince", now()) -- set before Heat so both arrive together
 	end
+	player:SetAttribute("Heat", heat)
+	if NO_BOUNTY[reason] and heat > before then
+		player:SetAttribute("NoBountyStars", (player:GetAttribute("NoBountyStars") or 0) + heat - before)
+	end
+	lastSeenAt[player] = os.clock()
+	local root = rootOf(player)
+	if root then
+		player:SetAttribute("LastSeen", root.Position)
+	end
+	player:SetAttribute("HeatReason", reason)
+	-- The store camera (or the prison guards) saw what they look like.
+	noteClues(player)
+end
+
+-- How each chase ended, for analytics (reasons passed to Clear; "role" = switched side, not logged).
+local CHASE_END = {
+	escaped = "Escaped", disguise = "Escaped", spray = "Escaped", hideout = "Escaped", arrested = "Arrested",
+}
+
+-- One chase-end event, split by this server's radar mode (the attribute, so a live change in a Studio
+-- test is logged right too) and whether player cops were in it.
+local function logChaseEnd(player, how, heat)
+	local radar = tostring(ReplicatedStorage:GetAttribute("ChaseRadar") or "On")
+	Telemetry.Custom(player, "ChaseEnd_" .. how .. "_" .. radar .. (pvpChase[player] and "_PvP" or "_AI"), heat)
 end
 
 function HeatService.Clear(player, reason)
+	local heat = HeatService.GetHeat(player)
+	if heat > 0 and CHASE_END[reason] then
+		logChaseEnd(player, CHASE_END[reason], heat)
+	end
 	player:SetAttribute("Heat", 0)
 	player:SetAttribute("HeatSpotted", false)
 	player:SetAttribute("LastSeen", nil)
 	player:SetAttribute("SuspectOutfit", nil)
 	player:SetAttribute("SuspectCar", nil)
-	clearEscape(player)
-	forget(player)
+	player:SetAttribute("WantedSince", nil)
+	setEscape(player, nil)
+	lastSeenAt[player] = nil
+	lastPing[player] = nil
+	pvpChase[player] = nil
+end
+
+-- Escape XP and the "lose the cops" challenges leave fight stars out, like the bounty does (friends
+-- could otherwise stage fights for them). CombatStars is still set here: it's trimmed after Clear.
+local function escapeStars(player, heat)
+	return math.max(0, heat - (player:GetAttribute("CombatStars") or 0))
 end
 
 -- Drop some heat (disguise change, respray). Reaching 0 counts as losing the cops.
@@ -193,23 +213,14 @@ function HeatService.Reduce(player, amount, reason)
 	local before = HeatService.GetHeat(player)
 	local heat = math.max(0, before - amount)
 	if heat == 0 then
-		if before > 0 then
-			progress().Event(player, "Escape", before)
+		local paid = escapeStars(player, before)
+		if paid > 0 then
+			require(game:GetService("ServerScriptService").Services.ProgressService).Event(player, "Escape", paid)
 		end
 		HeatService.Clear(player, reason)
 		notify:FireClient(player, "LostTheCops")
 	else
 		player:SetAttribute("Heat", heat)
-		if escapeLeft[player] then
-			escapeLeft[player] = math.min(escapeLeft[player], Police.EscapeWindow(heat))
-		end
-	end
-end
-
--- A tip-off (GPS tracker, helicopter): the police learn where they are, but nobody "sees" them.
-function HeatService.Ping(player, pos)
-	if HeatService.GetHeat(player) > 0 and typeof(pos) == "Vector3" then
-		setLastSeen(player, pos)
 	end
 end
 
@@ -219,50 +230,6 @@ end
 
 function HeatService.UnregisterEye(part)
 	eyes[part] = nil
-end
-
-function HeatService.IsSeen(player)
-	local t = lastSeenAt[player]
-	return t ~= nil and os.clock() - t <= SEEN_FRESH
-end
-
-function HeatService.LastSeenPos(player)
-	return lastSeenPos[player]
-end
-
-function HeatService.LastSeenAgo(player)
-	local t = lastSeenAt[player]
-	return t and os.clock() - t or math.huge
-end
-
-function HeatService.SeenAgo(player, who)
-	local list = sightings[player]
-	local t = list and list[who]
-	return t and os.clock() - t or math.huge
-end
-
-function HeatService.SearchArea(player)
-	local heat = HeatService.GetHeat(player)
-	local center = lastSeenPos[player]
-	if heat <= 0 or not center or player:GetAttribute("HeatSpotted") then
-		return nil, nil
-	end
-	return center, Police.SearchRadius(heat)
-end
-
-function HeatService.EngagedCops(player)
-	local list = {}
-	local root = rootOf(player)
-	for _, cop in ipairs(Players:GetPlayers()) do
-		if cop ~= player and cop:GetAttribute("Side") == "Cop" then
-			local copRoot = rootOf(cop)
-			local near = root and copRoot and (copRoot.Position - root.Position).Magnitude <= Police.EngageRange
-			if near or HeatService.SeenAgo(player, cop) <= Police.EngageMemory then
-				table.insert(list, cop)
-			end
-		end
-	end
-	return #list, list
 end
 
 local losParams = RaycastParams.new()
@@ -278,43 +245,26 @@ local function canSee(fromPos, target)
 	return hit == nil or hit.Instance:IsDescendantOf(target.Parent)
 end
 
-local function escaped(player, heat)
-	-- Heat from a phone mission's "lose the cops" step: no stat or server-wide post (ProgressService
-	-- already gives it no XP), so missions can't be farmed for escapes.
-	local missionHeat = player:GetAttribute("MissionHeat") == true
-	progress().Event(player, "Escape", heat)
-	HeatService.Clear(player, "escaped")
-	notify:FireClient(player, "LostTheCops")
-	if not missionHeat then
-		player:SetAttribute("Evasions", (player:GetAttribute("Evasions") or 0) + 1)
-		feed:FireAllClients("Escaped", { Name = player.DisplayName })
-	end
-end
-
-local function tick(dt)
-	-- Everything that isn't a wall: characters, cars and roadblock cars never block sight.
-	local exclude = {}
-	for _, name in ipairs({ "Vehicles", "Roadblocks" }) do
-		local folder = Workspace:FindFirstChild(name)
-		if folder then
-			table.insert(exclude, folder)
-		end
-	end
-	local copEyes = {} -- { pos, who }
+local function tick()
+	-- Everything that isn't a wall: characters and cars never block sight.
+	local exclude = { Workspace:FindFirstChild("Vehicles") }
+	local copEyes = {}
+	local playerCops = false
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then
 			table.insert(exclude, p.Character)
 		end
 		if p:GetAttribute("Side") == "Cop" then
+			playerCops = true
 			local root = rootOf(p)
 			if root then
-				table.insert(copEyes, { pos = root.Position + Vector3.new(0, 2, 0), who = p })
+				table.insert(copEyes, root.Position + Vector3.new(0, 2, 0))
 			end
 		end
 	end
 	for part in pairs(eyes) do
 		if part.Parent then
-			table.insert(copEyes, { pos = part.Position + Vector3.new(0, 3, 0), who = part })
+			table.insert(copEyes, part.Position + Vector3.new(0, 3, 0))
 		else
 			eyes[part] = nil
 		end
@@ -322,8 +272,7 @@ local function tick(dt)
 	losParams.FilterDescendantsInstances = exclude
 
 	local alarms = {}
-	local heists = Workspace:FindFirstChild("Heists")
-	for _, site in ipairs(heists and heists:GetChildren() or {}) do
+	for _, site in ipairs(Workspace.Heists:GetChildren()) do
 		if now() < (site:GetAttribute("AlarmUntil") or 0) then
 			table.insert(alarms, site:GetPivot().Position)
 		end
@@ -332,290 +281,123 @@ local function tick(dt)
 	local clock = os.clock()
 	for _, player in ipairs(Players:GetPlayers()) do
 		local heat = HeatService.GetHeat(player)
-		if heat > 0 and player:GetAttribute("Side") ~= "Civilian" then
-			HeatService.Clear(player, "role")
-			continue
+		if heat > 0 and playerCops and player:GetAttribute("Side") == "Civilian" then
+			pvpChase[player] = true -- analytics only (logChaseEnd)
 		end
-		if heat <= 0 then
-			if lastSeenAt[player] or player:GetAttribute("EscapeEnd") or player:GetAttribute("SearchR") then
-				clearEscape(player)
-				forget(player) -- heat dropped to 0 somewhere else
-			end
-			continue
-		end
-		local root = rootOf(player)
-		if not root then
-			continue -- dead or respawning: the clocks wait
-		end
-		local pos = root.Position
-		-- Someone else moved LastSeen (a car tracker): that's the new search centre.
-		local attr = player:GetAttribute("LastSeen")
-		if typeof(attr) == "Vector3" and attr ~= written[player] then
-			lastSeenPos[player] = attr
-			written[player] = attr
-		end
-
-		local seen = false
-		local saw = sightings[player]
-		for _, eye in ipairs(copEyes) do
-			if eye.who ~= player and canSee(eye.pos, root) then
-				if not saw then
-					saw = setmetatable({}, { __mode = "k" })
-					sightings[player] = saw
-				end
-				saw[eye.who] = clock
-				seen = true
-			end
-		end
-		if not seen then
-			for _, at in ipairs(alarms) do
-				if (pos - at).Magnitude < HOT_ZONE then
-					seen = true
+		local root = heat > 0 and rootOf(player)
+		if root then
+			local spotted = false
+			for _, eye in ipairs(copEyes) do
+				if canSee(eye, root) then
+					spotted = true
 					break
 				end
 			end
-		end
-
-		local tutorial = player:GetAttribute("TutorialChase") == true
-		if seen then
-			markSeen(player, root, clock)
-			-- Evading: every minute of continuous chase on the move is another star (up to 4).
-			local v = root.AssemblyLinearVelocity
-			if Vector3.new(v.X, 0, v.Z).Magnitude > Police.EvadeMinSpeed then
-				chaseFor[player] = (chaseFor[player] or 0) + dt
-				if chaseFor[player] >= Police.EvadeSeconds then
-					chaseFor[player] = 0
-					if heat < Police.EvadeMaxStars and not tutorial then
-						HeatService.Add(player, 1, "evading")
-						notify:FireClient(player, "EvadingArrest")
+			if not spotted then
+				for _, pos in ipairs(alarms) do
+					if (root.Position - pos).Magnitude < HOT_ZONE then
+						spotted = true
+						break
 					end
 				end
 			end
-		else
-			local since = clock - (lastSeenAt[player] or clock)
-			if not lastSeenAt[player] then
-				lastSeenAt[player] = clock -- heat set without a sighting: start counting from now
-			end
-			if player:GetAttribute("HeatSpotted") and since > HOLLOW_AFTER then
-				player:SetAttribute("HeatSpotted", false)
-				chaseFor[player] = nil
-				lastPing[player] = clock
-			end
-			if not player:GetAttribute("HeatSpotted") then
-				-- The helicopter: at 4+ stars it finds them again every 20 s (a tip-off, not a sighting).
-				lastPing[player] = lastPing[player] or clock
-				if heat >= Police.PingStars and not tutorial and clock - lastPing[player] > Police.PingEvery then
-					lastPing[player] = clock
-					setLastSeen(player, pos)
+			if spotted then
+				lastSeenAt[player] = clock
+				player:SetAttribute("LastSeen", root.Position)
+				noteClues(player)
+				if not player:GetAttribute("HeatSpotted") then
+					player:SetAttribute("HeatSpotted", true)
 				end
-				local window = Police.EscapeWindow(heat)
-				local left = math.min(escapeLeft[player] or window, window)
-				local center = lastSeenPos[player] or pos
-				local radius = Police.SearchRadius(heat)
-				local outside = Vector3.new(pos.X - center.X, 0, pos.Z - center.Z).Magnitude > radius
-				local rate = outside and Police.OutsideRate or 1
-				left -= dt * rate
-				if left <= 0 then
-					escaped(player, heat)
+				setEscape(player, nil) -- seen: the LOSING THEM meter snaps back
+			else
+				-- (Heat set straight on the attribute has no sighting yet: its unseen clock starts now.)
+				lastSeenAt[player] = lastSeenAt[player] or clock
+				local since = clock - lastSeenAt[player]
+				if player:GetAttribute("HeatSpotted") and since > HOLLOW_AFTER then
+					player:SetAttribute("HeatSpotted", false)
+				end
+				if since > escapeSeconds(heat) then
+					local paid = escapeStars(player, heat)
+					if paid > 0 then
+						require(game:GetService("ServerScriptService").Services.ProgressService).Event(player, "Escape", paid)
+						player:SetAttribute("Evasions", (player:GetAttribute("Evasions") or 0) + 1)
+					end
+					HeatService.Clear(player, "escaped")
+					notify:FireClient(player, "LostTheCops")
+					feed:FireAllClients("Escaped", { Name = player.DisplayName })
 				else
-					escapeLeft[player] = left
-					local finish = now() + left / rate
-					local shown = player:GetAttribute("EscapeEnd")
-					if typeof(shown) ~= "number" or math.abs(shown - finish) > 0.25 then
-						player:SetAttribute("EscapeEnd", finish)
+					-- Hollow stars: publish the meter's ends (the same sum as the check above, so the
+					-- meter fills exactly when the heat goes). A new crime or a lost star moves them.
+					if not player:GetAttribute("HeatSpotted") then
+						local from = now() - since
+						setEscape(player, from, from + escapeSeconds(heat))
 					end
-					setAttr(player, "EscapeTotal", window / rate)
-					setAttr(player, "SearchX", math.floor(center.X + 0.5))
-					setAttr(player, "SearchZ", math.floor(center.Z + 0.5))
-					setAttr(player, "SearchR", radius)
-				end
-			end
-		end
-	end
-end
-
--- Ramming: a civilian's car driving into a police car (AI, or with a cop at the wheel). Two sources,
--- both judged on the velocities from before the hit (who was moving into whom):
---   * VehicleDamageService.CarHit (when that service exists): a confirmed car-on-car hit.
---   * Our own 10 Hz check: the cars touching now and their closing speed (along the same line) dropping
---     hard, so near misses don't count.
--- The 20 s cooldown per player keeps the two from counting one hit twice.
-local carHist = setmetatable({}, { __mode = "k" }) -- [car] = up to 3 samples { pos, vel, clock }, newest first
-
--- Pure maths (testable): did the civilian drive into the cop fast enough? (positions/velocities before)
-function HeatService._RamBlame(civPos0, civVel0, copPos0, copVel0)
-	local rel = Vector3.new(copPos0.X - civPos0.X, 0, copPos0.Z - civPos0.Z)
-	if rel.Magnitude < 0.1 then
-		return false, 0
-	end
-	local n = rel.Unit
-	local civIn = civVel0:Dot(n) -- the civilian moving at the cop
-	local copIn = -copVel0:Dot(n) -- the cop moving at the civilian
-	local closing = civIn + copIn
-	return closing >= Police.RamSpeed and civIn >= copIn, closing
-end
-
--- The same plus the hit itself: their closing speed along that line dropped hard.
-function HeatService._RamCheck(civPos0, civVel0, copPos0, copVel0, civVel1, copVel1)
-	local blame, closing = HeatService._RamBlame(civPos0, civVel0, copPos0, copVel0)
-	if not blame then
-		return false
-	end
-	local rel = Vector3.new(copPos0.X - civPos0.X, 0, copPos0.Z - civPos0.Z)
-	local n = rel.Unit
-	local after = civVel1:Dot(n) - copVel1:Dot(n)
-	return after < closing * 0.5
-end
-
-local function isCopCar(car)
-	return car:GetAttribute("Police") == true and (car:GetAttribute("AIPolice") == true or car:GetAttribute("DriverUserId") ~= nil)
-end
-
--- The civilian at the wheel (not a tutorial chase), if any.
-local function civDriver(car)
-	if car:GetAttribute("Police") == true then
-		return nil
-	end
-	local id = car:GetAttribute("DriverUserId")
-	local p = id and Players:GetPlayerByUserId(id)
-	if p and p:GetAttribute("Side") == "Civilian" and p:GetAttribute("TutorialChase") ~= true then
-		return p
-	end
-	return nil
-end
-
-local function canRam(driver)
-	return os.clock() - (ramAt[driver] or -math.huge) > Police.RamCooldown
-end
-
-local function rammed(driver)
-	ramAt[driver] = os.clock()
-	HeatService.Add(driver, 1, "ramming")
-	notify:FireClient(driver, "RammedCop")
-end
-
-local function sampleBefore(car, t)
-	for _, sample in ipairs(carHist[car] or {}) do
-		if sample.clock <= t then
-			return sample
-		end
-	end
-	return nil
-end
-
-local function onCarHit(car, other)
-	if typeof(car) ~= "Instance" or typeof(other) ~= "Instance" or not car:IsA("Model") or not other:IsA("Model") then
-		return
-	end
-	local driver = civDriver(car)
-	if not driver or not isCopCar(other) or not canRam(driver) then
-		return
-	end
-	-- The hit happened within the last damage sample (1/12 s): judge on samples from before it.
-	local clock = os.clock()
-	local a, b = sampleBefore(car, clock - 0.12), sampleBefore(other, clock - 0.12)
-	if a and b and clock - a.clock < 0.5 and clock - b.clock < 0.5 and HeatService._RamBlame(a.pos, a.vel, b.pos, b.vel) then
-		rammed(driver)
-	end
-end
-
-local function ramTick()
-	local folder = Workspace:FindFirstChild("Vehicles")
-	if not folder then
-		return
-	end
-	local clock = os.clock()
-	local cops, civs = {}, {}
-	for _, car in ipairs(folder:GetChildren()) do
-		if car:IsA("Model") and car.PrimaryPart then
-			if isCopCar(car) then
-				table.insert(cops, car)
-			elseif car:GetAttribute("Police") ~= true and car:GetAttribute("DriverUserId") ~= nil then
-				table.insert(civs, car)
-			end
-		end
-	end
-	if #cops > 0 then
-		for _, civ in ipairs(civs) do
-			local chassis = civ.PrimaryPart
-			local hist = carHist[civ]
-			local prev = hist and hist[1]
-			local driver = civDriver(civ)
-			if chassis and prev and clock - prev.clock < 0.3 and driver and canRam(driver) then
-				for _, cop in ipairs(cops) do
-					local copChassis = cop.PrimaryPart
-					local copHist = carHist[cop]
-					local copPrev = copHist and copHist[1]
-					if copChassis and copPrev and clock - copPrev.clock < 0.3 then
-						-- Touching now? (the civilian's centre within a car length of the cop's box)
-						local rel = copChassis.CFrame:PointToObjectSpace(chassis.Position)
-						local reach = chassis.Size.Z / 2 + 1.5
-						if math.abs(rel.X) <= copChassis.Size.X / 2 + reach and math.abs(rel.Z) <= copChassis.Size.Z / 2 + reach
-							and math.abs(rel.Y) < 8
-							and HeatService._RamCheck(prev.pos, prev.vel, copPrev.pos, copPrev.vel, chassis.AssemblyLinearVelocity,
-								copChassis.AssemblyLinearVelocity) then
-							rammed(driver)
-							break
-						end
+					if heat >= 4 and clock - (lastPing[player] or 0) > PING_EVERY then
+						lastPing[player] = clock
+						player:SetAttribute("LastSeen", root.Position)
 					end
 				end
 			end
+		elseif heat > 0 and player:GetAttribute("Side") ~= "Civilian" then
+			HeatService.Clear(player, "role")
 		end
 	end
-	for _, list in ipairs({ cops, civs }) do
-		for _, car in ipairs(list) do
-			local chassis = car.PrimaryPart
-			if chassis then
-				local hist = carHist[car] or {}
-				table.insert(hist, 1, { pos = chassis.Position, vel = chassis.AssemblyLinearVelocity, clock = clock })
-				hist[4] = nil
-				carHist[car] = hist
-			end
+end
+
+-- A couple of fallbacks (HideoutService, HeistService) set the Heat attribute directly, so
+-- WantedSince (and clearing the LOSING THEM meter and the chase's timers at 0) also follow the
+-- attribute itself.
+local function watchWanted(player)
+	player:GetAttributeChangedSignal("Heat"):Connect(function()
+		local heat = player:GetAttribute("Heat") or 0
+		if heat > 0 and player:GetAttribute("WantedSince") == nil then
+			player:SetAttribute("WantedSince", now())
+		elseif heat <= 0 and player:GetAttribute("WantedSince") ~= nil then
+			player:SetAttribute("WantedSince", nil)
 		end
-	end
+		if heat <= 0 then
+			setEscape(player, nil)
+			lastSeenAt[player] = nil -- a stale sighting must not end the next chase early
+			pvpChase[player] = nil
+		end
+		-- No-bounty stars go when the heat goes (CombatService trims CombatStars the same way).
+		local free = player:GetAttribute("NoBountyStars")
+		if free and free > heat then
+			player:SetAttribute("NoBountyStars", heat > 0 and heat or nil)
+		end
+	end)
 end
 
 function HeatService.Init()
 	notify = Remotes.Event("Notify")
 	feed = Remotes.Event("Feed")
+	-- This server's chase radar, read by every client's MinimapClient.
+	local radarMode = RADAR
+	if radarMode == "Split" then
+		radarMode = RunService:IsStudio() and "On" or (Random.new():NextNumber() < 0.5 and "On" or "Off")
+	end
+	ReplicatedStorage:SetAttribute("ChaseRadar", radarMode)
+	Players.PlayerAdded:Connect(watchWanted)
+	for _, p in ipairs(Players:GetPlayers()) do
+		watchWanted(p)
+	end
 	task.spawn(function()
-		local last = os.clock()
 		while true do
 			task.wait(CHECK_EVERY)
-			local t = os.clock()
-			local dt = math.min(t - last, 1)
-			last = t
-			local ok, err = pcall(tick, dt)
+			local ok, err = pcall(tick)
 			if not ok then
 				warn("[HeatService] " .. tostring(err))
 			end
 		end
 	end)
-	-- Confirmed car-on-car hits from VehicleDamageService (optional: our own check covers the rest).
-	local damageModule = ServerScriptService.Services:FindFirstChild("VehicleDamageService")
-	if damageModule then
-		local ok, VehicleDamageService = pcall(require, damageModule)
-		if ok and type(VehicleDamageService) == "table" and VehicleDamageService.CarHit then
-			VehicleDamageService.CarHit:Connect(function(car, other)
-				local fine, err = pcall(onCarHit, car, other)
-				if not fine then
-					warn("[HeatService] carhit " .. tostring(err))
-				end
-			end)
-		end
-	end
-	task.spawn(function()
-		while true do
-			task.wait(RAM_EVERY)
-			local ok, err = pcall(ramTick)
-			if not ok then
-				warn("[HeatService] ram " .. tostring(err))
-			end
-		end
-	end)
 	Players.PlayerRemoving:Connect(function(p)
-		forget(p)
-		ramAt[p] = nil
+		local heat = HeatService.GetHeat(p)
+		if heat > 0 and p:GetAttribute("Side") == "Civilian" then
+			logChaseEnd(p, "Left", heat) -- quit mid-chase
+		end
+		lastSeenAt[p] = nil
+		lastPing[p] = nil
+		pvpChase[p] = nil
 	end)
 end
 

@@ -4,12 +4,13 @@
 --   * Crewmates see each other's name tags through walls and on the minimap (CrewClient).
 --   * Crew bonus: +20% heist cash when a crewmate is within 150 studs (HeistService asks CrewBonus).
 --   * Friend bonus: +10% heist cash while any Roblox friend is in the server (attribute FriendBonus).
---   * Crewmates and Roblox friends can ride in each other's cars (VehicleService asks MayRide).
---   CrewService.AreFriends(a, b): cached Roblox friendship (never yields; false until looked up).
---   CrewService.FriendsAsync(a, b): the same, looking it up on a miss (Player:IsFriendsWith yields).
---   CrewService.MayRide(rider, owner): same crew or friends (may yield on a first lookup).
---   Every pair of players in the server is looked up once when the later one joins (cache cleared on
---   leave), so a Ride press almost never waits.
+--     Who is friends with whom is asked from Roblox once per pair when the later one joins and a yes is
+--     kept for the session (CrewService.AreFriends; FriendsService's co-op bonus uses it too). Every
+--     SWEEP seconds the pairs not known to be friends are asked again: that catches a check that failed
+--     and players who became friends while playing.
+--   * Crewmates can ride in each other's cars (VehicleService passenger seat checks SameCrew).
+--   * CrewService.Invite(from, target) sends the same invite card as the phone's INVITE button
+--     (FriendsService uses it when a friend arrives through a Roblox invite).
 -- State: player attribute "Crew" = crew id (string), ReplicatedStorage attribute "Crews" = JSON
 -- { [crewId] = { userIds } } so every client can draw tags.
 -- Remotes: RequestCrew(action, targetUserId) with action "Invite" | "Accept" | "Decline" | "Leave";
@@ -29,12 +30,14 @@ local CrewService = {}
 local MAX_CREW = 4
 local INVITE_SECONDS = 60
 local BONUS_RANGE = 150
+local SWEEP = 300 -- seconds between asks about the pairs not known to be friends
+local SWEEP_GAP = 0.2 -- seconds between two of those asks (spreads the web calls out)
 CrewService.CrewBonus = 0.2
 CrewService.FriendBonus = 0.1
 
 local crews = {} -- [crewId] = { members = { player, ... } }
-local friends = {} -- [lowUserId][highUserId] = bool (Player:IsFriendsWith answers, both ways)
 local invites = {} -- [targetPlayer] = { from = player, crewId = id or nil, at = os.clock() }
+local friendsOf = {} -- [player] = { [userId] = true } for each Roblox friend in this server
 local nextId = 0
 local notify, inviteEvent
 
@@ -58,43 +61,6 @@ end
 function CrewService.SameCrew(a, b)
 	local id = a:GetAttribute("Crew")
 	return id ~= nil and id == b:GetAttribute("Crew")
-end
-
-local function pairKey(a, b)
-	local x, y = a.UserId, b.UserId
-	if x > y then
-		x, y = y, x
-	end
-	return x, y
-end
-
-function CrewService.AreFriends(a, b)
-	local x, y = pairKey(a, b)
-	return friends[x] ~= nil and friends[x][y] == true
-end
-
-function CrewService.FriendsAsync(a, b)
-	if a == b then
-		return false
-	end
-	local x, y = pairKey(a, b)
-	local known = friends[x] and friends[x][y]
-	if known ~= nil then
-		return known
-	end
-	local ok, res = pcall(a.IsFriendsWith, a, b.UserId)
-	if not ok then
-		return false -- web hiccup: don't cache, ask again next time
-	end
-	if a.Parent == Players and b.Parent == Players then
-		friends[x] = friends[x] or {}
-		friends[x][y] = res == true
-	end
-	return res == true
-end
-
-function CrewService.MayRide(rider, owner)
-	return CrewService.SameCrew(rider, owner) or CrewService.FriendsAsync(rider, owner)
 end
 
 local function leave(player)
@@ -170,31 +136,37 @@ function CrewService.BonusFor(player)
 	return bonus
 end
 
+-- Send `from`'s crew invite card to `target`. Returns true when sent, else false and the Notify key
+-- that tells `from` why (nil when there's nothing to say: no such player, or already crewmates).
+function CrewService.Invite(from, target)
+	if not target or target == from or target.Parent ~= Players or CrewService.SameCrew(from, target) then
+		return false, nil
+	end
+	local crew = CrewService.CrewOf(from)
+	if crew and #crew.members >= MAX_CREW then
+		return false, "CrewFull"
+	end
+	local pending = invites[target]
+	if pending and os.clock() - pending.at < INVITE_SECONDS then
+		return false, "CrewInvitePending"
+	end
+	invites[target] = { from = from, at = os.clock() }
+	inviteEvent:FireClient(target, { FromUserId = from.UserId, FromName = from.DisplayName })
+	return true
+end
+
 local function onRequest(player, action, targetUserId)
 	if not RateLimit.Allow(player, "Crew", 2, 4) or type(action) ~= "string" then
 		return
 	end
 	if action == "Invite" then
-		local target = type(targetUserId) == "number" and Players:GetPlayerByUserId(targetUserId)
-		if not target or target == player then
-			return
+		local target = type(targetUserId) == "number" and Players:GetPlayerByUserId(targetUserId) or nil
+		local sent, why = CrewService.Invite(player, target)
+		if sent then
+			notify:FireClient(player, "CrewInviteSent")
+		elseif why then
+			notify:FireClient(player, why)
 		end
-		if CrewService.SameCrew(player, target) then
-			return
-		end
-		local crew = CrewService.CrewOf(player)
-		if crew and #crew.members >= MAX_CREW then
-			notify:FireClient(player, "CrewFull")
-			return
-		end
-		local pending = invites[target]
-		if pending and os.clock() - pending.at < INVITE_SECONDS then
-			notify:FireClient(player, "CrewInvitePending")
-			return
-		end
-		invites[target] = { from = player, at = os.clock() }
-		inviteEvent:FireClient(target, { FromUserId = player.UserId, FromName = player.DisplayName })
-		notify:FireClient(player, "CrewInviteSent")
 	elseif action == "Accept" or action == "Decline" then
 		local pending = invites[player]
 		invites[player] = nil
@@ -217,19 +189,51 @@ local function onRequest(player, action, targetUserId)
 	end
 end
 
--- Friend bonus: any Roblox friend in the same server. Fills the friend cache for every new pair.
+-- Are these two players Roblox friends? (From the cache: asked when the later one joined, then by the sweep.)
+function CrewService.AreFriends(a, b)
+	local set = friendsOf[a]
+	return set ~= nil and set[b.UserId] == true
+end
+
+-- Ask Roblox whether a and b are friends and remember a yes (both get the friend bonus). It's a web
+-- call that can fail: a failed answer counts as not friends until the next sweep asks again.
+local function askPair(a, b)
+	local ok, isFriend = pcall(a.IsFriendsWith, a, b.UserId)
+	-- Either one may have left while Roblox answered.
+	if ok and isFriend and a.Parent == Players and b.Parent == Players then
+		friendsOf[a] = friendsOf[a] or {}
+		friendsOf[b] = friendsOf[b] or {}
+		friendsOf[a][b.UserId] = true
+		friendsOf[b][a.UserId] = true
+		a:SetAttribute("FriendBonus", true)
+		b:SetAttribute("FriendBonus", true)
+	end
+end
+
+-- Friend bonus: any Roblox friend in the same server. A newcomer is asked about everyone here.
 local function checkFriends(player)
 	for _, other in ipairs(Players:GetPlayers()) do
-		if other ~= player and player.Parent == Players then
-			if CrewService.FriendsAsync(player, other) then
-				player:SetAttribute("FriendBonus", true)
-				other:SetAttribute("FriendBonus", true)
+		if other ~= player and not CrewService.AreFriends(player, other) then
+			askPair(player, other)
+		end
+	end
+end
+
+-- Every pair still not known to be friends, asked once more (far fewer calls than asking every pair
+-- whenever someone leaves).
+local function sweep()
+	local list = Players:GetPlayers()
+	for i, a in ipairs(list) do
+		for j = i + 1, #list do
+			local b = list[j]
+			if a.Parent == Players and b.Parent == Players and not CrewService.AreFriends(a, b) then
+				askPair(a, b)
+				task.wait(SWEEP_GAP)
 			end
 		end
 	end
 end
 
--- After someone leaves: who still has a friend here (cached answers only, no web calls).
 local function recheckFriendBonus()
 	for _, p in ipairs(Players:GetPlayers()) do
 		local any = false
@@ -251,21 +255,30 @@ function CrewService.Init()
 		task.spawn(checkFriends, p)
 	end)
 	for _, p in ipairs(Players:GetPlayers()) do
-		task.spawn(checkFriends, p) -- players already here when the service started
+		task.spawn(checkFriends, p) -- anyone who joined before this service started (Studio)
 	end
 	Players.PlayerRemoving:Connect(function(p)
 		leave(p)
 		invites[p] = nil
-		friends[p.UserId] = nil
-		for _, row in pairs(friends) do
-			row[p.UserId] = nil
-		end
 		for target, inv in pairs(invites) do
 			if inv.from == p then
 				invites[target] = nil
 			end
 		end
+		friendsOf[p] = nil
+		for _, set in pairs(friendsOf) do
+			set[p.UserId] = nil
+		end
 		task.defer(recheckFriendBonus)
+	end)
+	task.spawn(function()
+		while true do
+			task.wait(SWEEP)
+			local ok, err = pcall(sweep)
+			if not ok then
+				warn("[CrewService] friend sweep failed: " .. tostring(err))
+			end
+		end
 	end)
 	publish()
 	-- Crewmates stream out when far away, so publish each crew member's position (player attribute

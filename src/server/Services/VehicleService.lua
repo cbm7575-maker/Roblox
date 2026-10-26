@@ -1,38 +1,38 @@
 -- VehicleService (ModuleScript, ServerScriptService.Services.VehicleService)
--- Spawns and despawns cars, seats drivers and passengers, and hands each car's physics to its driver's
--- device. One car per player, from the cars they own (GarageService; starters are free for everyone).
+-- Spawns and despawns cars, seats drivers, and hands each car's physics to its driver's device.
+-- One car per player, from the cars they own (GarageService; starters are free for everyone).
 -- In Studio tests any car can be spawned.
---   * New characters find their last (or starter) car on the nearest free pad for their role.
---   * RequestSpawnCar (CAR button / phone Garage): not while Wanted, rate-limited, cooldown (3 s in Studio).
---     A boat launched within 60 studs of its pad puts you straight on it.
---   * Spawned cars wear their owner's paint, rims and underglow (GarageService.ApplyCustom).
---   * Cars in water for 2 s, out of the world, or idle 10 minutes (every seat empty) are removed.
---     Whoever sits in a car that goes away (or whose owner leaves) is put out beside it first.
---   * Player attribute LastCar = the last land car spawned (the HUD CAR button sends it back);
---     LastBoat = the last boat.
---   * Only the owner drives. Crewmates and the owner's Roblox friends ride (one Ride prompt, the free
---     passenger seat nearest them): same side only, never prisoners, not through walls, not while tased.
---   * Nobody gets in while tased (StunnedUntil). Getting out picks a free spot beside the door, then
---     the other side, the front, the back, and finally the roof, never through a wall.
---   * Getting out (RequestExitCar, F / EXIT, drivers and passengers alike) finds your seat even if the
---     server's Humanoid.SeatPart has lost it, removes every joint holding you to it, and answers with
---     ExitedCar (spot CFrame or nil) so your device lets go too.
---   * A cop's siren switches off when the driver gets out.
---   * Boats float past the end of the docks: their Drive / Ride prompts reach CarBuilder.BoatReach.
---
---   VehicleService.Spawn(player, id, opts) -> car | nil, reason ("unknown car" | "cooldown" | "no room")
---     opts.At = CFrame: spawn exactly there (the chassis centre, i.e. the car's pivot, nose along the
---       CFrame's LookVector; about 3.2 studs above the floor for land cars, like the pads). The space
---       check still runs (other cars, characters, City buildings) with a tight box: car size +0.6 wide,
---       +1 long. Works for boats too (no "boat delivered" GPS then).
---     opts.Sit = true: seat the player once it's there. opts.IgnoreCooldown = true: no spawn cooldown
---       (and it doesn't use one up). opts.PadSide = role: the nearest free pad for that role.
---   VehicleService.Despawn(userId), GetCar(player), CanDrive(side, id)
---   VehicleService.PassengerSeats(car) -> { Seat } (front passenger first)
---   VehicleService.SeatNPC(car, model) -> seat | nil: a non-player rider (taxi fares) sits visibly in the
---     first free passenger seat: its Humanoid makes way for an AnimationController (no physics, no
---     name tag), parts massless and non-colliding, welded to the seat, sitting pose; the seat gets
---     attribute NPCRider = true. ReleaseNPC(model, seat) unwelds it (the caller moves or removes it).
+--   * New characters find their last (or starter) car on the nearest free pad for their role, or, for
+--     free-roam home owners, on their home's driveway (HousingService.DrivewayFor). On join this waits
+--     up to VehicleService.JoinWait seconds for the save to load so the car goes to the right place.
+--   * The last land car you picked is saved, one per side (data.lastCar for civilians, data.lastCopCar
+--     for police cars), and is your starter car next time, if you still own it and can drive it on your
+--     side. The automatic starter car (opts.Auto) is never saved, so it can't replace your favourite.
+--     The last land car spawned is mirrored to the player attribute "LastCar" (the CAR button's
+--     choice); boats never are, so CAR after a boat trip still brings a car.
+--   * Drive (owner) and Ride (crewmate) prompts: not while tasered or knocked over, and not while you
+--     already sit somewhere (a "GetOutFirst" toast says so, at most one every 3 s).
+--   * RequestSpawnCar (CAR button / phone Garage): not while Wanted, not inside your home (use its
+--     garage), not on a home tour or in a penthouse room (CarNoRoom), rate-limited, cooldown (3 s in
+--     Studio). Asked from a seat (the phone opens while you
+--     drive): for a boat you stay seated; for a car you are stepped out first, as RequestExitCar does,
+--     unless you sit in a boat or the car is still rolling (then a "GetOutFirst" toast).
+--   * A launched boat waits at its pad (waitingBoats) and the vehicle you came in stays, so you can drive
+--     to the water. Sitting in the boat makes it your one vehicle and the other one goes. Until then
+--     GetCar answers with whichever of the two you stand nearer to.
+--   * Spawn opts.At: a CFrame or a list of them to try first (the home driveway).
+--   * Where a car may appear (isClear): not on other cars, people, buildings, homes or showrooms. Street
+--     furniture that cars drive through (PropService's "Props" collision group: hydrants, bins, benches,
+--     news boxes, lamp posts, signal poles) is not in the way; a piece that is still solid for cars is.
+--   * Spawned cars wear their owner's paint, rims and underglow, and their owner's tune
+--     (GarageService.ApplyCustom: the tuned MaxSpeed / Accel / Brake / Grip / TireFriction / NitroSeconds
+--     go onto the car's attributes, plus "Exhaust" and "TuneStage").
+--   * Every spawned land car then gets its body joint and door spots (CarBuilder.AddBodyJoint: BodyRoot /
+--     BodyJoint for the body lean VehicleFeel draws on each device, and the DriverDoor / PassengerDoor
+--     attachments InteractClient walks you to before you get in). Boats get neither.
+--   * Getting in is acted out on the player's own device (InteractClient: walk to the door, open it, hop
+--     in); the seating itself still happens here and in ImpactService, with the same checks as before.
+--   * Cars in water for 2 s, out of the world, or idle 10 minutes are removed.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -48,36 +48,25 @@ local CarBuilder = require(ServerStorage.Tools.CarBuilder)
 
 local VehicleService = {}
 
+-- Seconds after a new character appears that its starter car waits for the save to load. HousingService
+-- uses the same window for the home spawn, so the player and their car always end up in the same place.
+VehicleService.JoinWait = 15
+
 local SPAWN_COOLDOWN = RunService:IsStudio() and 3 or 30
 local REQUEST_GAP = 1 -- minimum seconds between spawn requests of any kind (spam guard)
 local IDLE_DESPAWN = 600
-local BOAT_AUTO_BOARD = 60 -- a boat launched this close to you seats you on it
 
 local carsByUser = {} -- [userId] = model
+-- [userId] = a boat launched at its pad that its owner hasn't sat in yet. Launching used to delete the car
+-- the player stood next to, leaving the boat at a marina they could only walk to; now the car stays until
+-- they take the boat (onOccupantChanged).
+local waitingBoats = {}
 local lastSpawn = {} -- [userId] = os.clock() of the last successful spawn
 local lastRequest = {} -- [userId] = os.clock() of the last request
 local idleSince = setmetatable({}, { __mode = "k" }) -- [model] = os.clock() it became empty
 local sunkFor = setmetatable({}, { __mode = "k" }) -- [model] = seconds in water
 
-local npcRider = setmetatable({}, { __mode = "k" }) -- [seat] = the taxi fare sitting there
-local notify, exitedEvent
-
--- Tased (ArrestService sets StunnedUntil in server time): no getting into cars.
-local function stunned(player)
-	return (player:GetAttribute("StunnedUntil") or 0) > Workspace:GetServerTimeNow()
-end
-
--- Close enough to the seat to really be at the car (prompt triggers are client claims). Boats float off
--- the dock ends, so their prompts (and this check) reach further.
-local SEAT_REACH = 20
-local BOAT_REACH = CarBuilder.BoatReach + 6
-local function reachOf(car)
-	return car:GetAttribute("Boat") and BOAT_REACH or SEAT_REACH
-end
-local function nearSeat(character, seat, reach)
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	return root ~= nil and (root.Position - seat.Position).Magnitude <= reach
-end
+local notify
 
 local function template(id)
 	local t = ServerStorage.VehicleTemplates:FindFirstChild(id)
@@ -87,45 +76,16 @@ local function template(id)
 	return CarBuilder.Build(id)
 end
 
--- Every seat a passenger can use, front passenger first (CarBuilder marks them Passenger = true).
-function VehicleService.PassengerSeats(car)
-	local list = {}
-	for _, d in ipairs(car:GetChildren()) do
-		if d:IsA("Seat") and (d:GetAttribute("Passenger") or d.Name == "PassengerSeat") then
-			table.insert(list, d)
-		end
-	end
-	table.sort(list, function(a, b)
-		return (a.Name == "PassengerSeat" and 0 or 1) < (b.Name == "PassengerSeat" and 0 or 1)
-			or ((a.Name == "PassengerSeat") == (b.Name == "PassengerSeat") and a.Name < b.Name)
-	end)
-	return list
-end
-
--- A rider who died in the seat (or whose character is gone) doesn't count as sitting there.
-local function stale(seat)
-	local occ = seat.Occupant
-	return occ ~= nil and (occ.Health <= 0 or not occ:IsDescendantOf(Workspace))
-end
-
-local function seatFree(seat)
-	return (seat.Occupant == nil or stale(seat)) and not seat:GetAttribute("NPCRider")
-end
-
--- Is anyone (player or taxi fare) in any seat of this car?
-local function occupied(car)
-	for _, d in ipairs(car:GetChildren()) do
-		if (d:IsA("Seat") or d:IsA("VehicleSeat")) and not seatFree(d) then
-			return true
-		end
-	end
-	return false
-end
-
--- Is there room for a car of `size` at `cf`? Checks other cars, characters, buildings and houses.
+-- Is there room for a car of `size` at `cf`? Checks other cars, characters, buildings, homes and dealerships.
+-- `ignore` (optional): a model that doesn't count (the player's own car, about to be replaced).
+-- Street furniture (Restyle, ArtKit): short, but a car spawned on a solid piece gets flung or wedged.
+-- PropService makes these pass-through for cars (collision group PROPS_GROUP), and then they are not in
+-- the way at all; the names only still count for a piece it left solid (Unbreakable, or no PropService).
+local SOLID_PROPS = { Hydrant = true, TrashCan = true, Bench = true, NewsBox = true }
+local PROPS_GROUP = "Props" -- PropService: never collides with "Vehicles"
 local clearParams = OverlapParams.new()
 clearParams.FilterType = Enum.RaycastFilterType.Include
-local function isClear(cf, size, margin)
+local function isClear(cf, size, ignore)
 	local list = { Workspace.Vehicles }
 	local city = Workspace:FindFirstChild("City")
 	for _, name in ipairs({ "Buildings", "Art", "Landmarks" }) do
@@ -133,9 +93,24 @@ local function isClear(cf, size, margin)
 			table.insert(list, city[name])
 		end
 	end
-	local houses = Workspace:FindFirstChild("Properties")
-	if houses then
-		table.insert(list, houses) -- never spawn a car inside someone's house
+	local homes = Workspace:FindFirstChild("Homes") -- HousingService's houses
+	if homes then
+		table.insert(list, homes)
+	end
+	local dealers = Workspace:FindFirstChild("Dealerships") -- showroom walls, display cars, the boat kiosk
+	if dealers then
+		table.insert(list, dealers)
+	end
+	local shops = Workspace:FindFirstChild("Shops") -- the Zap Shack
+	if shops then
+		table.insert(list, shops)
+	end
+	-- The apartment towers' street entrances (ApartmentService) and the Big Score's lots (BigScoreService).
+	for _, name in ipairs({ "Apartments", "BigScore" }) do
+		local folder = Workspace:FindFirstChild(name)
+		if folder then
+			table.insert(list, folder)
+		end
 	end
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then
@@ -143,13 +118,18 @@ local function isClear(cf, size, margin)
 		end
 	end
 	clearParams.FilterDescendantsInstances = list
-	local box = size + (margin or Vector3.new(2, 4, 3))
-	-- Flat things under the wheels (boardwalk planks, kerbs, road paint) don't block a spawn.
+	local box = size + Vector3.new(2, 4, 3)
+	-- Flat things under the wheels (boardwalk planks, kerbs, road paint, lawns) don't block a spawn,
+	-- but short solid street furniture does, whatever its height. Furniture cars drive through (lamp
+	-- posts and signal poles too, tall as they are) doesn't: a car can't get stuck on it any more.
 	local bottom = cf.Y - size.Y / 2
 	for _, p in ipairs(Workspace:GetPartBoundsInBox(cf * CFrame.new(0, 1.5, 0), box, clearParams)) do
-		local top = p.Position.Y + p.Size.Y / 2
-		if top > bottom + 0.8 or p.Size.Y > 3 then
-			return false
+		if p.CollisionGroup ~= PROPS_GROUP then
+			local top = p.Position.Y + p.Size.Y / 2
+			local prop = p.Parent and SOLID_PROPS[p.Parent.Name]
+			if (prop or top > bottom + 0.8 or p.Size.Y > 3) and not (ignore and p:IsDescendantOf(ignore)) then
+				return false
+			end
 		end
 	end
 	return true
@@ -158,7 +138,9 @@ end
 -- Ground in front of the player: only roads or open ground, never roofs or people, near foot level.
 local groundParams = RaycastParams.new()
 groundParams.FilterType = Enum.RaycastFilterType.Include
-local function spawnCFrame(player, size)
+-- `ignore` (optional): the player's own vehicle, about to be replaced. Stepped out of it a moment ago
+-- (a car asked for from its seat), it would otherwise be what's "in the way" of the new one.
+local function spawnCFrame(player, size, ignore)
 	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	local city = Workspace:FindFirstChild("City")
 	if not root or not city then
@@ -173,7 +155,7 @@ local function spawnCFrame(player, size)
 		if hit and hit.Normal.Y > 0.8 and math.abs(hit.Position.Y - (root.Position.Y - 3)) < 8 then
 			local pos = hit.Position + Vector3.new(0, 3.2, 0)
 			local cf = CFrame.lookAt(pos, pos + look)
-			if isClear(cf, size) then
+			if isClear(cf, size, ignore) then
 				return cf
 			end
 		end
@@ -202,291 +184,160 @@ local function padCFrame(side, size, near, boat)
 	return nil
 end
 
------------------------------------------------------------------- getting out
-
--- Where to stand after getting out: beside your door, else the other side, the front, the back
--- (each must be reachable from the seat without crossing a wall, with room to stand and ground or
--- water below), else on the roof. Returns a CFrame for the HumanoidRootPart, facing the car's way.
-local exitRay = RaycastParams.new()
-exitRay.FilterType = Enum.RaycastFilterType.Exclude
-exitRay.RespectCanCollide = true
-exitRay.IgnoreWater = true
-local groundRay = RaycastParams.new()
-groundRay.FilterType = Enum.RaycastFilterType.Exclude
-groundRay.RespectCanCollide = true
-local roomParams = OverlapParams.new()
-roomParams.FilterType = Enum.RaycastFilterType.Exclude
-roomParams.RespectCanCollide = true
-local ROOT_HEIGHT = 3.1 -- HumanoidRootPart centre above the feet
-local BODY_CHECKS = { -1.6, 0.2, 1.9 } -- knees, waist, head (relative to the root)
-
--- Would a standing body at `root` be inside something solid? (Checked against each part's own box,
--- so rotated buildings near the spot don't block it. Terrain is skipped: water is fine to stand in.)
-local function noRoom(root)
-	for _, p in ipairs(Workspace:GetPartBoundsInBox(CFrame.new(root + Vector3.new(0, 0.2, 0)), Vector3.new(2, 4.2, 2), roomParams)) do
-		if p:IsA("Terrain") then
-			continue
-		end
-		local half = p.Size / 2 + Vector3.new(1, 1, 1)
-		for _, dy in ipairs(BODY_CHECKS) do
-			local rel = p.CFrame:PointToObjectSpace(root + Vector3.new(0, dy, 0))
-			if math.abs(rel.X) < half.X and math.abs(rel.Y) < half.Y and math.abs(rel.Z) < half.Z then
-				return true
-			end
-		end
-	end
-	return false
+-- The player's saved profile, or nil (DataService starts after this service, so require it late).
+local function profileOf(player)
+	local ok, data = pcall(function()
+		return require(script.Parent.DataService).Get(player)
+	end)
+	return ok and data or nil
 end
 
-local function exitSpot(car, seat, character)
-	local chassis = car.PrimaryPart
-	local ignore = { car, character }
-	local smoke = Workspace:FindFirstChild("Smoke")
-	if smoke then
-		table.insert(ignore, smoke)
-	end
-	local npcs = Workspace:FindFirstChild("NPCs")
-	if npcs then
-		table.insert(ignore, npcs) -- taxi fares riding along
-	end
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then
-			table.insert(ignore, p.Character) -- people move; never let them block the door
-		end
-	end
-	exitRay.FilterDescendantsInstances = ignore
-	groundRay.FilterDescendantsInstances = ignore
-	roomParams.FilterDescendantsInstances = ignore
-	local look = chassis.CFrame.LookVector * Vector3.new(1, 0, 1)
-	look = look.Magnitude > 0.1 and look.Unit or Vector3.new(0, 0, -1)
-	local frame = CFrame.lookAt(chassis.Position, chassis.Position + look) -- yaw only
-	local half = chassis.Size / 2
-	local seatLocal = frame:PointToObjectSpace(seat.Position)
-	local side = seatLocal.X > 0.1 and 1 or -1 -- your own door: driver and left seats left, the rest right
-	local from = seat.Position + Vector3.new(0, 1.5, 0)
-	local y = from.Y - chassis.Position.Y
-	local tries = {
-		Vector3.new(side * (half.X + 2.4), y, seatLocal.Z),
-		Vector3.new(-side * (half.X + 2.4), y, seatLocal.Z),
-		Vector3.new(0, y, -(half.Z + 2.6)),
-		Vector3.new(0, y, half.Z + 2.6),
-	}
-	local low = Vector3.new(0, -1.2, 0) -- a second sight line at seat height, for low walls and fences
-	local fallback
-	for _, offset in ipairs(tries) do
-		local spot = frame * offset
-		if not Workspace:Raycast(from, spot - from, exitRay) and not Workspace:Raycast(from + low, spot - from, exitRay) then
-			-- Stand on whatever is below (kerb, road, slope); water counts (you'll swim).
-			local ground = Workspace:Raycast(spot + Vector3.new(0, 2, 0), Vector3.new(0, -14, 0), groundRay)
-			local root = ground and ground.Position + Vector3.new(0, ROOT_HEIGHT, 0) or spot
-			if not noRoom(root) then
-				if ground then
-					return CFrame.lookAt(root, root + look)
-				end
-				fallback = fallback or root -- a drop below (a bridge edge): only if nothing better
-			end
-		end
-	end
-	if fallback then
-		return CFrame.lookAt(fallback, fallback + look)
-	end
-	-- Boxed in: climb out onto the roof.
-	local _, size = car:GetBoundingBox()
-	local roof = chassis.Position + Vector3.new(0, math.max(size.Y / 2, half.Y + 2) + ROOT_HEIGHT, 0)
-	return CFrame.lookAt(roof, roof + look)
+-- Where a car's "last car" is saved: police cars (cop side) and everything else (civilian) are kept
+-- apart, so a patrol shift never replaces a civilian's favourite.
+local function savedKey(police)
+	return police and "lastCopCar" or "lastCar"
 end
 
--- The seat this character is in. Humanoid.SeatPart first; if the server has lost track of it (the
--- weld is there but SeatPart isn't), the seat weld on the root says.
-local function seatOf(character, hum)
-	local seat = hum.SeatPart
-	if seat then
-		return seat
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") then
-		return nil
-	end
-	for _, j in ipairs(root:GetJoints()) do
-		if j:IsA("JointInstance") and j.Name == "SeatWeld" then
-			local other = j.Part0 == root and j.Part1 or j.Part0
-			if other and (other:IsA("Seat") or other:IsA("VehicleSeat")) then
-				if RunService:IsStudio() then
-					warn("[VehicleService] exit: Humanoid.SeatPart was nil on the server; found the SeatWeld on " .. other:GetFullName())
-				end
-				return other
-			end
-		end
-	end
-	return nil
+-- The saved last car for this side, or nil.
+function VehicleService.LastCarFor(player, side)
+	local data = profileOf(player)
+	local id = data and data[savedKey(side == "Cop")]
+	return type(id) == "string" and Vehicles.ById[id] and id or nil
 end
 
--- Remove every joint that holds this character to the seat, and any dead SeatWeld left behind by an
--- earlier rider (its part gone from the world). The seat's own weld to the chassis stays.
-local function unweld(seat, character)
-	for _, j in ipairs(seat:GetChildren()) do
-		if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
-			local a, b = j.Part0, j.Part1
-			local mine = (a ~= nil and a:IsDescendantOf(character)) or (b ~= nil and b:IsDescendantOf(character))
-			local dead = j.Name == "SeatWeld" and (b == nil or not b:IsDescendantOf(Workspace))
-			if dead and not mine and RunService:IsStudio() then
-				warn("[VehicleService] exit: removed a leftover SeatWeld from " .. seat:GetFullName())
-			end
-			if mine or dead then
-				j:Destroy()
-			end
-		end
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
-		for _, j in ipairs(root:GetJoints()) do
-			if j:IsA("JointInstance") and j.Name == "SeatWeld" then
-				j:Destroy()
-			end
-		end
-	end
-end
-
--- Drop the welds of a rider who is gone (see stale) before someone new sits down.
-local function clearSeat(seat)
-	for _, j in ipairs(seat:GetChildren()) do
-		if j:IsA("JointInstance") and j.Name == "SeatWeld" then
-			local b = j.Part1
-			local occ = b and b.Parent and b.Parent:FindFirstChildOfClass("Humanoid")
-			if not b or not b:IsDescendantOf(Workspace) or (occ and occ.Health <= 0) then
-				j:Destroy()
-			end
-		end
-	end
-end
-
--- Put a player out of their seat, beside the car, and tell their device. Safe to call for any seat.
-local function exitPlayer(player, hum, seat)
-	local character = player.Character
-	if not character then
+-- Wait (at most `timeout` seconds) until the player's save has loaded. Returns right away if it has.
+local function waitForData(player, timeout)
+	if player:GetAttribute("DataLoaded") or player.Parent ~= Players then
 		return
 	end
-	local car = seat.Parent
-	local spot
-	if car and car:IsA("Model") and car.PrimaryPart then
-		local ok, res = pcall(exitSpot, car, seat, character)
-		spot = ok and res or nil
-		if not ok then
-			warn("[VehicleService] exit spot: " .. tostring(res))
+	local signal = Instance.new("BindableEvent")
+	local done = false
+	local function finish()
+		if not done then
+			done = true
+			signal:Fire()
 		end
 	end
-	unweld(seat, character)
-	hum.Sit = false
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
-		spot = spot or seat.CFrame * CFrame.new(seat.Name == "DriverSeat" and -4.5 or 4.5, 1.5, 0)
-		root.CFrame = spot
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.AssemblyAngularVelocity = Vector3.zero
-	end
-	if exitedEvent then
-		exitedEvent:FireClient(player, spot)
-	end
+	local conn = player:GetAttributeChangedSignal("DataLoaded"):Connect(finish)
+	task.delay(timeout, finish)
+	signal.Event:Wait()
+	conn:Disconnect()
 end
 
--- Everyone out (before a car goes away), each beside the car like a normal exit.
-local function ejectAll(car)
-	for _, seat in ipairs(car:GetChildren()) do
-		if seat:IsA("Seat") or seat:IsA("VehicleSeat") then
-			local hum = seat.Occupant
-			local p = hum and Players:GetPlayerFromCharacter(hum.Parent)
-			if p and hum then
-				local ok, err = pcall(exitPlayer, p, hum, seat)
-				if not ok then
-					warn("[VehicleService] eject: " .. tostring(err))
-				end
-			end
-		end
-	end
-end
-
------------------------------------------------------------------- non-player riders (taxi fares)
-
-function VehicleService.SeatNPC(car, model)
-	local root = model:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") or not car.Parent then
+-- Driveway spots of the player's home, if they own one and roam free (HousingService); else nil.
+local function homeDriveway(player)
+	local module = script.Parent:FindFirstChild("HousingService")
+	if not module then
 		return nil
 	end
-	local seat
-	for _, s in ipairs(VehicleService.PassengerSeats(car)) do
-		if seatFree(s) then
-			seat = s
-			break
-		end
-	end
-	if not seat then
-		return nil
-	end
-	-- A posed statue, not a physics humanoid (a humanoid welded into a car pushes it around).
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	local hip = hum and hum.HipHeight or 2
-	if hum then
-		hum:Destroy()
-	end
-	if not model:FindFirstChildOfClass("AnimationController") then
-		Instance.new("AnimationController").Parent = model
-	end
-	for _, d in ipairs(model:GetDescendants()) do
-		if d:IsA("BasePart") then
-			d.Anchored = false
-			d.CanCollide = false
-			d.CanTouch = false
-			d.CanQuery = false
-			d.Massless = true
-		end
-	end
-	-- Hips on the seat like a seated player (the same lift PedClient uses for bench sitters).
-	model:PivotTo(seat.CFrame * CFrame.new(0, seat.Size.Y / 2 + 1.45 * hip / 2, 0))
-	local w = Instance.new("WeldConstraint")
-	w.Name = "RiderWeld"
-	w.Part0 = seat
-	w.Part1 = root
-	w.Parent = root
-	seat:SetAttribute("NPCRider", true)
-	npcRider[seat] = model
-	model.Destroying:Once(function()
-		-- However the rider goes, the seat is free again.
-		if npcRider[seat] == model then
-			npcRider[seat] = nil
-			seat:SetAttribute("NPCRider", nil)
-		end
+	local ok, spots = pcall(function()
+		return require(module).DrivewayFor(player)
 	end)
-	CarBuilder.PlayPose(model, "sit")
-	return seat
+	return ok and spots or nil
 end
 
-function VehicleService.ReleaseNPC(model, seat)
-	local root = model:FindFirstChild("HumanoidRootPart")
-	local w = root and root:FindFirstChild("RiderWeld")
-	if w then
-		w:Destroy()
-	end
-	if seat and npcRider[seat] == model then
-		npcRider[seat] = nil
-		seat:SetAttribute("NPCRider", nil)
-	end
+-- Tasered or knocked over (server-time attributes from ArrestService / ImpactService)? No getting into a
+-- car until back up, so the cop gets their chance to cuff (ImpactService's F / GET IN checks the same).
+local function isDown(player)
+	local t = Workspace:GetServerTimeNow()
+	return (player:GetAttribute("StunnedUntil") or 0) > t or (player:GetAttribute("KnockedUntil") or 0) > t
 end
 
------------------------------------------------------------------- cars
+-- Where to stand after getting out: beside your door (driver left, passenger right), worked out on a
+-- level frame at the car's heading (seats may be reclined, CarBuilder.fitSeats, and the car may lie on
+-- its side or its roof). A wall, fence or car in the way: the other door, then the roof. Then onto the
+-- ground below. A seat with an ExitAt attribute (a world position) stands you there, facing its way.
+local exitParams = RaycastParams.new()
+exitParams.FilterType = Enum.RaycastFilterType.Exclude
+exitParams.RespectCanCollide = true -- see-through triggers and decorations aren't walls
+local function exitCFrame(seat)
+	-- A seat that names its own spot (ApartmentService's furniture: its model is the whole penthouse, so
+	-- every wall would count as "the car" and 4.5 studs lands on the next cushion or out through the glass).
+	local at = seat:GetAttribute("ExitAt")
+	if typeof(at) == "Vector3" then
+		local _, seatYaw = seat.CFrame:ToEulerAnglesYXZ()
+		return CFrame.new(at) * CFrame.Angles(0, seatYaw, 0)
+	end
+	local car = seat.Parent
+	local chassis = car and car.PrimaryPart
+	local _, yaw = (chassis and chassis.CFrame or seat.CFrame):ToEulerAnglesYXZ()
+	local flat = CFrame.new(seat.Position) * CFrame.Angles(0, yaw, 0)
+	-- People aren't walls (and never something to stand on).
+	local ignore = { car }
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then
+			table.insert(ignore, p.Character)
+		end
+	end
+	exitParams.FilterDescendantsInstances = ignore
+	local side = seat.Name == "DriverSeat" and -1 or 1
+	if chassis and chassis.CFrame.UpVector.Y < -0.3 then
+		side = -side -- on its roof: the heading stays the same but your door is now on the other side
+	end
+	-- Measured from the car's middle, not the seat (the driver sits 1.1-2.1 left of it: with his own side
+	-- blocked, 4.5 studs the other way was INSIDE the car). Both door spots end 2.2 clear of the flank,
+	-- then behind the car, then in front, and only then the roof. Real cars only: any other seat (a home's
+	-- couch: its model's PrimaryPart is the 51.5 x 62 floor) keeps 4.5 either side.
+	local body = (chassis and car:GetAttribute("NCVehicle") == true) and chassis or nil
+	local mid = body and flat:PointToObjectSpace(body.Position) or Vector3.zero
+	local half = body and body.Size / 2 or Vector3.zero
+	local across = math.max(half.X + 2.2, 4.5)
+	local spots = { Vector3.new(mid.X + side * across, 0, 0), Vector3.new(mid.X - side * across, 0, 0) }
+	if body then
+		local along = half.Z + 2.5
+		table.insert(spots, Vector3.new(mid.X, 0, mid.Z + along))
+		table.insert(spots, Vector3.new(mid.X, 0, mid.Z - along))
+	end
+	for _, o in ipairs(spots) do
+		local p = flat:PointToWorldSpace(o)
+		if not Workspace:Raycast(seat.Position, p - seat.Position, exitParams) then
+			local ground = Workspace:Raycast(p + Vector3.new(0, 3, 0), Vector3.new(0, -12, 0), exitParams)
+			local pos = ground and ground.Position + Vector3.new(0, 3, 0) or p + Vector3.new(0, 2, 0)
+			return CFrame.new(pos) * CFrame.Angles(0, yaw, 0)
+		end
+	end
+	-- Boxed in on both sides: out through the roof, onto the highest point of the car.
+	local top = seat.Position.Y + 5
+	if car and car:IsA("Model") then
+		local box, size = car:GetBoundingBox()
+		top = box.Y + (math.abs(box.RightVector.Y) * size.X + math.abs(box.UpVector.Y) * size.Y
+			+ math.abs(box.LookVector.Y) * size.Z) / 2 + 3
+	end
+	return CFrame.new(seat.Position.X, top, seat.Position.Z) * CFrame.Angles(0, yaw, 0)
+end
 
-function VehicleService.Despawn(userId)
-	local car = carsByUser[userId]
-	carsByUser[userId] = nil
+-- Removes the vehicle a player has in one slot (carsByUser or waitingBoats), if any.
+local function clearSlot(slot, userId)
+	local car = slot[userId]
+	slot[userId] = nil
 	if car then
 		idleSince[car] = nil
 		sunkFor[car] = nil
-		ejectAll(car)
 		car:Destroy()
 	end
 end
 
+-- Everything the player has out: their vehicle, and a boat still waiting for them at its pad.
+function VehicleService.Despawn(userId)
+	clearSlot(carsByUser, userId)
+	clearSlot(waitingBoats, userId)
+end
+
 function VehicleService.GetCar(player)
-	return carsByUser[player.UserId]
+	local car, boat = carsByUser[player.UserId], waitingBoats[player.UserId]
+	if not boat then
+		return car
+	end
+	-- A boat waiting at its pad is "your car" as well while you stand nearer to it than to the car you
+	-- came in: GET IN (ImpactService) asks this, and you need both, the car to drive there and then the
+	-- boat. Measured to the driver's seat, as the player's device does when it picks which one to enter.
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local carSeat, boatSeat = car and car:FindFirstChild("DriverSeat"), boat:FindFirstChild("DriverSeat")
+	if not car or (root and carSeat and boatSeat
+		and (boatSeat.Position - root.Position).Magnitude < (carSeat.Position - root.Position).Magnitude) then
+		return boat
+	end
+	return car
 end
 
 -- Can this role drive this car? Cops drive police vehicles, civilians everything else.
@@ -504,7 +355,7 @@ local function onOccupantChanged(car, seat)
 	if humanoid then
 		local player = Players:GetPlayerFromCharacter(humanoid.Parent)
 		if not player or car:GetAttribute("OwnerUserId") ~= player.UserId then
-			-- Only the owner drives (friends and crew ride in the passenger seats).
+			-- Only the owner drives for now (crews come with step 2.3).
 			local sw = seat:FindFirstChild("SeatWeld")
 			if sw then
 				sw:Destroy()
@@ -512,12 +363,19 @@ local function onOccupantChanged(car, seat)
 			return
 		end
 		idleSince[car] = nil
+		-- The owner has taken the boat that was waiting for them: from here on it is their one vehicle,
+		-- and the one they came in goes (the old swap, only not before they have reached the water).
+		if waitingBoats[player.UserId] == car then
+			waitingBoats[player.UserId] = nil
+			clearSlot(carsByUser, player.UserId)
+			carsByUser[player.UserId] = car
+		end
 		car:SetAttribute("DriverUserId", player.UserId)
 		chassis:SetNetworkOwner(player)
 	else
 		car:SetAttribute("DriverUserId", nil)
-		car:SetAttribute("Siren", nil) -- a parked cop car doesn't keep wailing
-		idleSince[car] = not occupied(car) and os.clock() or nil
+		local pseat = car:FindFirstChild("PassengerSeat")
+		idleSince[car] = not (pseat and pseat.Occupant) and os.clock() or nil
 		task.delay(1.5, function()
 			if car.Parent and seat.Occupant == nil and chassis:IsDescendantOf(Workspace) then
 				chassis:SetNetworkOwner(nil)
@@ -526,74 +384,10 @@ local function onOccupantChanged(car, seat)
 	end
 end
 
--- Ride along: crewmates and the owner's Roblox friends, same side, never prisoners, never through walls.
-local losParams = RaycastParams.new()
-losParams.FilterType = Enum.RaycastFilterType.Exclude
-losParams.IgnoreWater = true
-losParams.RespectCanCollide = true
-local function canRideNow(who, car)
-	local hum = who.Character and who.Character:FindFirstChildOfClass("Humanoid")
-	local owner = Players:GetPlayerByUserId(car:GetAttribute("OwnerUserId") or 0)
-	if not car.Parent or not hum or hum.Health <= 0 or hum.SeatPart or not owner or who == owner or stunned(who) then
-		return nil
-	end
-	-- Same side only, and never out of prison (the vent is the only way out).
-	local side = who:GetAttribute("Side")
-	if side == "Prisoner" or side ~= owner:GetAttribute("Side") then
-		return nil
-	end
-	return hum, owner
-end
-
-local function onRide(who, car)
-	if not RateLimit.Allow(who, "Ride", 2, 2) then
-		return
-	end
-	local hum, owner = canRideNow(who, car)
-	if not hum or not owner then
-		return
-	end
-	-- Crew, or a Roblox friend of the owner (cached; a first lookup can take a moment).
-	if not require(script.Parent.CrewService).MayRide(who, owner) then
-		return
-	end
-	hum, owner = canRideNow(who, car) -- again: the lookup may have yielded
-	local root = who.Character and who.Character:FindFirstChild("HumanoidRootPart")
-	if not hum or not owner or not root then
-		return
-	end
-	-- The free passenger seat nearest the rider, within reach.
-	local best, bestD
-	for _, s in ipairs(VehicleService.PassengerSeats(car)) do
-		local d = (root.Position - s.Position).Magnitude
-		if seatFree(s) and d < reachOf(car) and (not bestD or d < bestD) then
-			best, bestD = s, d
-		end
-	end
-	if not best then
-		return
-	end
-	clearSeat(best)
-	-- No riding through walls or fences (people, smoke and taxi fares never block the door).
-	local ignore = { car }
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then
-			table.insert(ignore, p.Character)
-		end
-	end
-	for _, name in ipairs({ "Smoke", "NPCs" }) do
-		local f = Workspace:FindFirstChild(name)
-		if f then
-			table.insert(ignore, f)
-		end
-	end
-	losParams.FilterDescendantsInstances = ignore
-	if Workspace:Raycast(root.Position, best.Position - root.Position, losParams) then
-		return
-	end
-	best:Sit(hum)
-end
-
+-- opts: { Sit = bool, PadSide = role name (spawn on that role's nearest pad), IgnoreCooldown = bool,
+--   At = CFrame or { CFrame, ... } (land cars: try these spots first, e.g. a home driveway; then
+--   PadSide's pad nearest them, then the road in front of the player),
+--   Auto = bool (the game picked this car, not the player: don't save it as their last car) }
 function VehicleService.Spawn(player, id, opts)
 	opts = opts or {}
 	local def = Vehicles.Resolve(id)
@@ -606,87 +400,154 @@ function VehicleService.Spawn(player, id, opts)
 	end
 	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	local cf
-	if typeof(opts.At) == "CFrame" then
-		-- An exact spot (a house garage): still never on top of another car or a person.
-		cf = isClear(opts.At, def.Size, Vector3.new(0.6, 3, 1)) and opts.At or nil
-	elseif def.Boat then
+	if def.Boat then
 		-- Boats launch from the nearest marina boat pad for your side, however far away it is.
 		local side = player:GetAttribute("Side") == "Cop" and "Cop" or "Civilian"
 		cf = root and padCFrame(side, def.Size, root.Position, true)
-	elseif opts.PadSide and root then
-		cf = padCFrame(opts.PadSide, def.Size, root.Position)
+	else
+		-- The pad fallback looks near the requested spots when there are some (on join the character
+		-- is still at the city spawn while HousingService moves it home), else near the player.
+		local near = root and root.Position
+		if opts.At then
+			local spots = typeof(opts.At) == "CFrame" and { opts.At } or opts.At
+			if typeof(spots[1]) == "CFrame" then
+				near = spots[1].Position
+			end
+			for _, spot in ipairs(spots) do
+				-- The player's current car doesn't count: it's replaced below.
+				if typeof(spot) == "CFrame" and isClear(spot, def.Size, carsByUser[player.UserId]) then
+					cf = spot
+					break
+				end
+			end
+		end
+		if not cf and opts.PadSide and near then
+			cf = padCFrame(opts.PadSide, def.Size, near)
+		end
 	end
-	if not cf and opts.At == nil and not def.Boat then
-		cf = spawnCFrame(player, def.Size)
-	end
+	cf = cf or (not def.Boat and spawnCFrame(player, def.Size, carsByUser[player.UserId]) or nil)
 	if not cf then
 		return nil, "no room"
 	end
 	if not opts.IgnoreCooldown then
 		lastSpawn[player.UserId] = now -- the free starter car on a pad doesn't use up the cooldown
 	end
-	VehicleService.Despawn(player.UserId)
+	-- A boat launches at the water, often far from here, and the player needs the car they came in to get
+	-- there: so a new boat only replaces an older boat that is still waiting, and their vehicle goes once
+	-- they sit in the boat (onOccupantChanged). A land car replaces their vehicle as it always did.
+	local slot = def.Boat and waitingBoats or carsByUser
+	clearSlot(slot, player.UserId)
 
 	local car = template(id)
 	car:SetAttribute("OwnerUserId", player.UserId)
-	car:SetAttribute("Health", 100) -- a fresh car is a repaired car (templates may lack it)
-	car:SetAttribute("StallUntil", nil)
 	local okCustom, err = pcall(function()
 		require(script.Parent.GarageService).ApplyCustom(car, player)
 	end)
 	if not okCustom then
 		warn("[VehicleService] custom paint failed: " .. tostring(err))
 	end
+	-- The body joint and door spots (CarBuilder.AddBodyJoint): a fresh Build has them already, a clone of
+	-- a saved template from before they existed gets them here. Before the car is placed, so every part
+	-- still sits where it was built. Only looks: a failure never costs the player their car.
+	local okJoint, errJoint = pcall(CarBuilder.AddBodyJoint, car)
+	if not okJoint then
+		warn("[VehicleService] body joint failed: " .. tostring(errJoint))
+	end
 	car:PivotTo(cf)
 	car.Parent = Workspace.Vehicles
-	carsByUser[player.UserId] = car
+	slot[player.UserId] = car
 	idleSince[car] = now
 	car.PrimaryPart:SetNetworkOwner(nil)
-	-- The HUD's CAR button respawns LastCar, so it only ever holds land cars.
-	player:SetAttribute(def.Boat and "LastBoat" or "LastCar", id)
+	-- The CAR button's choice: land cars only (a boat always launches at a marina, maybe far away).
+	if not def.Boat then
+		player:SetAttribute("LastCar", id)
+	end
+	-- Saved across sessions (land cars the player chose: that's the starter car next time).
+	if not def.Boat and not opts.Auto then
+		local data = profileOf(player)
+		if data then
+			data[savedKey(def.Police)] = id
+		end
+	end
 
 	local seat = car:FindFirstChild("DriverSeat")
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		onOccupantChanged(car, seat)
 	end)
-	local reach = reachOf(car)
 	local prompt = seat:FindFirstChild("DrivePrompt")
 	if prompt then
 		prompt.Triggered:Connect(function(who)
+			if isDown(who) then
+				return
+			end
 			local hum = who.Character and who.Character:FindFirstChildOfClass("Humanoid")
-			if hum and hum.Health > 0 and not hum.SeatPart and seatFree(seat)
-				and car:GetAttribute("OwnerUserId") == who.UserId and not stunned(who) and nearSeat(who.Character, seat, reach) then
-				clearSeat(seat) -- never sit on top of a dead rider's leftover weld
+			if hum and hum.SeatPart and hum.Health > 0 then
+				-- Sitting somewhere already (another car, a passenger seat): say why nothing happens, as
+				-- the Ride prompt does (they share the 3 s toast limit).
+				if RateLimit.Allow(who, "GetOutFirstToast", 1 / 3, 1) then
+					Remotes.Event("Notify"):FireClient(who, "GetOutFirst")
+				end
+				return
+			end
+			if hum and hum.Health > 0 and seat.Occupant == nil and car:GetAttribute("OwnerUserId") == who.UserId then
 				seat:Sit(hum)
 			end
 		end)
 	end
-	-- Passengers: one Ride prompt (on the front passenger seat) for every passenger seat.
-	for _, s in ipairs(VehicleService.PassengerSeats(car)) do
-		s:GetPropertyChangedSignal("Occupant"):Connect(function()
-			if s.Occupant then
-				idleSince[car] = nil
-			elseif not occupied(car) then
-				idleSince[car] = idleSince[car] or os.clock()
-			end
-		end)
-	end
-	local ride = car:FindFirstChild("RidePrompt", true)
-	if ride and ride:IsA("ProximityPrompt") then
+	-- Crewmates ride in the passenger seat.
+	local pseat = car:FindFirstChild("PassengerSeat")
+	local ride = pseat and pseat:FindFirstChild("RidePrompt")
+	if ride then
 		ride.Triggered:Connect(function(who)
-			onRide(who, car)
+			local hum = who.Character and who.Character:FindFirstChildOfClass("Humanoid")
+			local owner = Players:GetPlayerByUserId(car:GetAttribute("OwnerUserId") or 0)
+			if hum and hum.SeatPart and hum.Health > 0 then
+				-- Sitting in another car: say why nothing happens (shares the 3 s toast limit).
+				if RateLimit.Allow(who, "GetOutFirstToast", 1 / 3, 1) then
+					Remotes.Event("Notify"):FireClient(who, "GetOutFirst")
+				end
+				return
+			end
+			if not hum or hum.Health <= 0 or pseat.Occupant or not owner or who == owner or isDown(who) then
+				return
+			end
+			if not require(script.Parent.CrewService).SameCrew(who, owner) then
+				return
+			end
+			-- Same side only, and never out of prison (the vent is the only way out).
+			local side = who:GetAttribute("Side")
+			if side == "Prisoner" or side ~= owner:GetAttribute("Side") then
+				return
+			end
+			local root = who.Character:FindFirstChild("HumanoidRootPart")
+			if not root or (root.Position - pseat.Position).Magnitude >= 18 then
+				return
+			end
+			-- No riding through walls or fences. People don't block it: a seated driver's character stays
+			-- under Workspace (not the car), right across the ray from the driver's side.
+			local los = RaycastParams.new()
+			los.FilterType = Enum.RaycastFilterType.Exclude
+			local ignore = { car }
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p.Character then
+					table.insert(ignore, p.Character)
+				end
+			end
+			los.FilterDescendantsInstances = ignore
+			if Workspace:Raycast(root.Position, pseat.Position - root.Position, los) then
+				return
+			end
+			pseat:Sit(hum)
 		end)
 	end
 	-- A boat waiting at a far-off marina: no teleport; the client routes the GPS to it.
-	if def.Boat and opts.At == nil and root and (cf.Position - root.Position).Magnitude > BOAT_AUTO_BOARD then
+	if def.Boat and root and (cf.Position - root.Position).Magnitude > 60 then
 		Remotes.Event("BoatDelivered"):FireClient(player, { Pos = cf.Position, Name = def.DisplayName })
-	elseif opts.Sit and not stunned(player) then
+	elseif opts.Sit then
 		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		if hum and hum.Health > 0 then
 			task.defer(function()
-				if car.Parent and hum.Parent and hum.Health > 0 and not hum.SeatPart and seat.Occupant == nil then
-					seat:Sit(hum)
-				end
+				seat:Sit(hum)
 			end)
 		end
 	end
@@ -696,12 +557,15 @@ end
 function VehicleService.Init()
 	CarBuilder.EnsureGroups()
 	notify = Remotes.Event("Notify")
-	exitedEvent = Remotes.Event("ExitedCar")
 	Remotes.Event("BoatDelivered")
 	local requestSpawn = Remotes.Event("RequestSpawnCar")
 	local requestExit = Remotes.Event("RequestExitCar")
+	-- Server -> the player who just got out: the spot beside the door (a CFrame). Their own device runs
+	-- their body, so it is the one that has to stand it there (DriveController); see the exit handler.
+	local exitSpot = Remotes.Event("CarExitSpot")
 
 	-- H key: cops toggle their siren, everyone else honks (clients play the sound from the attribute).
+	-- Works in whatever car you're driving: your own, or a stolen hot car (CarBoostService).
 	local lastHorn = {}
 	Remotes.Event("RequestHorn").OnServerEvent:Connect(function(player)
 		local now = os.clock()
@@ -709,8 +573,10 @@ function VehicleService.Init()
 			return
 		end
 		lastHorn[player] = now
-		local car = carsByUser[player.UserId]
-		if not car or car:GetAttribute("DriverUserId") ~= player.UserId then
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = hum and hum.SeatPart
+		local car = seat and seat.Name == "DriverSeat" and seat.Parent
+		if not car or car.Parent ~= Workspace.Vehicles or car:GetAttribute("DriverUserId") ~= player.UserId then
 			return
 		end
 		if car:GetAttribute("Police") and player:GetAttribute("Side") == "Cop" then
@@ -741,47 +607,147 @@ function VehicleService.Init()
 			notify:FireClient(player, "CarNotOwned")
 			return
 		end
-		-- Wanted players may swap cars only while the cops can't see them (a GTA-style shake-off).
+		-- A show home on a tour has no garage of yours, and a penthouse room (ApartmentService) is up on a
+		-- roof: no room for a car (said before anyone is stood up from a couch for nothing).
+		if player:GetAttribute("Touring") or player:GetAttribute("InApartment") then
+			notify:FireClient(player, "CarNoRoom")
+			return
+		end
+		-- Inside your home (HousingService): pick a car in its garage, or step outside first.
+		if player:GetAttribute("InHome") then
+			notify:FireClient(player, "HomeUseGarage")
+			return
+		end
+		-- Wanted players may swap cars only while the cops can't see them (a classic shake-off).
 		if (player:GetAttribute("Heat") or 0) > 0 and player:GetAttribute("HeatSpotted") then
 			notify:FireClient(player, "NoCarWhileWanted")
 			return
 		end
 		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if not hum or hum.Health <= 0 or hum.SeatPart then
+		if not hum or hum.Health <= 0 then
 			return
 		end
-		-- Boats launched from close by board you straight away (they float off the dock ends).
-		local car, why = VehicleService.Spawn(player, id, { Sit = RunService:IsStudio() or Vehicles.ById[id].Boat == true })
+		-- Asked from a seat (the phone's GARAGE opens while you drive): DELIVER and LAUNCH used to close the
+		-- phone and do nothing, with no message.
+		local seat = hum.SeatPart
+		local sit = RunService:IsStudio()
+		if seat and Vehicles.ById[id].Boat then
+			-- A boat: stay in your car. The boat waits at the water and you drive there.
+			sit = false
+		elseif seat then
+			-- A car: step out first, then it is delivered as usual. Not out of a boat (that's a swim, with
+			-- no road for the car) and not while still rolling (the empty car would run off): say why.
+			local ride = seat.Parent
+			if (ride and ride:GetAttribute("Boat")) or seat.AssemblyLinearVelocity.Magnitude > 20 then
+				notify:FireClient(player, "GetOutFirst")
+				return
+			end
+			-- Still cooling down: say so before anyone is moved out of their seat for nothing.
+			if lastSpawn[player.UserId] and now - lastSpawn[player.UserId] < SPAWN_COOLDOWN then
+				notify:FireClient(player, "CarCooldown")
+				return
+			end
+			-- The same steps as RequestExitCar below.
+			local sw = seat:FindFirstChild("SeatWeld")
+			if sw then
+				sw:Destroy()
+			end
+			hum.Sit = false
+			local root = player.Character:FindFirstChild("HumanoidRootPart")
+			if root then
+				local target = exitCFrame(seat)
+				root.CFrame = target
+				exitSpot:FireClient(player, target) -- (their device stands them there: see RequestExitCar)
+			end
+			-- No Studio auto-seat this time (it would sit you down again in the very instant you stood up):
+			-- the new car is on the road in front of you, as it is for everyone in a live game.
+			sit = false
+		end
+		local car, why = VehicleService.Spawn(player, id, { Sit = sit })
 		if not car then
 			notify:FireClient(player, why == "cooldown" and "CarCooldown" or "CarNoRoom")
 		end
 	end)
 
-	-- F / EXIT (drivers and passengers). Never ignored for a lost SeatPart: the seat weld is found
-	-- either way, and the device always gets an answer (ExitedCar) so it can let go too.
 	requestExit.OnServerEvent:Connect(function(player)
-		if not RateLimit.Allow(player, "ExitCar", 4, 3) then
+		if not RateLimit.Allow(player, "ExitCar", 4, 4) then
 			return
 		end
-		local character = player.Character
-		local hum = character and character:FindFirstChildOfClass("Humanoid")
-		if not hum then
-			return
-		end
-		local seat = seatOf(character, hum)
-		if seat then
-			exitPlayer(player, hum, seat)
-		else
-			if RunService:IsStudio() then
-				warn("[VehicleService] exit request from " .. player.Name .. ": the server sees no seat; the device lets go itself")
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = hum and hum.SeatPart
+		if seat then -- any seat: nobody is ever stuck sitting
+			local sw = seat:FindFirstChild("SeatWeld")
+			if sw then
+				sw:Destroy()
 			end
-			exitedEvent:FireClient(player, nil) -- the server holds no seat for you: your device lets go
+			hum.Sit = false
+			local root = player.Character:FindFirstChild("HumanoidRootPart")
+			if root then
+				-- Step out beside your door, standing upright at the car's heading (exitCFrame).
+				local target = exitCFrame(seat)
+				root.CFrame = target
+				-- The player's own device runs their body, and it hears "the seat let go" and "you now
+				-- stand over there" as two separate things. When the move lost that race (seen on every
+				-- parked exit in a play test) the body stood up in the seat, was pushed up through the
+				-- roof and stayed standing on the car: to the player, F had not got them out. So their
+				-- device is told the spot and stands them there itself the moment the seat lets go
+				-- (DriveController), and as a safety net, for the next second: still on the spot of the
+				-- seat they left, put them beside the door again.
+				exitSpot:FireClient(player, target)
+				local seatAt = seat.Position
+				-- A seat's own ExitAt spot (penthouse furniture) can be nearer than that: there only nearer the
+				-- seat than the spot counts, else walking off along the island's stools would snap you back.
+				local reach = 2.6
+				if seat:GetAttribute("ExitAt") then
+					local gap = target.Position - seatAt
+					reach = math.min(reach, Vector3.new(gap.X, 0, gap.Z).Magnitude)
+				end
+				task.spawn(function()
+					for _ = 1, 10 do
+						task.wait(0.1)
+						if not root.Parent or hum.SeatPart ~= nil or hum.Health <= 0 then
+							return
+						end
+						local now = seat.Parent and seat.Position or seatAt
+						local off = root.Position - now
+						if Vector3.new(off.X, 0, off.Z).Magnitude < reach and math.abs(off.Y) < 9 then
+							root.AssemblyLinearVelocity = Vector3.zero
+							root.CFrame = target
+						end
+					end
+				end)
+			end
 		end
 	end)
 
-	-- Every new character finds its starter car on the nearest free pad (if they don't have one).
+	-- The saved last car becomes the CAR button's choice (when this side can drive it).
+	local okLoaded, errLoaded = pcall(function()
+		require(script.Parent.DataService).OnLoaded(function(player, data)
+			-- Older saves kept a police car in lastCar: move it to the cop slot.
+			local old = type(data.lastCar) == "string" and Vehicles.ById[data.lastCar] or nil
+			if old and old.Police then
+				data.lastCopCar = data.lastCopCar or data.lastCar
+				data.lastCar = nil
+			end
+			local side = player:GetAttribute("Side") or "Civilian"
+			local last = VehicleService.LastCarFor(player, side)
+			if last and not player:GetAttribute("LastCar") and VehicleService.CanDrive(side, last) then
+				player:SetAttribute("LastCar", last)
+			end
+		end)
+	end)
+	if not okLoaded then
+		warn("[VehicleService] couldn't hook saved cars: " .. tostring(errLoaded))
+	end
+
+	-- Every new character finds its starter car on the nearest free pad (if they don't have one), or
+	-- on its home's driveway.
 	local function onCharacter(player)
+		local t0 = os.clock()
 		task.wait(0.5)
+		-- On join the save may still be loading: wait for it, so the saved car goes to the saved home.
+		-- The window is counted from the moment the character appeared (as HousingService does).
+		waitForData(player, math.max(0, VehicleService.JoinWait - (os.clock() - t0)))
 		if player.Parent ~= Players or carsByUser[player.UserId] then
 			return
 		end
@@ -790,14 +756,15 @@ function VehicleService.Init()
 		if not team or not team.Starter then
 			return
 		end
-		local last = player:GetAttribute("LastCar")
+		local last = VehicleService.LastCarFor(player, side) or player:GetAttribute("LastCar")
 		local id = team.Starter
-		local lastDef = last and Vehicles.ById[last]
+		local lastDef = type(last) == "string" and Vehicles.ById[last] or nil
 		if lastDef and not lastDef.Boat and VehicleService.CanDrive(side, last)
 			and require(script.Parent.GarageService).Owns(player, last) then
 			id = last
 		end
-		VehicleService.Spawn(player, id, { PadSide = side, IgnoreCooldown = true })
+		-- Auto: the game picked this car, so it never replaces the player's saved favourite.
+		VehicleService.Spawn(player, id, { At = homeDriveway(player), PadSide = side, IgnoreCooldown = true, Auto = true })
 	end
 	local function onPlayer(player)
 		player.CharacterAdded:Connect(function()
@@ -813,50 +780,55 @@ function VehicleService.Init()
 	end
 
 	Players.PlayerRemoving:Connect(function(player)
-		VehicleService.Despawn(player.UserId) -- passengers are put out first
+		VehicleService.Despawn(player.UserId)
 		lastSpawn[player.UserId] = nil
 		lastRequest[player.UserId] = nil
 	end)
 
 	-- Housekeeping every second: cars in water, out of the world, or unused.
-	local function housekeeping()
-		local now = os.clock()
-		for userId, car in pairs(carsByUser) do
-			local chassis = car.PrimaryPart
-			local owner = Players:GetPlayerByUserId(userId)
-			if not chassis or not chassis:IsDescendantOf(Workspace) or chassis.Position.Y < -60 then
-				VehicleService.Despawn(userId)
-			elseif chassis.Position.Y < 0.2 and not car:GetAttribute("Boat") then
-				-- On land the chassis centre never drops below +1.6, so this means water (cars float
-				-- at about -2 in sea water). Two seconds in the water and the car is gone.
-				sunkFor[car] = (sunkFor[car] or 0) + 1
-				if sunkFor[car] >= 2 then
-					VehicleService.Despawn(userId)
-					if owner then
-						notify:FireClient(owner, "CarSank")
-					end
-				end
-			else
-				sunkFor[car] = nil
-				-- Idle = nobody in any seat (a passenger or a taxi fare keeps the car alive too).
-				if occupied(car) then
-					idleSince[car] = nil
-				elseif not idleSince[car] then
-					idleSince[car] = now
-				end
-				local since = idleSince[car]
-				if since and now - since > IDLE_DESPAWN then
-					VehicleService.Despawn(userId)
-				end
-			end
-		end
-	end
 	task.spawn(function()
 		while true do
 			task.wait(1)
-			local ok, e = pcall(housekeeping)
-			if not ok then
-				warn("[VehicleService] housekeeping: " .. tostring(e))
+			local now = os.clock()
+			-- Every player vehicle: the one they have out, and a boat still waiting for them at its pad.
+			-- Each is judged alone, so a car lost on the way to the water doesn't take the boat with it.
+			local all = {}
+			for userId, car in pairs(carsByUser) do
+				table.insert(all, { carsByUser, userId, car })
+			end
+			for userId, boat in pairs(waitingBoats) do
+				table.insert(all, { waitingBoats, userId, boat })
+			end
+			for _, entry in ipairs(all) do
+				local slot, userId, car = entry[1], entry[2], entry[3]
+				local chassis = car.PrimaryPart
+				local owner = Players:GetPlayerByUserId(userId)
+				if not chassis or not chassis:IsDescendantOf(Workspace) or chassis.Position.Y < -60 then
+					clearSlot(slot, userId)
+				elseif chassis.Position.Y < 0.2 and not car:GetAttribute("Boat") then
+					-- On land the chassis centre never drops below +1.6, so this means water (cars float
+					-- at about -2 in sea water). Two seconds in the water and the car is gone.
+					sunkFor[car] = (sunkFor[car] or 0) + 1
+					if sunkFor[car] >= 2 then
+						clearSlot(slot, userId)
+						if owner then
+							notify:FireClient(owner, "CarSank")
+						end
+					end
+				else
+					sunkFor[car] = nil
+					-- Idle = nobody in either seat (a passenger keeps the car alive too).
+					local dseat, pseat = car:FindFirstChild("DriverSeat"), car:FindFirstChild("PassengerSeat")
+					if (dseat and dseat.Occupant) or (pseat and pseat.Occupant) then
+						idleSince[car] = nil
+					elseif not idleSince[car] then
+						idleSince[car] = now
+					end
+					local since = idleSince[car]
+					if since and now - since > IDLE_DESPAWN then
+						clearSlot(slot, userId)
+					end
+				end
 			end
 		end
 	end)
