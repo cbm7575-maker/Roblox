@@ -69,8 +69,9 @@
 --         driving, when tools are put away): "Ammo", the weapon's name and "12 / ∞". On a phone the
 --         RELOAD and WEAPON buttons sit beside it.
 --       - Phone: FIRE and AIM sit above Roblox's jump button, left of the side column (LawClient.SideSlot)
---         and under the Buttons zone. Direct children Ammo / Fire / Aim / Reload / Weapon keep their
---         names: LawClient and AmbienceClient look them up.
+--         and under the Buttons zone (on the shortest phones, left of the jump button, clear of GET IN).
+--         Direct children Ammo / Fire / Aim / Reload / Weapon keep their names: LawClient and
+--         AmbienceClient look them up.
 --       - Crosshair; a small health bar over hurt players within 80 studs (green, thin blue armor line).
 --   * Coast Arms: the counter prompt ("Browse") opens the shop panel: every gun with damage / fire rate
 --     / range bars and a price, OWNED or rank lock, and body armor. BUY sends ("GunShopBuy", itemId); the
@@ -1835,9 +1836,21 @@ local function placeHud()
 	local right = math.floor(bx + bw) - 52 - gap
 	local room = jy - (by + bh) - fire -- pixels left over for the gap above FIRE and the gap below it
 	local fireBottom = math.floor(jy) - math.clamp(math.floor(room / 2), 2, gap)
+	local function hits(x, y, s, zoneName)
+		local zx, zy, zw, zh = zoneRect(zoneName, true)
+		return x < zx + zw and zx < x + s and y < zy + zh and zy < y + s
+	end
+	local beside = false -- FIRE sits left of the jump button, level with it (the shortest phones)
 	if room < 4 then
 		right = math.floor(bx) - gap
 		fireBottom = math.floor(jy) - gap
+		-- On the shortest phones (Galaxy S22 Ultra, Galaxy A16: 338 px tall) that spot runs into GET IN /
+		-- JACK (Action zone): then FIRE goes left of the jump button, level with it, and AIM left of FIRE,
+		-- if both still clear RELOAD.
+		local nr = math.floor(jx) - gap
+		if hits(right - fire, fireBottom - fire, fire, "Action") and nr - fire - gap - aim > weaponX + 2 * small + 2 * gap then
+			right, fireBottom, beside = nr, math.floor(jy + (js + fire) / 2), true
+		end
 	end
 	local fireX = right - fire
 	ui.fire.Size = UDim2.fromOffset(fire, fire)
@@ -1847,11 +1860,7 @@ local function placeHud()
 	-- (Subtitle zone) and the edge of GET IN / JACK (Action zone): then it sits left of the jump button,
 	-- level with it, still under the right thumb and clear of RELOAD.
 	local ax, ay = fireX - gap - aim, fireBottom - aim
-	local function covers(zoneName)
-		local zx, zy, zw, zh = zoneRect(zoneName, true)
-		return ax < zx + zw and zx < ax + aim and ay < zy + zh and zy < ay + aim
-	end
-	if covers("Subtitle") or covers("Action") then
+	if not beside and (hits(ax, ay, aim, "Subtitle") or hits(ax, ay, aim, "Action")) then
 		local nx = math.floor(jx) - gap - aim
 		if nx > weaponX + 2 * small + 2 * gap then
 			ax, ay = nx, math.floor(jy + (js - aim) / 2)
