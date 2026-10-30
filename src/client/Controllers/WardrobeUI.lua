@@ -52,6 +52,7 @@ local Workspace = game:GetService("Workspace")
 local Disguises = require(ReplicatedStorage.Shared.Config.Disguises)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
+local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
 
 local player = Players.LocalPlayer
 
@@ -1400,7 +1401,7 @@ local function onInputBegan(input, processed)
 	elseif PAD_TABS[key] then
 		setTab(PAD_TABS[key])
 		return
-	elseif key == Enum.KeyCode.ButtonY and not GuiService.MenuIsOpen then
+	elseif key == Enum.KeyCode.ButtonY and not RobloxMenu.IsOpen() then
 		wear() -- (not from behind Roblox's own menu: its Y is "Reset Character")
 		return
 	elseif key == Enum.KeyCode.ButtonR3 then

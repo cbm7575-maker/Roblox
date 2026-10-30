@@ -54,6 +54,23 @@ Heists.Types.SeaDream.Prep = {
 	Done = "Yacht alarm off! Get to the safe within 90 seconds.",
 }
 
+-- Store clerks (owner, Oct 30: hold a gun on the clerk instead of holding a button). HeistService puts a
+-- clerk behind the counter of these stores (when the store's art has a Counter by its till). Point a gun
+-- at them (HeistClient asks the server) and they put their hands up and fill a bag for Fill seconds
+-- while you stay within Range studs; the take is the store's payout plus Bonus. With chance Alarm they
+-- hit the silent alarm as it starts (the police hear at once, not after AlarmDelay). Shot or punched,
+-- they go down (a star for it) and no bag comes from them. Without a gun, the till's own Rob prompt
+-- still works, at the old hold time.
+Heists.Types.GlowMart.Clerk = { Fill = 6, Bonus = 0.25, Alarm = 0.5, Range = 30 }
+Heists.Types.FuelStop.Clerk = { Fill = 6, Bonus = 0.25, Alarm = 0.5, Range = 30 }
+Heists.Types.SparkleCo.Clerk = { Fill = 10, Bonus = 0.2, Alarm = 0.8, Range = 30 }
+
+-- Club Nova's safe is drilled, in stages (owner: bigger robberies shouldn't all be one held button). Hold
+-- Start seconds to set the drill (it's loud: the alarm and a star at once), stay within Range studs while
+-- it runs Time seconds (away longer than Leave seconds and it jams), then hold Grab seconds to empty the
+-- safe. Only whoever set it may empty it, within Expire seconds of it finishing.
+Heists.Types.ClubNova.Drill = { Start = 3, Time = 25, Grab = 3, Range = 28, Leave = 5, Expire = 60 }
+
 -- Solo is allowed on crew heists during early testing (CrewMin enforced once crews exist, step 2.3).
 Heists.EnforceCrewMin = false
 

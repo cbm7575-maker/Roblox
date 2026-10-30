@@ -177,6 +177,10 @@ K.CRIME_PROMPTS = { RobPrompt = true, PrepPrompt = true, PickLockPrompt = true, 
 -- Economy reasons for the shop (Telemetry reads them).
 K.GUN_REASON = { Pistol = "gun_pistol", SMG = "gun_smg", Shotgun = "gun_shotgun", Rifle = "gun_rifle" }
 K.GUN_KEY = {} -- [gun id] = its RateLimit key (made once, not on every shot)
+-- People the server put in the street that can be hit (Workspace.NPCs models with the attribute
+-- NPCKind), and the service that decides what a hit on each kind does (hitNPC).
+K.NPC_OWNERS = { Officer = "PoliceOfficerService", Clerk = "HeistService" }
+K.THREAT_MEMORY = 8 -- seconds a wanted citizen who fired a gun may be shot by a cop at 1 star (victimProblem)
 for id in pairs(Combat.Guns) do
 	K.GUN_KEY[id] = "Gun_" .. id
 end
@@ -206,6 +210,7 @@ S.lastHitInfo = {} -- [player] = { cop, civ, wanted, paid, since, gun }: what th
 -- [player] = the body a gun killed (until their next body): nothing more is taken from it, it can't be hit,
 -- it doesn't heal. Weak and never cleared on leaving: a body that goes after its player does still counts.
 S.killed = setmetatable({}, { __mode = "k" })
+S.carHitAt = setmetatable({}, { __mode = "k" }) -- [player] = os.clock() a car last hurt them (CarHit: Combat.CarHit.Gap)
 S.lastAttack = {} -- [player] = os.clock() they last landed a hit or fired (passive lock)
 S.lastAggroAt = {} -- [player] = os.clock() of their last accepted swing or shot, hit or miss
 S.lastAggroKind = {} -- [player] = "Fists" | "Gun"
@@ -1656,8 +1661,17 @@ local function victimProblem(attacker, victim, gun)
 	if side ~= "Civilian" and side ~= "Cop" then
 		return false
 	end
-	if gun and gun.MinStars and (side ~= "Civilian" or HeatService.GetHeat(victim) < gun.MinStars) then
-		return "CopHoldFire"
+	if gun and gun.MinStars then
+		-- (Owner, Oct 30: player cops may do what the AI officers do. A wanted citizen with a gun in hand,
+		-- or who fired one in the last K.THREAT_MEMORY seconds, may be shot from 1 star.)
+		local heat = side == "Civilian" and HeatService.GetHeat(victim) or 0
+		local threat = heat >= 1 and S.lastAggroKind[victim] == "Gun" and os.clock() - (S.lastAggroAt[victim] or -math.huge) < K.THREAT_MEMORY
+		for _, c in ipairs((heat >= 1 and not threat and victim.Character) and victim.Character:GetChildren() or {}) do
+			threat = threat or (c:IsA("Tool") and c:GetAttribute(K.ATTR) == "Gun")
+		end
+		if heat < gun.MinStars and not threat then
+			return "CopHoldFire"
+		end
 	end
 	local hum, root = body(victim)
 	if not hum or hum.SeatPart or S.killed[victim] == victim.Character then
@@ -1913,10 +1927,13 @@ local function payBounty(attacker, victim, paid, wasCitizen, since)
 	return amount, cop and "Bounty" or "Vigilante"
 end
 
--- A gun took their health to 0: they die. The money, heat and bounty go exactly as for a knockout, then
--- the body falls limp for good and its health goes to 0 K.KILL_DELAY later. After that the death is
--- ArrestService's (police right there: an arrest on the spot) and RespawnService's (RESPAWN); onFled,
--- which every death runs, does nothing for this body (S.killed). Returns true.
+-- A gun took their health to 0 (or a car did: CombatService.CarHit): they die. The money, heat and
+-- bounty go exactly as for a knockout, then the body falls limp for good and its health goes to 0
+-- K.KILL_DELAY later. After that the death is ArrestService's (police right there: an arrest on the
+-- spot) and RespawnService's (RESPAWN); onFled, which every death runs, does nothing for this body
+-- (S.killed). attacker: nil when nobody did it (traffic, an AI patrol): no heat, bounty or ELIMINATED
+-- then. gun: the gun table, or { Name, Cause (the death screen's line), Ragdoll (RagdollService's
+-- reason) } for something else. Returns true.
 local function kill(attacker, victim, hum, root, dir, speed, gun)
 	local char = victim.Character
 	S.killed[victim] = char
@@ -1928,15 +1945,21 @@ local function kill(attacker, victim, hum, root, dir, speed, gun)
 	local bagPos, walletPos = groundSpots(root, flat(-dir)) -- (a little toward the attacker)
 	local dropped = dropBag(victim, bagPos)
 	local wallet = citizen and dropWallet(victim, walletPos) or 0
-	koHeat(attacker, victim, nil, true)
-	local bounty, bountyKind = payBounty(attacker, victim, HeatService.PaidStars(victim), citizen, victim:GetAttribute("WantedSince"))
-	fxRemote:FireClient(victim, "Killed", { By = attacker.DisplayName, Gun = gun.Name, Dropped = dropped, Wallet = wallet })
-	fxRemote:FireClient(attacker, "KOd", { Name = victim.DisplayName, Dropped = dropped, Wallet = wallet, Bounty = bounty,
-		BountyKind = bountyKind, Killed = true })
+	local bounty, bountyKind = 0, nil
+	if attacker then
+		koHeat(attacker, victim, nil, true)
+		bounty, bountyKind = payBounty(attacker, victim, HeatService.PaidStars(victim), citizen, victim:GetAttribute("WantedSince"))
+	end
+	fxRemote:FireClient(victim, "Killed", { By = attacker and attacker.DisplayName or nil, Gun = gun.Name, Cause = gun.Cause,
+		Dropped = dropped, Wallet = wallet })
+	if attacker then
+		fxRemote:FireClient(attacker, "KOd", { Name = victim.DisplayName, Dropped = dropped, Wallet = wallet, Bounty = bounty,
+			BountyKind = bountyKind, Killed = true })
+	end
 	if RagdollService then
 		-- (The same hop as a knockout's fall: ImpactService.)
 		local ok, err = pcall(RagdollService.KnockDown, victim, nil, dir * math.clamp(speed * 0.25, 10, 22) + Vector3.new(0, 14, 0),
-			"shot", K.DEAD)
+			gun.Ragdoll or "shot", K.DEAD)
 		if not ok then
 			warn("[CombatService] ragdoll: " .. tostring(err))
 		end
@@ -2026,6 +2049,41 @@ local function onFled(player, char)
 	end
 end
 
+------------------------------------------------------------------ people the server put in the street
+
+-- A hit on one of them (an officer, a shop clerk): the service that owns that kind decides what it does
+-- (looked up when first needed: they require this module). Returns true if it counted.
+local function hitNPC(attacker, model, damage, dir, kind)
+	local owner = K.NPC_OWNERS[model:GetAttribute("NPCKind")]
+	local module = owner and ServerScriptService.Services:FindFirstChild(owner)
+	local ok, svc = pcall(function()
+		return module and require(module)
+	end)
+	if not ok or type(svc) ~= "table" or type(svc.NPCHit) ~= "function" then
+		return false
+	end
+	local ran, counted = pcall(svc.NPCHit, model, attacker, damage, dir, kind)
+	if not ran then
+		warn("[CombatService] " .. tostring(owner) .. ".NPCHit: " .. tostring(counted))
+		return false
+	end
+	return counted == true
+end
+
+-- The hittable NPC a part belongs to (a living model straight under Workspace.NPCs with an NPCKind), or nil.
+local function npcOf(inst)
+	local npcs = Workspace:FindFirstChild("NPCs")
+	if not npcs or not inst:IsDescendantOf(npcs) then
+		return nil
+	end
+	local model = inst:FindFirstAncestorOfClass("Model")
+	while model and model.Parent ~= npcs do
+		model = model:FindFirstAncestorOfClass("Model")
+	end
+	local hum = model and model:GetAttribute("NPCKind") ~= nil and model:FindFirstChildOfClass("Humanoid")
+	return (hum and hum.Health > 0) and model or nil
+end
+
 ------------------------------------------------------------------ punches and shots
 
 -- A hit that passed every check. kind: "Punch" | "Gun"; damage: the whole hit (a shotgun's pellets
@@ -2113,10 +2171,31 @@ local function punchCandidates(attacker, root, suggested)
 	return list
 end
 
-local function onPunch(player, suggested)
+-- Bare hands: the attack key (CombatClient: X, or a click / R2 with nothing held) throws a punch without
+-- picking Fists first. Nothing in the hand and Fists in the backpack: they go into the hand here, so
+-- the punch below finds them (the client equips them too, but that arrives later than this request).
+local function bareHands(player)
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local pack = player:FindFirstChildOfClass("Backpack")
+	if not hum or not pack or hum.SeatPart or char:FindFirstChildOfClass("Tool") then
+		return
+	end
+	for _, c in ipairs(pack:GetChildren()) do
+		if c:IsA("Tool") and c:GetAttribute(K.ATTR) == "Fists" then
+			hum:EquipTool(c)
+			return
+		end
+	end
+end
+
+local function onPunch(player, suggested, bare)
 	local t = os.clock()
 	if t - (S.lastSwing[player] or 0) < FISTS.Cooldown * 0.8 then
 		return -- (a little slack for network jitter)
+	end
+	if bare == true and player:GetAttribute("Side") == "Civilian" then
+		bareHands(player)
 	end
 	local problem = attackerProblem(player, true)
 	if problem ~= nil then
@@ -2125,6 +2204,7 @@ local function onPunch(player, suggested)
 	end
 	S.lastSwing[player] = t
 	S.lastAggroAt[player], S.lastAggroKind[player] = t, "Fists" -- a swing counts, hit or miss (PedService)
+	player:SetAttribute("Surrender", nil) -- (hands up and swinging is no surrender: PoliceOfficerService)
 	-- Everyone else's CombatClient throws the jab (or the cross) on this player's arms when it changes.
 	local fists = findFists(player.Character)
 	if fists then
@@ -2146,6 +2226,31 @@ local function onPunch(player, suggested)
 			return
 		elseif firstProblem == nil then
 			firstProblem = why
+		end
+	end
+	-- No player in reach: someone the server put in the street (an officer, a clerk) right in front?
+	local npcs = firstProblem == nil and Workspace:FindFirstChild("NPCs")
+	if npcs then
+		local look = flat(root.CFrame.LookVector)
+		look = look.Magnitude > 0.05 and look.Unit or Vector3.new(0, 0, -1)
+		local best, bestD, bestRoot
+		for _, m in ipairs(npcs:GetChildren()) do
+			local r = m:IsA("Model") and m:GetAttribute("NPCKind") ~= nil and m:FindFirstChild("HumanoidRootPart")
+			if r and r:IsA("BasePart") then
+				local rel = r.Position - root.Position
+				local d = flat(rel).Magnitude
+				if d <= FISTS.Range + FISTS.Slack and math.abs(rel.Y) < 6 and (d < 1 or flat(rel).Unit:Dot(look) > FISTS.Cone)
+					and (not bestD or d < bestD) then
+					best, bestD, bestRoot = m, d, r
+				end
+			end
+		end
+		if best then
+			local dir = flat(bestRoot.Position - root.Position)
+			if hitNPC(player, best, FISTS.Damage, dir.Magnitude > 0.1 and dir.Unit or look, "Punch") then
+				fxNear(bestRoot.Position, K.PUNCH_FX_RANGE, { player }, "Punch", player, nil, bestRoot.Position)
+				return
+			end
 		end
 	end
 	refuse(player, firstProblem) -- why the nearest one couldn't be hit (a whiff says nothing)
@@ -2223,6 +2328,7 @@ local function onFire(player, gunId, aim, suggested)
 	st.shot = t
 	S.lastAggroAt[player], S.lastAggroKind[player] = t, "Gun"
 	S.lastAttack[player] = t -- the passive lock starts on any shot, hit or miss
+	player:SetAttribute("Surrender", nil) -- (nor is shooting)
 	if player:GetAttribute("CombatSafeUntil") ~= nil then
 		-- Shooting ends your own after-knockout immunity, hit or miss: nobody fires from behind it.
 		player:SetAttribute("CombatSafeUntil", nil)
@@ -2243,16 +2349,25 @@ local function onFire(player, gunId, aim, suggested)
 	local pellets = gun.Pellets
 	local ends, onBody = table.create(pellets), table.create(pellets)
 	local victims, damages, spots -- made on the first body hit
+	local npcHits -- [NPC model] = { damage, spot }: pellets on people the server put in the street
 	local ignore = boltIgnore(player)
 	local lagIgnore -- made the first time the suggested target is checked
 	for i = 1, pellets do
 		local d = Combat.SpreadDir(dir, gun.Spread, rng)
 		local hit, stuck = firstSolid(origin, d * gun.Range, ignore)
 		local endPos, victim
+		local npc
 		if hit then
 			endPos = hit.Position
 			local model = hit.Instance:FindFirstAncestorOfClass("Model")
 			victim = model and Players:GetPlayerFromCharacter(model) or nil
+			npc = not victim and npcOf(hit.Instance) or nil
+			if npc then
+				npcHits = npcHits or {}
+				local rec = npcHits[npc] or { 0, endPos }
+				rec[1] += Combat.DamageAt(gun, (endPos - origin).Magnitude)
+				npcHits[npc] = rec
+			end
 		else
 			endPos = stuck or (origin + d * gun.Range)
 		end
@@ -2264,7 +2379,7 @@ local function onFire(player, gunId, aim, suggested)
 			end
 		end
 		ends[i] = endPos
-		onBody[i] = victim ~= nil
+		onBody[i] = victim ~= nil or npc ~= nil
 		if victim then
 			local damage = Combat.DamageAt(gun, (endPos - origin).Magnitude)
 			if not victims then
@@ -2294,6 +2409,11 @@ local function onFire(player, gunId, aim, suggested)
 			else
 				refuse(player, why) -- the round is spent and the shot is seen; it just does nothing
 			end
+		end
+	end
+	for model, rec in pairs(npcHits or {}) do
+		if hitNPC(player, model, rec[1], flat(dir), "Gun") then
+			fxRemote:FireClient(player, "HitMark", { Damage = rec[1], Pos = rec[2] })
 		end
 	end
 end
@@ -2364,7 +2484,7 @@ local function onAction(player, action, a, b, c)
 		return
 	end
 	if action == "Punch" then
-		onPunch(player, a)
+		onPunch(player, a, b)
 	elseif action == "Fire" then
 		onFire(player, a, b, c)
 	elseif action == "Reload" then
@@ -2980,7 +3100,121 @@ function CombatService.IsSafe(player)
 	return isSafe(player, root)
 end
 
--- Was their current body shot dead (kill)? ArrestService words the arrest on the spot by it.
+-- A car hit someone on foot (ImpactService: a player's car, an AI patrol, or street traffic as told by
+-- the victim's own device). Damage by the speed of the hit (Config Combat.CarHit): a bump takes a
+-- little, a fast hit most of the bar, and a second hard one, or being run over again while down, kills
+-- (a real death, as from a gun: kill). The same protections as a fight: safe zones, spawn protection,
+-- and from another player's car, passive mode and crewmates. driver: the player at the wheel (nil for
+-- AI patrols and traffic); what: the car's name; downAlready: they were lying in the road before this
+-- hit (it takes Combat.CarHit.Downed of the damage). selfReported: the victim's own device told us
+-- (street traffic): it never takes the last point of health, so it can't be a way to die on cue and
+-- rob an attacker of the knockout. Returns the damage taken.
+function CombatService.CarHit(victim, speed, dir, driver, what, downAlready, selfReported)
+	local cfg = Combat.CarHit
+	if not cfg or not fxRemote or typeof(victim) ~= "Instance" or not victim:IsA("Player") or victim.Parent ~= Players then
+		return 0
+	end
+	speed = tonumber(speed) or 0
+	if speed ~= speed or speed < cfg.MinSpeed then
+		return 0
+	end
+	if typeof(driver) ~= "Instance" or not driver:IsA("Player") or driver == victim or driver.Parent ~= Players then
+		driver = nil
+	end
+	local hum, root = body(victim)
+	local side = victim:GetAttribute("Side")
+	if not hum or hum.SeatPart or S.killed[victim] == victim.Character or (side ~= "Civilian" and side ~= "Cop") then
+		return 0
+	end
+	if isSafe(victim, root) or running(victim, "SpawnSafeUntil") then
+		return 0
+	end
+	if driver then
+		local crew = driver:GetAttribute("Crew")
+		if isPassive(victim) or isPassive(driver) or (crew ~= nil and crew == victim:GetAttribute("Crew")) then
+			return 0
+		end
+		-- A cop's car hurts only wanted citizens, like a cop's gun (the knock-down still happens).
+		if driver:GetAttribute("Side") == "Cop" and (side ~= "Civilian" or HeatService.GetHeat(victim) < 1) then
+			return 0
+		end
+	end
+	local t = os.clock()
+	if t - (S.carHitAt[victim] or -math.huge) < cfg.Gap then
+		return 0
+	end
+	S.carHitAt[victim] = t
+	local damage = math.min(cfg.Max, cfg.Damage + (math.min(speed, 400) - cfg.MinSpeed) * cfg.PerSpeed)
+	if downAlready then
+		damage *= cfg.Downed
+	end
+	damage = math.floor(damage + 0.5)
+	-- Body armor (citizens only) soaks part of it, then health.
+	local armor = side == "Civilian" and (victim:GetAttribute("Armor") or 0) or 0
+	local soak = math.clamp(math.floor(damage * cfg.ArmorShare), 0, armor)
+	if soak > 0 then
+		setArmor(victim, armor - soak)
+	end
+	S.lastHitAt[victim] = t -- (health only starts coming back Combat.DrainDelay after this)
+	if driver then
+		S.lastAttacker[victim] = driver -- (a Reset now counts as the driver's knockout: onFled)
+	end
+	local push = typeof(dir) == "Vector3" and flat(dir) or Vector3.zero
+	push = (push.Magnitude > 0.05 and push.Magnitude < math.huge) and push.Unit or flat(root.CFrame.LookVector)
+	local daze = (victim:GetAttribute("Daze") or 0) + damage - soak
+	if selfReported then
+		daze = math.min(daze, Combat.DazeMax - 1)
+	end
+	if daze >= Combat.DazeMax then
+		local name = (type(what) == "string" and what ~= "") and what or "a car"
+		kill(driver, victim, hum, root, push, speed, { Name = name, Ragdoll = "car",
+			Cause = driver and ("Run over by " .. driver.DisplayName) or ("Hit by " .. name) })
+	else
+		setDaze(victim, daze)
+		-- (From: where the car came from, for the red bar toward it)
+		fxRemote:FireClient(victim, "Hit", { Kind = "Car", By = driver, Damage = damage, From = root.Position - push * 4 })
+	end
+	return damage
+end
+
+-- An AI officer's round (PoliceOfficerService): everyone near sees and hears it ("Shot" with no shooter
+-- and the cops' Service Pistol), and when it landed on `victim` it hurts like a player's shot: armor
+-- first, then health, and at 0 a real death ("Shot by the police"; with them right there that is an
+-- arrest on the spot: ArrestService.GaveUp). Never someone seated, in a safe zone, just spawned or not a
+-- wanted citizen. Returns true if it hurt them.
+function CombatService.PoliceShot(victim, origin, endPos, onBody, damage)
+	if not fxRemote or typeof(origin) ~= "Vector3" or typeof(endPos) ~= "Vector3" then
+		return false
+	end
+	fxNear(origin, Combat.Fx.ShotRange, {}, "Shot", nil, Combat.CopGun, origin, { endPos }, { onBody == true })
+	if onBody ~= true or typeof(victim) ~= "Instance" or not victim:IsA("Player") or victim.Parent ~= Players then
+		return false
+	end
+	local hum, root = body(victim)
+	if not hum or hum.SeatPart or S.killed[victim] == victim.Character or victim:GetAttribute("Side") ~= "Civilian"
+		or HeatService.GetHeat(victim) <= 0 or isSafe(victim, root) or running(victim, "SpawnSafeUntil") then
+		return false
+	end
+	damage = math.clamp(tonumber(damage) or 0, 0, 100)
+	S.lastHitAt[victim] = os.clock()
+	local armor = victim:GetAttribute("Armor") or 0
+	local absorbed = math.clamp(armor, 0, damage)
+	if absorbed > 0 then
+		setArmor(victim, armor - absorbed)
+	end
+	fxRemote:FireClient(victim, "Hit", { Kind = "Gun", Gun = Combat.CopGun, Damage = damage, From = origin })
+	local daze = (victim:GetAttribute("Daze") or 0) + damage - absorbed
+	if daze >= Combat.DazeMax then
+		local dir = flat(root.Position - origin)
+		kill(nil, victim, hum, root, dir.Magnitude > 0.1 and dir.Unit or flat(root.CFrame.LookVector), 45,
+			{ Name = "Service Pistol", Cause = "Shot by the police", Ragdoll = "shot" })
+	else
+		setDaze(victim, daze)
+	end
+	return true
+end
+
+-- Was their current body killed (kill: shot dead, or a car)? ArrestService words the arrest on the spot by it.
 function CombatService.ShotDead(player)
 	return player.Character ~= nil and S.killed[player] == player.Character
 end

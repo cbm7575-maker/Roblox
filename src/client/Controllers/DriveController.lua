@@ -27,8 +27,10 @@
 --     combat, the phone) can take them over. The seat is Humanoid.SeatPart, or the seat a weld still
 --     joins to the root part when the humanoid has lost track of it (that case used to give up on the
 --     spot). Still in the same seat 0.7 s after asking: ask again and stand up here as well.
---     Studio only: a press in a car that does nothing says why in the Output (Roblox's menu open, a text
---     box has the keyboard, pressed again too soon, just sat down). A seat that still holds you 1.6 s
+--     Roblox's Esc menu holds the keys back while it is up (Shared.Util.RobloxMenu, never the sticky
+--     GuiService.MenuIsOpen), and a second F / E within 1.5 s of a held-back one always goes through.
+--     A press in a car that does nothing says why in the Output, and in a live game in /console (Roblox's
+--     menu open, pressed again too soon, just sat down). A seat that still holds you 1.6 s
 --     after asking is reported in Studio and in a live game alike (Output / the /console Developer
 --     Console: the server's reason if it gave one, the seat's welds, the jump state), so the next "F
 --     stopped working" explains itself.
@@ -45,6 +47,7 @@ local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local CarPhysics = require(ReplicatedStorage.Shared.Util.CarPhysics)
+local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
 
 local player = Players.LocalPlayer
 
@@ -495,9 +498,12 @@ local function onAction(name, inputState)
 	return Enum.ContextActionResult.Sink
 end
 
--- Studio only: a get-out press in a car that did nothing, and why (see the header).
+-- A get-out press in a car that did nothing, and why (see the header): Studio's Output, and in a live
+-- game the /console Developer Console (at most once every 5 s there).
+local noExitAt = -math.huge
 local function noExit(why)
-	if STUDIO then
+	if STUDIO or os.clock() - noExitAt >= 5 then
+		noExitAt = os.clock()
 		warn("[DriveController] the get-out key did nothing: " .. why)
 	end
 end
@@ -889,12 +895,14 @@ function DriveController.Init()
 	-- while that menu is up, nor in the moment after it shuts (it can shut on the press itself, before the
 	-- press gets here). Not by the "processed" flag: PhoneUI counts on B still getting you out of the car
 	-- while the phone has the selection. EXIT on screen is not a key and is never held back.
-	local GuiService = game:GetService("GuiService")
-	local menuShutAt = 0
-	GuiService.MenuClosed:Connect(function()
-		menuShutAt = os.clock()
-	end)
-	UserInputService.InputBegan:Connect(function(input)
+	-- The menu is Shared.Util.RobloxMenu (the Esc menu's own open / close signals), not GuiService.MenuIsOpen:
+	-- that flag can stay raised for the rest of the session after another built-in menu is switched off
+	-- while open, and F / E / B then never got anyone out again (owner playtest, Oct 30: "after about ten
+	-- minutes F stops working and I have to click EXIT"). And whatever the reason, a held-back F or E
+	-- never holds twice: the next press within EXIT_AGAIN seconds gets you out.
+	local EXIT_AGAIN = 1.5
+	local heldBackAt = -math.huge
+	UserInputService.InputBegan:Connect(function(input, processed)
 		local key = input.KeyCode
 		if key ~= Enum.KeyCode.F and key ~= Enum.KeyCode.ButtonB and key ~= Enum.KeyCode.E then
 			return
@@ -903,18 +911,24 @@ function DriveController.Init()
 		if not seat then
 			return -- on foot: these keys are InteractClient's (GET IN, JACK...)
 		end
-		if GuiService.MenuIsOpen or os.clock() - menuShutAt < 0.2 then
-			noExit("Roblox's menu is open, or shut a moment ago")
+		-- Typing in the chat bar: the letter is the chat's ("processed", and the box has the keyboard). A
+		-- box that kept the focus without taking the key (processed false: hidden while it had it) is no
+		-- reason to stay in the car.
+		local box = UserInputService:GetFocusedTextBox()
+		if box and processed then
 			return
 		end
-		local box = UserInputService:GetFocusedTextBox()
-		if box then
-			noExit("a text box has the keyboard (" .. box:GetFullName() .. "): click the game first")
+		local t = os.clock()
+		local again = key ~= Enum.KeyCode.ButtonB and t - heldBackAt < EXIT_AGAIN
+		if not again and (RobloxMenu.IsOpen() or RobloxMenu.ShutAgo() < 0.2) then
+			heldBackAt = t
+			noExit("Roblox's menu is open, or shut a moment ago (press again to get out anyway)")
 			return
 		end
 		if key == Enum.KeyCode.E and ePromptShowing() then
 			return -- E belongs to the bubble on screen (it did its own thing)
 		end
+		heldBackAt = -math.huge
 		DriveController.Exit()
 	end)
 	if player.Character then

@@ -45,6 +45,7 @@ local Workspace = game:GetService("Workspace")
 
 local Combat = require(ReplicatedStorage.Shared.Config.Combat)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
+local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
 
 local player = Players.LocalPlayer
 
@@ -146,7 +147,7 @@ end
 
 -- May the wheel NOT be up right now? (The same test for opening it and for keeping it up.)
 local function blocked()
-	if player:GetAttribute("TitleScreen") == true or player:GetAttribute("Side") == "Prisoner" or GuiService.MenuIsOpen then
+	if player:GetAttribute("TitleScreen") == true or player:GetAttribute("Side") == "Prisoner" or RobloxMenu.IsOpen() then
 		return true
 	end
 	local char = player.Character

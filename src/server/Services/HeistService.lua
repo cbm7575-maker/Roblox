@@ -28,14 +28,30 @@
 --   * HeistResult to the robber: { Type, Payout (what fit), BagFull, LeftBehind (what didn't), Wanted,
 --     Crew (1 + helpers) }. A helper's has the same fields plus Cut = true and From (the robber's
 --     DisplayName).
+--   * Store clerks (Heists.Types[...].Clerk: Glow Mart, Fuel Stop, Sparkle & Co.): a shop assistant
+--     behind the counter, for everyone to see (one of PedService's looks, anchored, in Workspace.NPCs
+--     with NPCKind = "Clerk", AimTarget and Site; their pose is the model attribute Pose, which
+--     HeistClient shows with PoseClient). A robber pointing a gun at them (HeistClient: RequestStoreRob)
+--     starts it: the server checks a gun in hand, 24 studs, facing them, an open store and an idle
+--     clerk. Hands up, "Okay, okay! Don't shoot!", a bag filled for Clerk.Fill seconds while the robber
+--     stays within Clerk.Range (StoreRob "Start" / "Done" / "Fail" to the robber), then the usual
+--     robbery (onRobbed) with the Clerk.Bonus on top. A silent alarm with chance Clerk.Alarm when it
+--     starts. Shot or punched (CombatService -> HeistService.NPCHit) they go down for CLERK_DOWN seconds
+--     (a star for the attacker; a robbery in progress fails), then a new clerk takes over. Without a gun
+--     the till's Rob prompt works as before (HeistClient hides it from gun owners while a clerk stands).
+--   * Club Nova's drill (Heists.Types.ClubNova.Drill): the Rob prompt sets the drill (Drill.Start s; the
+--     alarm and a star at once), the robber keeps within Drill.Range while it runs (DrillBy / DrillDoneAt),
+--     then the same prompt empties the safe (Drill.Grab s) for them alone. HeistClient labels each stage.
 -- Site attributes (read by clients): Robbable, ReopenAt, AlarmUntil (server time, GetServerTimeNow),
---   MinRank (free-roam rank needed, if any), PrepUntil / PrepBy / PrepLockUntil (the live prep).
+--   MinRank (free-roam rank needed, if any), PrepUntil / PrepBy / PrepLockUntil (the live prep),
+--   ClerkUp (a clerk stands behind the counter), DrillBy (UserId) / DrillDoneAt (server time).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
+local Combat = require(ReplicatedStorage.Shared.Config.Combat)
 local Heists = require(ReplicatedStorage.Shared.Config.Heists)
 local Shop = require(ReplicatedStorage.Shared.Config.Shop)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
@@ -53,7 +69,11 @@ local rng = Random.new()
 local PREP_LOCK = 45 -- seconds a fresh prep can't be redone by another crew (capped at the window)
 local prepToastAt = {} -- [userId] = os.clock() of the last "PrepTaken" / "PrepAlreadyDone" toast
 
-local feed, notify, heistResult
+local feed, notify, heistResult, storeRob
+local clerks = {} -- [site] = { model, root, hum, site, state = "Idle" | "Robbed" | "Down", robber, token, downAt }
+local CLERK_DOWN = 20 -- seconds a clerk who was shot or punched lies there before a new one takes over
+local CLERK_REACH = 24 -- studs: how close the gun must be when the robbery starts
+local npcFolder
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -222,10 +242,10 @@ local function payCut(mate, robber, typeId, def, cut, crewSize)
 	})
 end
 
-local function onRobbed(player, site, def)
+local function onRobbed(player, site, def, mult)
 	local typeId = site:GetAttribute("HeistId")
 	local big = def.Tier == Heists.BigTier
-	local payout = rng:NextInteger(def.Payout[1], def.Payout[2])
+	local payout = math.floor(rng:NextInteger(def.Payout[1], def.Payout[2]) * (mult or 1)) -- (mult: a clerk's bonus)
 	-- Neon nights: heists pay 25% more after dark (WorldService sets IsNight).
 	if Workspace:GetAttribute("IsNight") then
 		payout = math.floor(payout * 1.25)
@@ -277,6 +297,300 @@ local function onRobbed(player, site, def)
 	end)
 end
 
+------------------------------------------------------------------ store clerks
+
+local function alarmNow(site)
+	site:SetAttribute("AlarmUntil", now() + Heists.AlarmSeconds)
+	feed:FireAllClients("HeistAlarm", { Type = site:GetAttribute("HeistId"), Site = site.Name, Position = site:GetPivot().Position })
+end
+
+-- Which way this store's counter faces the shop floor: the LookVector of a "Counter" part next to the
+-- till (Art.HeistFronts builds every counter in the store's own frame, whose -Z faces the street). nil
+-- without a counter (an ATM, or the art isn't built): no clerk then.
+local function counterFront(point)
+	for _, part in ipairs(Workspace:GetPartBoundsInRadius(point.Position, 14)) do
+		if part.Name == "Counter" and part:IsA("BasePart") then
+			local look = Vector3.new(part.CFrame.LookVector.X, 0, part.CFrame.LookVector.Z)
+			if look.Magnitude > 0.5 then
+				return look.Unit
+			end
+		end
+	end
+	return nil
+end
+
+local function clerkPose(c, pose)
+	if c.model.Parent then
+		c.model:SetAttribute("Pose", pose) -- (HeistClient poses it on every device with PoseClient)
+	end
+end
+
+-- A speech bubble over the clerk's head for everyone, for `seconds`.
+local function clerkSay(c, text, seconds)
+	local head = c.model:FindFirstChild("Head")
+	if not head then
+		return
+	end
+	local gui = head:FindFirstChild("Say")
+	if not gui then
+		gui = Instance.new("BillboardGui")
+		gui.Name = "Say"
+		gui.Size = UDim2.fromOffset(220, 34)
+		gui.StudsOffset = Vector3.new(0, 2.6, 0)
+		gui.MaxDistance = 80
+		gui.AlwaysOnTop = true
+		gui.Parent = head
+		local l = Instance.new("TextLabel")
+		l.Name = "Text"
+		l.Size = UDim2.fromScale(1, 1)
+		l.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		l.BackgroundTransparency = 0.05
+		l.TextColor3 = Color3.fromRGB(20, 20, 28)
+		l.Font = Enum.Font.GothamBold
+		l.TextScaled = true
+		l.Parent = gui
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = l
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
+		pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 4), UDim.new(0, 4)
+		pad.Parent = l
+	end
+	gui.Text.Text = text
+	gui.Enabled = true
+	c.sayToken = (c.sayToken or 0) + 1
+	local token = c.sayToken
+	task.delay(seconds, function()
+		if c.sayToken == token and gui.Parent then
+			gui.Enabled = false
+		end
+	end)
+end
+
+-- A clerk behind this store's counter: one of PedService's looks, standing still and anchored, facing
+-- the shop floor. nil when the looks aren't built yet or the store has no counter (tried again later).
+local function spawnClerk(site)
+	local point = site:FindFirstChild("RobPoint", true)
+	local templates = ReplicatedStorage:FindFirstChild("PedTemplates")
+	local list = templates and templates:GetChildren() or {}
+	local front = point and point:IsA("BasePart") and counterFront(point)
+	if not front or #list == 0 then
+		return nil
+	end
+	local spot = point.Position - front * 3.2 -- (behind the till: the counter is 3 deep)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { npcFolder }
+	local hit = Workspace:Raycast(spot + Vector3.new(0, 4, 0), Vector3.new(0, -12, 0), params)
+	local floorY = hit and hit.Position.Y or (point.Position.Y - point.Size.Y / 2)
+	local model = list[rng:NextInteger(1, #list)]:Clone()
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then
+		model:Destroy()
+		return nil
+	end
+	hum.BreakJointsOnDeath = false
+	local y = floorY + hum.HipHeight + root.Size.Y / 2
+	local at = Vector3.new(spot.X, y, spot.Z)
+	model:PivotTo(CFrame.lookAt(at, at + front))
+	root.Anchored = true
+	model.Name = "Clerk"
+	model:SetAttribute("NPCKind", "Clerk")
+	model:SetAttribute("AimTarget", true)
+	model:SetAttribute("Site", site.Name)
+	model.Parent = npcFolder
+	pcall(function()
+		local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://507766388" -- (Roblox's stock R15 idle)
+		local track = animator:LoadAnimation(anim)
+		track.Looped = true
+		track:Play()
+	end)
+	local c = { model = model, root = root, hum = hum, site = site, state = "Idle", token = 0 }
+	clerks[site] = c
+	site:SetAttribute("ClerkUp", true)
+	return c
+end
+
+-- Every second: a clerk for every clerk store, and a new one where the last went down CLERK_DOWN ago.
+local function tendClerks()
+	for typeId, sites in pairs(sitesByType) do
+		if Heists.Types[typeId].Clerk then
+			for _, site in ipairs(sites) do
+				local c = clerks[site]
+				if c and (not c.model.Parent or (c.state == "Down" and os.clock() - c.downAt >= CLERK_DOWN)) then
+					c.token += 1
+					c.model:Destroy()
+					clerks[site] = nil
+					c = nil
+				end
+				if not c then
+					site:SetAttribute("ClerkUp", false)
+					spawnClerk(site)
+				end
+			end
+		end
+	end
+end
+
+-- RequestStoreRob(site): the robber points a gun at that store's clerk (see the header).
+local function onStoreRob(player, site)
+	if not RateLimit.Allow(player, "StoreRob", 1, 2) then
+		return
+	end
+	if typeof(site) ~= "Instance" or site.Parent ~= Workspace.Heists then
+		return
+	end
+	local def = Heists.Types[site:GetAttribute("HeistId")]
+	local cfg = def and def.Clerk
+	local c = clerks[site]
+	if not cfg or not c or c.state ~= "Idle" or not c.model.Parent then
+		return
+	end
+	if player:GetAttribute("Side") ~= "Civilian" or not siteRobbable(site) then
+		return
+	end
+	if def.MinRank and (player:GetAttribute("CivRank") or 1) < def.MinRank then
+		return
+	end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or hum.Health <= 0 or not root or hum.SeatPart then
+		return
+	end
+	local gun = false
+	for _, t in ipairs(char:GetChildren()) do
+		gun = gun or (t:IsA("Tool") and t:GetAttribute(Combat.ToolAttribute or "NCCombat") == "Gun")
+	end
+	local to = c.root.Position - root.Position
+	local flatTo = Vector3.new(to.X, 0, to.Z)
+	local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+	if not gun or flatTo.Magnitude > CLERK_REACH or flatTo.Magnitude < 0.5 or look.Magnitude < 0.1 or look.Unit:Dot(flatTo.Unit) < 0.6 then
+		return
+	end
+	-- Hands up, and the bag gets filled.
+	c.state, c.robber = "Robbed", player
+	c.token += 1
+	local token = c.token
+	clerkPose(c, "HandsUp")
+	clerkSay(c, "Okay, okay! Don't shoot!", 2.5)
+	storeRob:FireClient(player, "Start", site, cfg.Fill)
+	if rng:NextNumber() < (cfg.Alarm or 0) then
+		alarmNow(site) -- (the silent alarm under the counter)
+	end
+	task.spawn(function()
+		local started = os.clock()
+		local half = false
+		while true do
+			task.wait(0.25)
+			if c.token ~= token or c.state ~= "Robbed" then
+				return -- (shot, punched: NPCHit told the robber)
+			end
+			local r = player.Parent == Players and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			local h = r and player.Character:FindFirstChildOfClass("Humanoid")
+			local why
+			if not h or h.Health <= 0 then
+				why = "StoreRobOff"
+			elseif h.SeatPart or player:GetAttribute("Side") ~= "Civilian" or (r.Position - c.root.Position).Magnitude > cfg.Range then
+				why = "StoreRobLeft"
+			end
+			if why then
+				c.state, c.robber = "Idle", nil
+				clerkPose(c, "Cower")
+				clerkSay(c, "Help! Police!", 2)
+				task.delay(4, function()
+					if c.token == token and c.state == "Idle" then
+						clerkPose(c, nil)
+					end
+				end)
+				if player.Parent == Players then
+					storeRob:FireClient(player, "Fail", site, why)
+				end
+				return
+			end
+			local p = (os.clock() - started) / cfg.Fill
+			if p >= 0.5 and not half then
+				half = true
+				clerkSay(c, "Here, here! It's all there!", 2)
+			end
+			if p >= 1 and now() < (site:GetAttribute("ReopenAt") or 0) then
+				-- Somebody emptied the till while the bag was being filled (a crewmate holding Rob): nothing left.
+				c.state, c.robber = "Idle", nil
+				clerkPose(c, nil)
+				storeRob:FireClient(player, "Fail", site, "StoreRobOff")
+				return
+			end
+			if p >= 1 then
+				c.state, c.robber = "Idle", nil
+				onRobbed(player, site, def, 1 + (cfg.Bonus or 0))
+				storeRob:FireClient(player, "Done", site)
+				clerkPose(c, "Cower")
+				task.delay(6, function()
+					if c.token == token and c.state == "Idle" then
+						clerkPose(c, nil)
+					end
+				end)
+				return
+			end
+		end
+	end)
+end
+
+------------------------------------------------------------------ Club Nova's drill
+
+-- May this player empty the drilled safe now? (They set the drill, and it has finished.)
+local function drillReady(site, player)
+	local doneAt = site:GetAttribute("DrillDoneAt")
+	return site:GetAttribute("DrillBy") == player.UserId and doneAt ~= nil and now() >= doneAt
+end
+
+local function clearDrill(site)
+	site:SetAttribute("DrillBy", nil)
+	site:SetAttribute("DrillDoneAt", nil)
+end
+
+local function startDrill(player, site, def, point)
+	local drill = def.Drill
+	local doneAt = now() + drill.Time
+	site:SetAttribute("DrillBy", player.UserId)
+	site:SetAttribute("DrillDoneAt", doneAt)
+	alarmNow(site) -- (a drill is loud)
+	addHeat(player, 1)
+	Remotes.Event("HeistPrep"):FireClient(player, {
+		Title = "DRILLING", Text = "Hold the room for " .. drill.Time .. " seconds, then grab the cash.",
+	})
+	task.spawn(function()
+		local away = 0
+		while site:GetAttribute("DrillBy") == player.UserId and site:GetAttribute("DrillDoneAt") == doneAt do
+			task.wait(0.5)
+			local t = now()
+			if t >= doneAt + drill.Expire then
+				clearDrill(site) -- (never emptied: the cash is gone)
+				return
+			elseif t < doneAt then
+				local r = player.Parent == Players and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+				local h = r and player.Character:FindFirstChildOfClass("Humanoid")
+				if not h or h.Health <= 0 or player:GetAttribute("Side") ~= "Civilian" or (r.Position - point.Position).Magnitude > drill.Range then
+					away += 0.5
+				else
+					away = 0
+				end
+				if away >= drill.Leave then
+					clearDrill(site)
+					if player.Parent == Players then
+						notify:FireClient(player, "DrillJammed")
+					end
+					return
+				end
+			end
+		end
+	end)
+end
+
 local function hookSite(site)
 	local typeId = site:GetAttribute("HeistId")
 	local def = Heists.Types[typeId]
@@ -291,9 +605,9 @@ local function hookSite(site)
 
 	local prompt = point:FindFirstChild("RobPrompt") or Instance.new("ProximityPrompt")
 	prompt.Name = "RobPrompt"
-	prompt.ActionText = "Rob"
+	prompt.ActionText = def.Drill and "Set the drill" or "Rob"
 	prompt.ObjectText = def.Display
-	prompt.HoldDuration = def.Hold
+	prompt.HoldDuration = def.Drill and def.Drill.Start or def.Hold -- (HeistClient labels the drill's stages)
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false
 	prompt.KeyboardKeyCode = Enum.KeyCode.E
@@ -434,14 +748,34 @@ local function hookSite(site)
 		if (root.Position - point.Position).Magnitude > 16 then
 			return
 		end
-		-- The server times the hold; a client that skips it gets nothing.
-		if not began or os.clock() - began.t < def.Hold - 0.4 then
+		-- The server times the hold; a client that skips it gets nothing. (Club Nova: setting the drill, or
+		-- emptying the safe once it's done, each has its own time.)
+		local drill = def.Drill
+		local grabbing = drill ~= nil and drillReady(site, player)
+		local need = drill and (grabbing and drill.Grab or drill.Start) or def.Hold
+		if not began or os.clock() - began.t < need - 0.4 then
+			return
+		end
+		if drill then
+			if grabbing then
+				clearDrill(site)
+				onRobbed(player, site, def)
+			elseif site:GetAttribute("DrillBy") ~= nil then
+				notify:FireClient(player, "DrillBusy")
+			elseif siteRobbable(site) then
+				startDrill(player, site, def, point)
+			end
 			return
 		end
 		-- A store shuts for NEW holds only. Its type could leave the rotation (or the bank event end) in
 		-- the middle of a hold, and the robber got nothing and no reason why: a hold that began while the
 		-- site was open, and really just ran its length, is still paid. The site's own cooldown counts
 		-- as always, so a second robber on a till somebody just emptied goes home with nothing.
+		-- The clerk is filling a bag for someone at gunpoint: the till is theirs.
+		local c = clerks[site]
+		if c and c.state == "Robbed" then
+			return
+		end
 		local openAtStart = began.open and os.clock() - began.t < def.Hold + 5
 		if not siteRobbable(site) and not (openAtStart and now() >= (site:GetAttribute("ReopenAt") or 0)) then
 			return
@@ -454,6 +788,46 @@ local function hookSite(site)
 	refreshSite(site)
 end
 
+-- A player shot or punched a store clerk (CombatService routes hits on NPCKind "Clerk" here). They go
+-- down for CLERK_DOWN seconds; a robbery in progress is off. Returns true if it counted.
+function HeistService.NPCHit(model, attacker, damage, dir, kind)
+	local c
+	for _, x in pairs(clerks) do
+		if x.model == model then
+			c = x
+			break
+		end
+	end
+	if not c or c.state == "Down" or typeof(attacker) ~= "Instance" or not attacker:IsA("Player")
+		or attacker:GetAttribute("Side") ~= "Civilian" then
+		return false
+	end
+	local robber = c.state == "Robbed" and c.robber or nil
+	c.state, c.robber, c.downAt = "Down", nil, os.clock()
+	c.token += 1
+	c.site:SetAttribute("ClerkUp", false)
+	clerkPose(c, nil)
+	c.model:SetAttribute("AimTarget", nil)
+	c.model:SetAttribute("NPCKind", nil)
+	if robber and robber.Parent == Players then
+		storeRob:FireClient(robber, "Fail", c.site, "StoreRobClerkDown")
+	end
+	local push = typeof(dir) == "Vector3" and Vector3.new(dir.X, 0, dir.Z) or Vector3.zero
+	push = push.Magnitude > 0.05 and push.Unit or -c.root.CFrame.LookVector
+	c.root.Anchored = false
+	pcall(function()
+		require(ReplicatedStorage.Shared.Util.Ragdoll).Start(c.model, push * 12 + Vector3.new(0, 8, 0), { NoCap = true })
+	end)
+	if kind ~= "Punch" then
+		c.hum.Health = 0
+	end
+	local ok, combat = pcall(require, ServerScriptService.Services:FindFirstChild("CombatService"))
+	if ok and type(combat) == "table" and type(combat.CrimeHeat) == "function" then
+		pcall(combat.CrimeHeat, attacker, 1, "hurt_clerk", kind ~= "Punch")
+	end
+	return true
+end
+
 function HeistService.IsAlarmActive(site)
 	return now() < (site:GetAttribute("AlarmUntil") or 0)
 end
@@ -462,7 +836,15 @@ function HeistService.Init()
 	feed = Remotes.Event("Feed")
 	notify = Remotes.Event("Notify")
 	heistResult = Remotes.Event("HeistResult")
+	storeRob = Remotes.Event("StoreRob")
 	Remotes.Event("HeistPrep")
+	npcFolder = Workspace:FindFirstChild("NPCs")
+	if not npcFolder then
+		npcFolder = Instance.new("Folder")
+		npcFolder.Name = "NPCs"
+		npcFolder.Parent = Workspace
+	end
+	Remotes.Event("RequestStoreRob").OnServerEvent:Connect(onStoreRob)
 	for _, site in ipairs(Workspace.Heists:GetChildren()) do
 		if site:GetAttribute("HeistId") then
 			hookSite(site)
@@ -482,6 +864,10 @@ function HeistService.Init()
 				for _, site in ipairs(sites) do
 					refreshSite(site)
 				end
+			end
+			local ok, err = pcall(tendClerks)
+			if not ok then
+				warn("[HeistService] clerks: " .. tostring(err))
 			end
 		end
 	end)

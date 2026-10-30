@@ -43,6 +43,12 @@
 --     When the server's "Carjacked" says the real car is there, the traffic car vanishes (and if nobody
 --     pulled the driver out yet, a door slams and they come out then); "CarjackRefused" (or nothing
 --     within HOLD_TIMEOUT) lets it drive on.
+--   * At gunpoint (owner, Oct 30): TrafficClient.AimedAt(origin, dir), from CombatClient about twice a
+--     second while you aim a gun. A slow or stopped car (under JACK_SPEED) within AIM_RANGE whose middle
+--     is close to that line stops dead while the gun is on it; after AIM_SCARE seconds the driver gets out
+--     with their hands up ("DON'T SHOOT!", PoseClient "HandsUp"), staggers clear and runs off with their
+--     arms over their head ("Brace"). The empty car waits there (car.abandoned) for ABANDON_TIME seconds:
+--     F / JACK takes it like any jack, just with nobody left to pull out.
 -- If ReplicatedStorage.TrafficModels has models (pivot at the bottom centre, front facing -Z), bodies
 -- are cloned from those (the model's name is the car's kind); otherwise simple greybox cars are built here.
 -- ReplicatedStorage.TrafficVariants (Look 4.0) holds the same three bodies re-textured in street paint
@@ -98,6 +104,13 @@ local STUMBLE_ALONG = 4.2 -- studs along the car they end up, away from the thie
 local FLEE_TIME = 4 -- seconds they then run before fading away
 local FLEE_FADE = 0.5
 local FLEE_SPEED = 20
+-- At gunpoint (AimedAt).
+local AIM_RANGE = 32 -- studs from the gun to the car's middle
+local AIM_CONE = 0.94 -- cosine: how close to the gun's line the car's middle must be (about 20 degrees)
+local AIM_SCARE = 0.8 -- seconds with the gun on them before the driver gets out
+local AIM_GAP = 1.2 -- seconds without the gun on them and it starts over
+local SCARED_STUMBLE = 1.2 -- seconds a scared driver takes getting out, hands up
+local ABANDON_TIME = 40 -- seconds an empty car waits for its thief
 local FLEE_LEG = 1.5 -- seconds at most on one stretch of their way before they turn for the next
 local KERB_IN = 4 -- studs past the road's edge: where they run, on the pavement
 local RUN_ANIM = "rbxassetid://507767714" -- Roblox's default R15 run (Config.Animations' "Default" set, if it's there)
@@ -650,7 +663,7 @@ local function checkKnock(car, cf)
 			return
 		end
 		local ok, knocked = pcall(function()
-			return require(mod).KnockLocal(car.heading, car.speed)
+			return require(mod).KnockLocal(car.heading, car.speed, true)
 		end)
 		if ok and knocked then
 			car.speed *= 0.4 -- the driver hits the brakes
@@ -699,7 +712,7 @@ end
 -- The driver comes out of this (stopped) car's driver's door: one of PedService's looks, placed in the
 -- doorway and moved by stepDrivers. `thiefPos`: where the thief stands, so the driver stumbles the other
 -- way along the car. Returns true if a driver appeared.
-local function pullOut(car, thiefPos)
+local function pullOut(car, thiefPos, scared)
 	local cf = car.cf
 	local templates = ReplicatedStorage:FindFirstChild("PedTemplates")
 	local list = templates and templates:GetChildren() or {}
@@ -768,7 +781,15 @@ local function pullOut(car, thiefPos)
 	track:Play(0.1, 1, 0.6) -- slow, scrambling steps
 	local head = model:FindFirstChild("Head")
 	if head and head:IsA("BasePart") then
-		speak(head, "HEY!", 1.4)
+		speak(head, scared and "DON'T SHOOT!" or "HEY!", scared and 1.8 or 1.4)
+	end
+	-- At gunpoint: hands up while they get out, arms over the head once they run (PoseClient, if there).
+	local pose
+	if scared then
+		local module = script.Parent:FindFirstChild("PoseClient")
+		pcall(function()
+			pose = require(module).Play(model, "HandsUp")
+		end)
 	end
 	while #drivers >= MAX_DRIVERS do
 		removeDriver(1)
@@ -776,7 +797,8 @@ local function pullOut(car, thiefPos)
 	table.insert(drivers, {
 		model = model, hum = hum, root = root, track = track, parts = parts,
 		origin = cf, from = from, to = to, along = along, at = os.clock(), running = false,
-		path = path, leg = 1,
+		path = path, leg = 1, pose = pose, scared = scared == true,
+		stumble = scared and SCARED_STUMBLE or STUMBLE_TIME,
 	})
 	return true
 end
@@ -791,7 +813,7 @@ local function stepDrivers(now)
 		if not d.model.Parent then
 			table.remove(drivers, i)
 		elseif not d.running then
-			local s = math.clamp((now - d.at) / STUMBLE_TIME, 0, 1)
+			local s = math.clamp((now - d.at) / (d.stumble or STUMBLE_TIME), 0, 1)
 			local k = 1 - (1 - s) * (1 - s) -- quick out of the door, slowing as they catch themselves
 			local off = 1 - s
 			local pos = d.from:Lerp(d.to, k) + Vector3.new(0, math.abs(math.sin(s * math.pi * 3)) * 0.2 * off, 0)
@@ -807,6 +829,18 @@ local function stepDrivers(now)
 				d.hum.WalkSpeed = FLEE_SPEED
 				d.track:AdjustSpeed(1.25)
 				d.hum:MoveTo(d.path[d.leg])
+				if d.pose then
+					pcall(function()
+						d.pose:Stop()
+					end)
+					d.pose = nil
+				end
+				if d.scared then
+					local module = script.Parent:FindFirstChild("PoseClient")
+					pcall(function()
+						d.pose = require(module).Play(d.model, "Brace")
+					end)
+				end
 			end
 		else
 			local goal, nextGoal = d.path[d.leg], d.path[d.leg + 1]
@@ -844,7 +878,8 @@ local function step(dt)
 	for i = #cars, 1, -1 do
 		local car = cars[i]
 		local far = (Vector3.new(car.pos.X, 0, car.pos.Z) - flat).Magnitude > DESPAWN
-		if far or (car.wrecked and os.clock() - car.wrecked > 2.8) then
+		local left = car.abandoned and not car.held and os.clock() - car.abandoned > ABANDON_TIME -- (nobody took it)
+		if far or left or (car.wrecked and os.clock() - car.wrecked > 2.8) then
 			removeCar(i)
 		end
 	end
@@ -915,8 +950,10 @@ local function step(dt)
 			local r = math.max(room, 0)
 			target = math.min(target, r * 1.5, math.sqrt(2 * STOP_BRAKE * r))
 		end
-		-- Being jacked, or you're standing at its side while it's slow: it waits right here.
-		if car.held or (car.speed < JACK_SPEED and besideMe(car, cf + Vector3.new(0, ROAD_TOP + 2, 0), myRoot)) then
+		-- Being jacked, empty (its driver ran from a gun), a gun on it, or you're standing at its side while
+		-- it's slow: it waits right here.
+		if car.held or car.abandoned or clock < (car.scaredUntil or 0)
+			or (car.speed < JACK_SPEED and besideMe(car, cf + Vector3.new(0, ROAD_TOP + 2, 0), myRoot)) then
 			target = 0
 		end
 		local accel = target > car.speed and 14 or MAX_BRAKE
@@ -1057,6 +1094,40 @@ function TrafficClient.PullDriver(car, thiefPos)
 		warn("[TrafficClient] driver: " .. tostring(out))
 	end
 	return ok and out == true
+end
+
+-- A raised gun points along `dir` from `origin` (CombatClient, about twice a second while you aim): the
+-- driver of a slow or stopped car close to that line stops, and after AIM_SCARE seconds gets out with
+-- their hands up and runs; the empty car waits for you (see the header).
+function TrafficClient.AimedAt(origin, dir)
+	if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" or dir.Magnitude < 0.05 then
+		return
+	end
+	dir = dir.Unit
+	local now = os.clock()
+	for _, car in ipairs(cars) do
+		local cf = car.cf
+		if cf and JACK_KINDS[car.kind] and not car.wrecked and not car.driverOut and not car.held and car.speed < JACK_SPEED then
+			local to = cf.Position + Vector3.new(0, 2.5, 0) - origin
+			local d = to.Magnitude
+			if d > 2 and d <= AIM_RANGE and to.Unit:Dot(dir) > AIM_CONE then
+				if not car.aimFirst or now - (car.aimLast or 0) > AIM_GAP then
+					car.aimFirst = now -- (a new aim: the time starts here)
+				end
+				car.aimLast = now
+				car.scaredUntil = now + 2 -- stopped while the gun is on them
+				if now - car.aimFirst >= AIM_SCARE then
+					car.abandoned = now
+					car.driverOut = true
+					car.speed = 0
+					local ok, err = pcall(pullOut, car, origin, true)
+					if not ok then
+						warn("[TrafficClient] scared driver: " .. tostring(err))
+					end
+				end
+			end
+		end
+	end
 end
 
 -- The jack was called off before the server was asked (the thief walked away): the car drives on.

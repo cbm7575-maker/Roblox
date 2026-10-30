@@ -30,6 +30,7 @@ local ORDER = {
 	"ArrestService",
 	"PrisonService",
 	"RobberToolsService",
+	"PoliceOfficerService", -- officers on foot: ride in the patrol cars, get out, chase, cuff or shoot (before AIPoliceService)
 	"AIPoliceService",
 	"DisguiseService",
 	"CarBoostService",
@@ -40,6 +41,7 @@ local ORDER = {
 	"PropService", -- street furniture cars plow through (collision group "Props", remote PropHit)
 	"CombatService", -- guns and knockouts + the Coast Arms shop (before MapService so the GPS lists the shop)
 	"RaceService",
+	"RaceAIService", -- NPC racers for RaceService's street races (drives them on Heartbeat)
 	"StuntService",
 	"DriftService",
 	"JobService",

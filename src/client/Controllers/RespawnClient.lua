@@ -2,7 +2,8 @@
 -- The death screen. Whenever our body dies (shot dead, Esc > Reset, a long fall) the fall plays, the
 -- colour drains out of the picture with a slight blur and the low drone, then:
 --     YOU DIED                       (Theme.Font.Big, the stamps' headline look)
---     Shot by Name · Coast 9         (when a gun did it: CombatFx "Killed")
+--     Shot by Name · Coast 9         (when a gun did it: CombatFx "Killed"; its Cause when it has one:
+--                                     "Run over by Name", "Hit by Sunray Patrol", "Shot by the police")
 --     -$250 bag · -$40 wallet        (what fell out, when anything did)
 --     [ RESPAWN ]                    (from Combat.Death.RespawnAfter seconds after the death)
 --     Respawning in 7                (RespawnService brings us back by itself at Combat.Death.AutoRespawn)
@@ -199,7 +200,9 @@ local function show(char, myToken, startedAt)
 		build()
 	end
 	local info = cause and os.clock() - cause.at <= CAUSE_FRESH + SHOW_AT and cause.info or nil
-	if info then
+	if info and type(info.Cause) == "string" and info.Cause ~= "" then
+		ui.cause.Text = info.Cause -- (the server's own words: "Run over by Name", "Hit by Sunray Patrol"...)
+	elseif info then
 		local by = "Shot by " .. tostring(info.By or "someone")
 		if type(info.Gun) == "string" and info.Gun ~= "" then
 			by ..= " · " .. info.Gun

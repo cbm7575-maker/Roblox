@@ -43,6 +43,15 @@
 --     shows it later, once the player isn't wanted or speeding).
 --   * Big heists (Coastal Bank / Sea Dream, yours or your crew's: attribute BigHeists) say what they
 --     count toward: "Big heist 1/3 toward the Riptide R", or which heist-locked ride just unlocked.
+--   * Store clerks (HeistService; Heists.Types[...].Clerk): with a gun aimed at a clerk (CombatClient.Aiming)
+--     within K.CLERK_REACH studs, the server is asked to start the robbery (RequestStoreRob, at most once a
+--     second); its StoreRob "Start" runs the same bar as a hold, counting the take up for the fill time,
+--     "Done" / "Fail" end it. While a clerk stands there, a player who owns a gun doesn't see the till's
+--     Rob prompt (they're told once, near the store, to point the gun at the clerk); without a gun it
+--     shows as before. The clerk's pose (model attribute Pose: HandsUp, Cower) is played here with
+--     PoseClient, on every device.
+--   * Club Nova's drill (Drill): its Rob prompt reads "Set the drill", then "Drilling 0:18" (locked) for
+--     whoever set it and "Drill running" for everyone else, then "Grab the cash" for the driller.
 --   HeistClient.NearestRob(pos, range)  studs from pos to the nearest Rob point or prep panel within
 --                                       range that this player could use on foot right now, or nil
 -- Constants are fields of K and the HUD pieces fields of ui (a script's top level holds 200 locals at most).
@@ -99,6 +108,11 @@ K.ALARM_FRESH = 3 -- seconds: only an alarm that started this recently flashes (
 K.FLASH_SECONDS = 1 -- two pulses in this long
 K.FLASH_ALPHA = 0.5 -- how solid the red gets at the very edge
 K.FLASH_EDGE = 0.16 -- how far in it reaches: this share of the screen's shorter side (40-130 px)
+-- Store clerks
+K.CLERK_REACH = 22 -- studs: a gun aimed at a clerk this close starts the robbery (the server allows 24)
+K.CLERK_CONE = 0.94 -- cosine: how close to the gun's line the clerk must be
+K.CLERK_ASK_GAP = 1 -- seconds between two asks
+K.HINT_RANGE = 40 -- studs from a clerk: a gun owner is told how to rob that store (once each)
 
 -- The HUD pieces (build sets them once): gui, rob (the frame), robName, robTake, robNameShadow,
 -- robTakeShadow, robBar, robFill, alarm (the frame), alarmEdges = { { frame, across } x 4 }
@@ -131,6 +145,10 @@ local promptDefaults = setmetatable({}, { __mode = "k" }) -- [prompt] = the serv
 local explained = {} -- [heist type] = true once this player has been told how to unlock it
 local alarmSeen = {} -- [site] = the AlarmUntil we have already looked at
 local lastBigHeists -- the BigHeists count we last saw (nil until the save has loaded)
+local clerkPoses = setmetatable({}, { __mode = "k" }) -- [clerk model] = { name, handle } of the pose we show
+local clerkHinted = {} -- [site] = true once a gun owner was told how to rob it
+local lastClerkAsk = 0
+local lazy = {} -- [controller name] = its module (false if missing)
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -183,15 +201,16 @@ local function prepLabel(site)
 end
 
 -- Locked (text given, e.g. "Rank 3 needed"): no hold, and a tap asks the server, which explains
--- (BankNeedsRank, PrepTaken...). Unlocked (nil): back to the server's own text and hold time.
-local function labelPrompt(prompt, text)
+-- (BankNeedsRank, PrepTaken...). Unlocked (nil): back to the server's own text and hold time. With
+-- `hold` as well: that text with that hold (an unlocked stage of its own: the drill's "Grab the cash").
+local function labelPrompt(prompt, text, hold)
 	local d = promptDefaults[prompt]
 	if not d then
 		d = { ActionText = prompt.ActionText, HoldDuration = prompt.HoldDuration }
 		promptDefaults[prompt] = d
 	end
 	local action = text or d.ActionText
-	local hold = text and 0 or d.HoldDuration
+	hold = hold or (text and 0 or d.HoldDuration)
 	if prompt.ActionText ~= action then
 		prompt.ActionText = action
 	end
@@ -317,19 +336,69 @@ end
 ------------------------------------------------------------------ every site, three times a second
 
 -- collect: this is the regular pass, so note the site's usable spots for NearestRob.
+-- Does this player own a gun (CombatClient's weapons)? (Store clerks: then the till's prompt is hidden.)
+local function other(name)
+	local m = lazy[name]
+	if m == nil then
+		local ok, res = pcall(require, script.Parent:FindFirstChild(name))
+		m = (ok and type(res) == "table") and res or false
+		lazy[name] = m
+	end
+	return m or nil
+end
+
+local function ownsGun()
+	local combat = other("CombatClient")
+	local ok, list = pcall(function()
+		return combat.Weapons()
+	end)
+	for _, w in ipairs(ok and type(list) == "table" and list or {}) do
+		if w.Class ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
+-- Club Nova's drill stage for this player: the Rob prompt's text and hold (nil: the server's own).
+local function drillLabel(site, def)
+	local by, doneAt = site:GetAttribute("DrillBy"), site:GetAttribute("DrillDoneAt")
+	if by == nil or not doneAt then
+		return nil
+	end
+	if by ~= player.UserId then
+		return "Drill running", 0
+	end
+	local t = now()
+	if t >= doneAt then
+		return "Grab the cash", def.Drill.Grab
+	end
+	return "Drilling " .. clock(doneAt - t), 0
+end
+
 local function updateSite(site, collect)
 	local robbable = site:GetAttribute("Robbable") == true
 	local civilian = player:GetAttribute("Side") == "Civilian"
 	local need, rank = rankLock(site)
+	local def = Heists.Types[site:GetAttribute("HeistId")]
 	for _, name in ipairs(K.PROMPT_NAMES) do
 		local prompt = site:FindFirstChild(name, true)
 		if prompt then
 			local text = need and ("Rank " .. need .. " needed") or (name == "PrepPrompt" and prepLabel(site)) or nil
-			labelPrompt(prompt, text)
+			local stageHold -- an unlocked stage with its own text (the drill's "Grab the cash")
+			if not text and name == "RobPrompt" and def and def.Drill then
+				text, stageHold = drillLabel(site, def)
+				stageHold = (stageHold ~= nil and stageHold > 0) and stageHold or nil
+			end
+			labelPrompt(prompt, text, stageHold)
 			-- A locked prompt shows even while the site is closed, so walking up to it tells you why.
 			-- Only Enabled is switched here, and never for the seat: PromptGate keeps both prompts out of
 			-- sight while we sit (through MaxActivationDistance), so the two can't flicker against each other.
-			local show = civilian and (robbable or need ~= nil)
+			local show = civilian and (robbable or need ~= nil or stageHold ~= nil)
+			-- A clerk store with its clerk standing: a gun owner robs it at gunpoint, not at the till.
+			if show and name == "RobPrompt" and def and def.Clerk and site:GetAttribute("ClerkUp") == true and ownsGun() then
+				show = false
+			end
 			-- The store left the rotation while we were holding its Rob prompt: it shuts for new holds
 			-- only, so ours stays up until the hold ends (switching it off here made the bar vanish with
 			-- nothing paid; the server pays a hold that began while the place was open). Not for a hold
@@ -341,7 +410,7 @@ local function updateSite(site, collect)
 				prompt.Enabled = show or held
 			end
 			-- Showing and not locked: a spot we could use on foot right now.
-			if collect and show and text == nil and prompt.Parent then
+			if collect and show and (text == nil or stageHold ~= nil) and prompt.Parent then
 				fillCount += 1
 				fillSpots[fillCount] = prompt.Parent
 			end
@@ -389,6 +458,8 @@ local function updateSite(site, collect)
 end
 
 ------------------------------------------------------------------ holding a Rob prompt
+
+local startRob -- (below)
 
 -- Put the bar in the Subtitle zone, sitting on its bottom edge; if another piece is using the zone (the
 -- tutorial's help line, a mission step, KNOCKED DOWN) the bar stands on top of that piece instead.
@@ -475,10 +546,11 @@ local function robStep(dt)
 		local prompt = rob.prompt
 		local p = math.clamp((t - rob.began) / rob.hold, 0, 1)
 		rob.p = p
-		if not prompt.Parent or not prompt.Enabled or t - rob.began > rob.hold + 1 then
+		-- (A gunpoint robbery has no prompt: the server's "Done" or "Fail" ends it, or its time runs out.)
+		if (prompt and (not prompt.Parent or not prompt.Enabled)) or t - rob.began > rob.hold + (prompt and 1 or 3) then
 			-- The prompt went away under the thumb (the store shut, we were moved), or its end never
 			-- reached us: no bar may be left hanging.
-			endRob(p >= 1)
+			endRob(prompt ~= nil and p >= 1) -- (a gunpoint bar the server never answered paid nothing)
 		else
 			ui.robFill.Size = UDim2.fromScale(p, 1)
 			-- The heartbeat: a strong thump and a softer one after it, faster as the end nears.
@@ -516,20 +588,25 @@ local function robStep(dt)
 	end
 end
 
--- A Rob or prep hold has begun on this device.
-local function startRob(prompt, site)
+-- A Rob or prep hold has begun on this device (prompt), or a clerk is filling the bag at gunpoint
+-- (prompt nil, seconds: the fill time).
+startRob = function(prompt, site, seconds)
 	local def = Heists.Types[site:GetAttribute("HeistId")]
-	local prep = prompt.Name == "PrepPrompt"
+	local prep = prompt ~= nil and prompt.Name == "PrepPrompt"
+	-- (setting Club Nova's drill pays nothing yet: a percentage, like a prep step)
+	local drillSet = prompt ~= nil and def ~= nil and def.Drill ~= nil and prompt.ActionText ~= "Grab the cash"
 	rob.token += 1
 	rob.active = true
 	rob.prompt = prompt
 	rob.began = os.clock()
-	rob.hold = math.max(prompt.HoldDuration, 0.1)
-	rob.take = (not prep and def and def.Payout and def.Payout[1]) or nil
+	rob.hold = math.max(prompt and prompt.HoldDuration or seconds or 1, 0.1)
+	rob.take = (not prep and not drillSet and def and def.Payout and def.Payout[1]) or nil
 	rob.p, rob.phase, rob.shown = 0, 0, nil
 	local name
 	if prep then
 		name = (def and def.Prep and def.Prep.Object) or prompt.ObjectText
+	elseif drillSet then
+		name = "SETTING THE DRILL"
 	else
 		name = site:GetAttribute("Display") or site.Name
 	end
@@ -823,7 +900,85 @@ function HeistClient.Init()
 		end
 	end)
 	Remotes.OnClient("HeistPrep", function(info)
-		HUDController.Stamp("STEP 1 DONE", type(info) == "table" and info.Text or nil, C.Cash)
+		HUDController.Stamp(type(info) == "table" and info.Title or "STEP 1 DONE", type(info) == "table" and info.Text or nil, C.Cash)
+	end)
+	-- A clerk at gunpoint (HeistService): the bar while they fill the bag, and why it stopped.
+	Remotes.OnClient("StoreRob", function(kind, site, a)
+		if typeof(site) ~= "Instance" then
+			return
+		end
+		if kind == "Start" and not rob.active then
+			startRob(nil, site, tonumber(a) or 6)
+		elseif kind == "Done" and rob.active and rob.prompt == nil then
+			endRob(true)
+		elseif kind == "Fail" then
+			if rob.active and rob.prompt == nil then
+				endRob(false)
+			end
+			local text = type(a) == "string" and NotifyController.Messages[a]
+			if text then
+				NotifyController.Show(text, nil, "warning")
+			end
+		end
+	end)
+	-- Clerks: their poses on this device, a gun aimed at one asks for the robbery, and gun owners near a
+	-- clerk store are told how it's done.
+	task.spawn(function()
+		local npcs = Workspace:WaitForChild("NPCs", 30)
+		while npcs do
+			task.wait(0.25)
+			local ok, err = pcall(function()
+				local combat = other("CombatClient")
+				local aiming, from, look, gunAt = false, nil, nil, nil
+				if combat and type(combat.Aiming) == "function" then
+					aiming, from, look, gunAt = combat.Aiming()
+				end
+				local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+				for _, m in ipairs(npcs:GetChildren()) do
+					local siteName = m:GetAttribute("Site")
+					if siteName then
+						-- The pose (PoseClient, if it's there).
+						local want = m:GetAttribute("Pose")
+						local shown = clerkPoses[m]
+						if (shown and shown.name or nil) ~= want then
+							if shown and shown.handle then
+								pcall(function()
+									shown.handle:Stop()
+								end)
+							end
+							local handle
+							local pose = want and other("PoseClient")
+							if pose then
+								pcall(function()
+									handle = pose.Play(m, want)
+								end)
+							end
+							clerkPoses[m] = want and { name = want, handle = handle } or nil
+						end
+						local site = siteFolder:FindFirstChild(siteName)
+						local head = m:FindFirstChild("Head")
+						if site and head and site:GetAttribute("Robbable") == true and m:GetAttribute("NPCKind") == "Clerk"
+							and player:GetAttribute("Side") == "Civilian" then
+							-- (the angle from the crosshair's line, the distance from the gun)
+							local to = head.Position - (from or head.Position)
+							local reach = (head.Position - (gunAt or head.Position)).Magnitude
+							if aiming and not rob.active and reach <= K.CLERK_REACH and to.Magnitude > 1
+								and to.Unit:Dot(look) > K.CLERK_CONE and os.clock() - lastClerkAsk >= K.CLERK_ASK_GAP then
+								lastClerkAsk = os.clock()
+								Remotes.Event("RequestStoreRob"):FireServer(site)
+							end
+							if not clerkHinted[site] and myRoot and (myRoot.Position - head.Position).Magnitude <= K.HINT_RANGE and ownsGun() then
+								clerkHinted[site] = true
+								NotifyController.Show(NotifyController.Messages.StoreRobHint, nil, "info")
+							end
+						end
+					end
+				end
+			end)
+			if not ok then
+				warn("[HeistClient] clerks: " .. tostring(err))
+			end
+		end
 	end)
 	Remotes.OnClient("HeistResult", onResult)
 	lastBigHeists = player:GetAttribute("BigHeists")

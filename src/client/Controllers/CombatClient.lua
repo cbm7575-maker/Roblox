@@ -9,8 +9,11 @@
 --     the weapon readout) and the WEAPON button does it: tap = next tool, hold 0.4 s = the weapon wheel
 --     (without WeaponWheel: a list with PUT AWAY). While the wheel is open nothing fires or swings and
 --     the mouse is not locked to the crosshair (CombatClient.SetWheelOpen).
---   * Fists (click / tap / R2): a straight right, then a left (PoseClient's "Point" pose thrown for a
---     third of a second; without PoseClient the Animate script's old slash). A pedestrian in front of you
+--   * Fists (click / tap / R2, X on a keyboard): a straight right, then a left (PoseClient's "Point"
+--     pose thrown for a third of a second; without PoseClient the Animate script's old slash). The attack
+--     key punches with empty hands too (X always, a click or R2 with nothing held): the Fists come out by
+--     themselves (bareSwing; the server does the same for that punch: CombatService bareHands). Citizens
+--     only, as before: a cop has the taser (T) and the cuffs. A pedestrian in front of you
 --     falls over, runs off and drops a wallet (PedClient, this device only); you turn to face the nearest
 --     player in reach you could hit, and the server is asked ("Punch", them).
 --   * A gun is "out" while its Tool is in your hand, you are on foot and on your feet (not swimming,
@@ -31,12 +34,17 @@
 --         that controller this file writes them itself). A crosshair marks the middle of the screen and,
 --         on a keyboard, the mouse is locked to it; hold Left Alt to free the cursor for a click on the
 --         HUD. Everything is put back the moment the gun stops being out.
---       - FIRE: left mouse / R2 / the FIRE button (hold for automatic guns; dragging the thumb that
---         holds FIRE turns the camera). AIM (zoom to FOV 50): hold right mouse / L2, or the AIM toggle
---         on touch; on touch and gamepad pressing it also swings the camera onto the nearest player you
---         could hit within Config Aim.LockAngle of the crosshair. RELOAD: R / gamepad X (taken from GET
---         IN only when there is something to reload) / the RELOAD button, and by itself when the
---         magazine runs dry.
+--       - FIRE: X or left mouse / R2 / the FIRE button (hold for automatic guns; dragging the thumb that
+--         holds FIRE turns the camera). AIM (zoom to FOV 50): hold Z or right mouse / L2, or the AIM
+--         toggle on touch; a quick tap of Z keeps aiming until the next tap. On touch and gamepad,
+--         pressing AIM also swings the camera onto the nearest target you could hit within Config
+--         Aim.LockAngle of the crosshair (lockTarget: a player, else a police officer or shop clerk the
+--         server put in Workspace.NPCs with the attribute AimTarget, else a pedestrian). Z does the same
+--         within Aim.KeyLockAngle and keeps the view on them for as long as you aim, so a keyboard alone
+--         can aim and shoot; moving the mouse or pressing the left / right arrow keys (they turn Roblox's
+--         camera) hands the view back. Z with no gun in hand draws the one you last held (else your best)
+--         and aims it. RELOAD: R / gamepad X (taken from GET IN only when there is something to reload) /
+--         the RELOAD button, and by itself when the magazine runs dry.
 --       - The shot goes where the crosshair points, snapping to a player you could hit who is within a
 --         few degrees of it and in plain sight (cops only snap to citizens with 2+ stars). The client
 --         sends ("Fire", gunId, aimPoint, thatPlayer) and nothing else: no ammo, damage or victim.
@@ -63,8 +71,8 @@
 --     (optional sound key "KnockedOut"), then "KNOCKED OUT" with who did it and what you dropped; the
 --     grey lifts when you are back up.
 --   * HUD (ScreenGui "CombatHUD", flat street look, every piece in its Theme zone):
---       - Vitals zone (under the minimap): HEALTH (left) and ARMOR (right) bars, while you are hurt or
---         armored, for 4 s after a change, and always with a gun in hand.
+--       - Vitals zone (under the minimap): HEALTH (left) and ARMOR (right) bars, always (owner, Oct 30:
+--         the health bar never leaves the screen), except over the title screen.
 --       - Pills zone (under the cash): SAFE ZONE / PASSIVE.
 --       - Corner zone (bottom right on a PC, bottom centre on a phone; the car cluster has it while
 --         driving, when tools are put away): "Ammo", the weapon's name and "12 / ∞". On a phone the
@@ -86,7 +94,8 @@
 -- Other controllers are looked up softly (other(name)): PoseClient, LocomotionClient, ImpactClient,
 -- DriveUI, PhoneUI, WardrobeUI, DealerClient, HouseClient. The game still works when one is missing.
 -- For other controllers: CombatClient.GunOut() (the camera, crosshair and mouse are in gun mode right
--- now), CombatClient.IsShopOpen(). For WeaponWheel: CombatClient.Weapons() (what the hands can switch
+-- now), CombatClient.IsShopOpen(), CombatClient.Aiming() (a gun is out and raised, plus where it points
+-- from and the camera's look: HeistClient's clerk, TrafficClient's drivers). For WeaponWheel: CombatClient.Weapons() (what the hands can switch
 -- to), Equipped() (the key of the one in hand), EquipKey(key) (the same equip as the WEAPON button and
 -- the hotbar keys), CanSwitch() (may the tools be used right now?) and SetWheelOpen(on).
 
@@ -175,6 +184,14 @@ K.KO_DRAIN = 0.6 -- ...over this long
 K.KO_STAMP_AT = 1.5 -- the words
 K.KO_BLUR = 5 -- BlurEffect.Size: slight
 K.PAD_RELOAD = "NC_GunReload" -- ContextActionService action: gamepad X while a gun is out
+-- The keyboard's own fight keys, so no mouse is needed: Z aims (hold; a tap keeps aiming until the next
+-- tap) and X fires, or punches with no gun out. Nothing else uses them on foot (the dressing room's Z / X
+-- spin it and the gun shop's and house card's X close them: a gun is never out and no punch goes behind
+-- any of those panels).
+K.KEY_AIM = Enum.KeyCode.Z
+K.KEY_FIRE = Enum.KeyCode.X
+K.TAP = 0.25 -- seconds: Z let go sooner than this was a tap
+K.KEY_LOCK_ANGLE = K.AIM.KeyLockAngle or 60 -- degrees: Z swings onto a target this far from the crosshair
 
 local mode = "keyboard" -- "keyboard" | "gamepad" | "touch": which buttons and hints show
 
@@ -240,6 +257,12 @@ local S = {
 	weaponDown = nil, -- os.clock() the WEAPON button went down (nil once it counted as a hold)
 	listOpen = false, othersAt = 0,
 	wheelOpen = false, -- WeaponWheel is up: no shots or swings, the mouse stays free (SetWheelOpen)
+	-- the keyboard's Z / X
+	keyHold = false, -- Z is down: aiming
+	keyAt = nil, -- os.clock() Z went down (let go within K.TAP: a tap)
+	tapAimAt = nil, -- os.clock() of a tap made while the gun was still coming out (aimStep turns AIM on)
+	keyFire = false, -- X is the finger on the trigger (its release lets go)
+	lastGunKey = nil, -- the gun last in hand (Z draws it again)
 }
 
 local refreshAmmoHud, refreshTouch, showVitals, closeShop -- (defined further down)
@@ -280,14 +303,24 @@ local function hittable(p)
 	return hum ~= nil and hum.Health > 0 and hum.SeatPart == nil and not sameCrew(p) and Combat.Hittable(p, now())
 end
 
--- Would a shot from this gun count on them? (A cop's Service Pistol only works on wanted citizens.)
+-- Would a shot from this gun count on them? (A cop's Service Pistol only works on wanted citizens: from
+-- MinStars, or from 1 star with a gun in their hand. The server also counts one fired lately.)
 local function gunTarget(p, g)
 	if not hittable(p) then
 		return false
 	end
 	local stars = g.MinStars
 	if stars then
-		return p:GetAttribute("Side") == "Civilian" and (p:GetAttribute("Heat") or 0) >= stars
+		local heat = p:GetAttribute("Side") == "Civilian" and (p:GetAttribute("Heat") or 0) or 0
+		if heat >= stars then
+			return true
+		end
+		for _, c in ipairs((heat >= 1 and p.Character) and p.Character:GetChildren() or {}) do
+			if c:IsA("Tool") and c:GetAttribute(K.ATTR) == "Gun" then
+				return true
+			end
+		end
+		return false
 	end
 	return true
 end
@@ -925,7 +958,7 @@ local function punchTarget(root)
 	return best, bestOk == true
 end
 
-local function punch(tool)
+local function punch(tool, bare)
 	local t = os.clock()
 	if t - S.lastSwing < K.FISTS.Cooldown then
 		return
@@ -954,7 +987,7 @@ local function punch(tool)
 	if not throwPunch(char, S.swings, r and (r.Position + Vector3.new(0, 1, 0)) or nil) then
 		playSlash(char, tool)
 	end
-	send("Punch", target) -- (an unhittable one too: the server explains why)
+	send("Punch", target, bare == true) -- (an unhittable one too: the server explains why. bare: see bareSwing)
 end
 
 ------------------------------------------------------------------ what state are we in
@@ -1120,6 +1153,52 @@ local function aimPoint(char, from, g, within)
 		end
 	end
 	return hit or (origin + dir * (skip + 400)), nil
+end
+
+-- What AIM's swing turns the view onto: the target nearest the crosshair within `angle` degrees, in
+-- range and in plain sight. A player we could hit first (aimPoint's own pick), else someone the server
+-- put in the street that a gun can be pointed at (a police officer, a shop clerk: a Model in
+-- Workspace.NPCs with the attribute AimTarget and a living Humanoid), else a pedestrian (citizens only,
+-- like every shot at one). Returns the part to keep the view on, or nil.
+local function lockTarget(char, from, g, angle)
+	local _, who = aimPoint(char, from, g, angle)
+	local body = who and who.Character
+	local part = body and (body:FindFirstChild("UpperTorso") or body:FindFirstChild("HumanoidRootPart"))
+	if part then
+		return part
+	end
+	local cam = Workspace.CurrentCamera
+	local origin, dir = cam.CFrame.Position, cam.CFrame.LookVector
+	local best, bestAngle
+	local function consider(p, model)
+		local to = p.Position - from
+		local v = p.Position - origin
+		if to.Magnitude > g.Range or to:Dot(dir) <= 0 or v.Magnitude < 0.1 then
+			return
+		end
+		local a = math.deg(math.acos(math.clamp(v.Unit:Dot(dir), -1, 1)))
+		if a <= angle and (not bestAngle or a < bestAngle) and solidHit(from, to, shotIgnore(char, model)) == nil then
+			best, bestAngle = p, a
+		end
+	end
+	-- (Citizens only: a cop's Service Pistol is for wanted players, never for fellow officers or clerks.)
+	local npcs = player:GetAttribute("Side") == "Civilian" and not g.MinStars and Workspace:FindFirstChild("NPCs")
+	for _, m in ipairs(npcs and npcs:GetChildren() or {}) do
+		if m:IsA("Model") and m:GetAttribute("AimTarget") == true then
+			local hum = m:FindFirstChildOfClass("Humanoid")
+			local t = m:FindFirstChild("UpperTorso") or m:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and t and t:IsA("BasePart") then
+				consider(t, m)
+			end
+		end
+	end
+	if not best and player:GetAttribute("Side") == "Civilian" and type(PedClient.Roots) == "function" then
+		local ok, roots = pcall(PedClient.Roots)
+		for _, r in ipairs(ok and roots or {}) do
+			consider(r, nil)
+		end
+	end
+	return best
 end
 
 -- One pull of the trigger (first = true) or one tick of an automatic gun held down.
@@ -1348,6 +1427,92 @@ local function cycleWeapon()
 		return
 	end
 	equip(list[(table.find(list, held) or 0) % #list + 1])
+end
+
+------------------------------------------------------------------ the keyboard's fight keys (Z / X)
+
+-- The attack key with no gun out (X, or a click / R2 with nothing in hand): a punch, Fists in hand or
+-- not. Empty hands take them out first, and the server does the same for this punch (CombatService
+-- bareHands: the equip reaches it after the request). Citizens only, as for every punch.
+-- fromClick: a mouse click or R2 (not X): nothing at all where the punch couldn't count (a safe zone,
+-- passive mode...), since those clicks used to do nothing; X still asks, and the server says why.
+local function bareSwing(fromClick)
+	if panelOpen() or S.wheelOpen or downNow() or player:GetAttribute("Side") ~= "Civilian"
+		or player:GetAttribute("Surrender") == true then -- (hands up: put them down first, H)
+		return
+	end
+	local char, hum = myBody()
+	if not char or hum.SeatPart or player:GetAttribute("InHome") == true or (fromClick and selfBlocked(hum)) then
+		return
+	end
+	local held = char:FindFirstChildOfClass("Tool")
+	if held then
+		if held:GetAttribute(K.ATTR) == "Fists" then
+			punch(held)
+		end
+		return -- (a gun in hand that isn't out, in the water say: no swing)
+	end
+	for _, tool in ipairs((combatTools())) do
+		if tool:GetAttribute(K.ATTR) == "Fists" then
+			hum:EquipTool(tool)
+			punch(tool, true)
+			return
+		end
+	end
+end
+
+-- Z with no gun out: the gun last held comes out (else the best owned: combatTools is in shop order),
+-- to be aimed the moment it is out (S.keyHold, or a tap's S.tapAimAt: aimStep). False with none to draw.
+local function drawForAim()
+	if not hotbarWanted() or downNow() or panelOpen() or S.wheelOpen or player:GetAttribute("Surrender") == true then
+		return false
+	end
+	local list, held = combatTools()
+	if held and Combat.ToolGun(held) then
+		return true -- in hand already (aimStep brings it out as soon as it can be)
+	end
+	local pick
+	for _, tool in ipairs(list) do
+		if Combat.ToolGun(tool) then
+			pick = tool
+			if toolKey(tool) == S.lastGunKey then
+				break
+			end
+		end
+	end
+	if not pick then
+		NotifyController.Show(NotifyController.Messages.NoGunToAim or "No gun yet: Coast Arms sells them.", nil, "info")
+		return false
+	end
+	equip(pick)
+	return true
+end
+
+local function keyAimDown()
+	if panelOpen() or S.wheelOpen then
+		return
+	end
+	if gunOut and aimToggle then
+		aimToggle = false -- a tap had AIM on: this press is the one that turns it off
+		S.keyHold, S.keyAt = false, nil
+		return
+	end
+	S.keyHold, S.keyAt = true, os.clock()
+	if not gunOut and not drawForAim() then
+		S.keyHold, S.keyAt = false, nil
+	end
+end
+
+local function keyAimUp()
+	local at = S.keyAt
+	S.keyHold, S.keyAt = false, nil
+	if at and os.clock() - at < K.TAP then
+		if gunOut then
+			aimToggle = true -- a tap: keep aiming until the next one
+		else
+			S.tapAimAt = os.clock() -- (the gun is still coming out: aimStep turns AIM on when it is)
+		end
+	end
 end
 
 local function closeWeaponList()
@@ -1878,13 +2043,12 @@ local function refreshVitals()
 	ui.healthFill.BackgroundColor3 = health < 0.3 and C.Danger or C.Health
 end
 
--- The strip shows while you're hurt or armored, for 4 s after either changed, and with a gun in hand.
--- (Roblox's own health bar is off: HUDController.) Never over the first-join title screen.
+-- The strip always shows for citizens and cops (owner, Oct 30: the health bar never leaves the screen;
+-- it used to show only while hurt, armored or holding a gun). Roblox's own health bar is off
+-- (HUDController). Never over the first-join title screen.
 showVitals = function()
 	local side = player:GetAttribute("Side")
 	ui.vitals.Visible = (side == "Civilian" or side == "Cop") and player:GetAttribute("TitleScreen") ~= true
-		and ((player:GetAttribute("Daze") or 0) > 0 or Combat.ArmorOf(player) > 0 or os.clock() < S.vitalsUntil
-			or gunTool ~= nil)
 end
 
 refreshAmmoHud = function()
@@ -1940,7 +2104,7 @@ local function showHint()
 		end
 	end
 	local pad = mode == "gamepad"
-	local pairsList = { { pad and "R2" or "LMB", "FIRE" }, { pad and "L2" or "RMB", "AIM" }, { pad and "X" or "R", "RELOAD" } }
+	local pairsList = { { pad and "R2" or "X / LMB", "FIRE" }, { pad and "L2" or "Z / RMB", "AIM" }, { pad and "X" or "R", "RELOAD" } }
 	if not pad then
 		table.insert(pairsList, { "ALT", "CURSOR" }) -- (hold it to click the HUD with a gun out)
 	end
@@ -2028,6 +2192,9 @@ local function refreshGun()
 	table.clear(S.gunConns)
 	stopReloadMotion()
 	gunTool, gun = tool, g
+	if tool then
+		S.lastGunKey = toolKey(tool) -- (Z draws this one again)
+	end
 	S.gunMuzzle = muzzleOf(tool)
 	triggerHeld, holdAim, aimToggle = false, false, false
 	S.reloadAskedAt, S.emptyClicked = nil, false
@@ -2100,6 +2267,7 @@ end
 local function exitGunOut()
 	gunOut = false
 	triggerHeld, holdAim, aimToggle = false, false, false
+	S.keyFire = false
 	S.recoilKick, S.recoilSettle, S.crossKick = 0, 0, 0
 	S.queuedAt = nil
 	S.raised, S.wasAiming, S.lockPart = false, false, nil
@@ -2181,6 +2349,9 @@ end
 -- Every frame, right after the camera: is the gun out, and if so the over-the-shoulder camera, how the
 -- gun is held, the body's facing, the mouse lock, the zoom, the recoil, automatic fire and the crosshair.
 local function aimStep(dt)
+	if panelOpen() then
+		S.panelAt = os.clock() -- (a key that shuts a panel can reach us after the panel is gone: see Init)
+	end
 	if gunTool and gunTool.Parent ~= player.Character then
 		refreshGun() -- (it left our hand without a ChildRemoved we saw: a respawn)
 	end
@@ -2218,7 +2389,14 @@ local function aimStep(dt)
 	local cam = Workspace.CurrentCamera
 	local t = os.clock()
 	local g = gun
-	local aiming = holdAim or aimToggle
+	-- (A tap of Z made while the gun was still coming out: AIM goes on now that it's out.)
+	if S.tapAimAt then
+		if t - S.tapAimAt < 1.5 then
+			aimToggle = true
+		end
+		S.tapAimAt = nil
+	end
+	local aiming = holdAim or aimToggle or S.keyHold
 	-- "Up": aiming, firing, or just fired. The body turns to the crosshair and walks; the gun itself
 	-- comes up too, except during the reload.
 	local up = aiming or triggerHeld or t - S.lastShotAt < K.STRAFE_HOLD
@@ -2320,21 +2498,25 @@ local function aimStep(dt)
 		end
 	end
 
-	-- Touch and gamepad: pressing AIM swings the view onto the nearest player you could hit who is
-	-- close to the crosshair (a mouse aims itself). Camera turns made here carry over: Roblox's camera
-	-- takes its next look from the camera's own CFrame.
-	if aiming and not S.wasAiming and mode ~= "keyboard" and g then
+	-- Touch and gamepad: pressing AIM swings the view onto the nearest target you could hit close to the
+	-- crosshair (a mouse aims itself). Z does it too, wider, and keeps the view on them for as long as you
+	-- aim: keyboard play needs no mouse. Moving the mouse or the left / right arrows hands the view back
+	-- (Init). Camera turns made here carry over: Roblox's camera takes its next look from the camera's own
+	-- CFrame.
+	local keyLock = mode == "keyboard" and (S.keyHold or aimToggle)
+	if aiming and not S.wasAiming and (mode ~= "keyboard" or keyLock) and g then
 		local head = char:FindFirstChild("Head")
-		local _, who = aimPoint(char, (head and head:IsA("BasePart")) and head.Position or root.Position, g, K.LOCK_ANGLE)
-		local body = who and who.Character
-		S.lockPart = body and (body:FindFirstChild("UpperTorso") or body:FindFirstChild("HumanoidRootPart")) or nil
-		S.lockUntil = t + K.LOCK_TIME * 2.5
+		local from = (head and head:IsA("BasePart")) and head.Position or root.Position
+		S.lockPart = lockTarget(char, from, g, K.LOCK_ANGLE) or (keyLock and lockTarget(char, from, g, K.KEY_LOCK_ANGLE)) or nil
+		S.lockUntil = keyLock and math.huge or t + K.LOCK_TIME * 2.5
 	end
 	S.wasAiming = aiming
 	local lock = S.lockPart
 	if lock then
 		local to = lock.Position - cam.CFrame.Position
-		if aiming and t < S.lockUntil and lock.Parent and to.Magnitude > 1 and math.abs(to.Unit.Y) < 0.98 then
+		local lockHum = lock.Parent and lock.Parent:FindFirstChildOfClass("Humanoid")
+		if aiming and t < S.lockUntil and lock.Parent and (not lockHum or lockHum.Health > 0) and to.Magnitude > 1
+			and math.abs(to.Unit.Y) < 0.98 then
 			local cf = cam.CFrame
 			cam.CFrame = cf:Lerp(CFrame.lookAt(cf.Position, lock.Position), 1 - math.exp(-dt * 3 / K.LOCK_TIME))
 		else
@@ -2372,11 +2554,14 @@ local function aimStep(dt)
 		S.poseWarnAt = t
 		warn("[CombatClient] holding the gun: " .. tostring(why))
 	end
-	-- Pedestrians you point a raised gun at put their hands up (PedClient decides who and how many).
+	-- Pedestrians you point a raised gun at put their hands up (PedClient decides who and how many), and
+	-- the driver of a slow car gets out and runs (TrafficClient: the empty car is yours to take).
 	if aiming and t - S.lastAimedAt >= 0.5 and type(PedClient.AimedAt) == "function" then
 		S.lastAimedAt = t
 		local head = char:FindFirstChild("Head")
-		pcall(PedClient.AimedAt, (head and head:IsA("BasePart")) and head.Position or root.Position, cam.CFrame.LookVector)
+		local from = (head and head:IsA("BasePart")) and head.Position or root.Position
+		pcall(PedClient.AimedAt, from, cam.CFrame.LookVector)
+		ask("TrafficClient", "AimedAt", cam.CFrame.Position, cam.CFrame.LookVector) -- (the crosshair's own line)
 	end
 
 	-- Ammo: the server's count replaces our guess once our shots have surely arrived.
@@ -3118,6 +3303,7 @@ local function checkMode()
 	end
 	mode = m
 	triggerHeld, holdAim, aimToggle = false, false, false
+	S.keyHold, S.keyAt, S.keyFire = false, nil, false
 	S.lookX, S.lookY = 0, 0
 	closeWeaponList()
 	placeHud()
@@ -3200,6 +3386,23 @@ function CombatClient.IsShopOpen()
 	return shop.open
 end
 
+-- Is a gun out and raised right now (aiming, firing, or just fired)? Then also the crosshair's line
+-- (the camera's position and look: measured from the head, a target the crosshair is dead on sits
+-- off to the side by the shoulder offset, and close up that's a wide angle) and where the shots start
+-- (the head). HeistClient (a clerk at gunpoint) takes it from here. false otherwise.
+function CombatClient.Aiming()
+	if not gunOut or not S.raised then
+		return false
+	end
+	local char, _, root = myBody()
+	if not char then
+		return false
+	end
+	local head = char:FindFirstChild("Head")
+	local cf = Workspace.CurrentCamera.CFrame
+	return true, cf.Position, cf.LookVector, (head and head:IsA("BasePart")) and head.Position or root.Position
+end
+
 -- What the hands can switch to, in hotbar order (Fists first, then the guns in shop order), for
 -- WeaponWheel: { Key = "Fists" | a gun id, Name, Class (guns), Ammo (rounds in the magazine, as the
 -- readout shows them), Mag (a full one), Reloading, Held (in the hand right now) }.
@@ -3269,6 +3472,7 @@ function CombatClient.SetWheelOpen(on)
 	S.wheelOpen = on == true
 	if S.wheelOpen then
 		triggerHeld, holdAim = false, false
+		S.keyHold, S.keyAt, S.keyFire = false, nil, false
 		S.queuedAt = nil
 	end
 end
@@ -3381,7 +3585,9 @@ function CombatClient.Init()
 	end)
 
 	-- Gun controls. They only do anything while a gun is out (tryFire, requestReload and the zoom all
-	-- check), so on foot with empty hands, in a car or behind a panel these keys are nobody's.
+	-- check), so on foot with empty hands, in a car or behind a panel these keys are nobody's. Except:
+	-- the attack keys with no gun out punch (X; a click or R2 with nothing in hand: bareSwing), and Z
+	-- with no gun out draws one to aim (drawForAim).
 	UserInputService.InputBegan:Connect(function(input, processed)
 		local key = input.KeyCode
 		local kind = input.UserInputType
@@ -3391,7 +3597,36 @@ function CombatClient.Init()
 			end
 			return
 		end
+		-- X closes the house card and the dressing room too: the press that shut one is not a punch.
+		local panelJustShut = os.clock() - (S.panelAt or -math.huge) < 0.2
+		if (key == K.KEY_FIRE or key == K.KEY_AIM) and panelJustShut then
+			return
+		end
+		if key == K.KEY_FIRE and not processed then
+			if gunOut and not S.wheelOpen then
+				triggerHeld, S.keyFire = true, true
+				tryFire(true)
+			else
+				bareSwing()
+			end
+			return
+		elseif key == K.KEY_AIM and not processed then
+			keyAimDown()
+			return
+		elseif (key == Enum.KeyCode.Left or key == Enum.KeyCode.Right) and S.lockUntil == math.huge then
+			S.lockPart = nil -- the arrow keys turn Roblox's camera: the view is the player's again
+		end
 		if not gunOut or S.wheelOpen then
+			-- Nothing in hand: a click (keyboard and mouse) or R2 punches as well. (Fists in hand punch
+			-- through their Tool's Activated instead.)
+			local click = kind == Enum.UserInputType.MouseButton1 and not processed and mode ~= "touch"
+				and not UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt)
+			if not gunOut and not S.wheelOpen and (click or key == Enum.KeyCode.ButtonR2) then
+				local char = player.Character
+				if char and not char:FindFirstChildOfClass("Tool") and not panelJustShut then
+					bareSwing(true)
+				end
+			end
 			return -- (with the weapon wheel up a click or R2 is for picking, not for a shot)
 		end
 		if kind == Enum.UserInputType.MouseButton1 then
@@ -3416,7 +3651,13 @@ function CombatClient.Init()
 	UserInputService.InputEnded:Connect(function(input)
 		local key = input.KeyCode
 		local kind = input.UserInputType
-		if kind == Enum.UserInputType.MouseButton1 or key == Enum.KeyCode.ButtonR2 then
+		if key == K.KEY_FIRE then
+			if S.keyFire then
+				S.keyFire, triggerHeld = false, false
+			end
+		elseif key == K.KEY_AIM then
+			keyAimUp()
+		elseif kind == Enum.UserInputType.MouseButton1 or key == Enum.KeyCode.ButtonR2 then
 			if mode ~= "touch" or key == Enum.KeyCode.ButtonR2 then
 				triggerHeld = false -- (on touch the FIRE button lets go by itself)
 			end
@@ -3427,6 +3668,14 @@ function CombatClient.Init()
 	-- Alt-tab with the trigger down: the release never arrives.
 	UserInputService.WindowFocusReleased:Connect(function()
 		triggerHeld, holdAim = false, false
+		S.keyHold, S.keyAt, S.keyFire = false, nil, false
+	end)
+	-- Z's lock on a target lets go as soon as the mouse turns the view itself.
+	UserInputService.InputChanged:Connect(function(input)
+		if S.lockPart and S.lockUntil == math.huge and input.UserInputType == Enum.UserInputType.MouseMovement
+			and input.Delta.Magnitude > 4 then
+			S.lockPart = nil
+		end
 	end)
 	UserInputService.LastInputTypeChanged:Connect(checkMode)
 

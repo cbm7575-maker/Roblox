@@ -103,6 +103,20 @@ Combat.Death = {
 	AutoRespawn = 10, -- seconds dead before you come back by yourself (under the 12 s a dead body's fall lasts on its own device: PoseClient)
 }
 
+-- Cars hitting people on foot (CombatService.CarHit, from ImpactService): a player's car, an AI patrol,
+-- or street traffic (that one is told by the victim's own device). Damage grows with the speed of the
+-- hit: a bump at walking-pace traffic speed takes a little, a fast hit most of a bar, and a second hard
+-- one (or being run over again while down) kills. Studs per second; the car HUD shows mph.
+Combat.CarHit = {
+	MinSpeed = 20, -- slower is a nudge: no damage (and no knock-down either: ImpactService)
+	Damage = 8, -- at MinSpeed...
+	PerSpeed = 0.75, -- ...plus this much per stud/s above it (40 -> 23, 60 -> 38, 90 -> 61)
+	Max = 85, -- one hit never does more: a single hit from full health never kills
+	Downed = 0.6, -- someone already lying in the road takes this share (run over again)
+	Gap = 1, -- seconds before the same body can be hurt by a car again
+	ArmorShare = 0.5, -- body armor soaks at most this share of a car hit (it stops bullets, not bumpers)
+}
+
 -- Armor (player attribute "Armor", 0-100, server-owned): takes the damage first, fists included.
 -- Citizens only (saved as data.gear.armor); it shows 0 for cops and prisoners.
 Combat.ArmorMax = 100

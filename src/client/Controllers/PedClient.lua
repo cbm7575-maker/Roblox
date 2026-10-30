@@ -10,6 +10,8 @@
 --   * Never in the water: spawn spots and the next stretch of sidewalk must be over dry ground
 --     (the Causeway and Prison Bridge sidewalks hang over the sea).
 --   * PedClient.Positions() -> { Vector3 }: where they are (TrafficClient stops for them).
+--   * PedClient.Roots() -> { BasePart }: the root parts of the ones on their feet (CombatClient's AIM
+--     swings the view onto one).
 --   * They dive out of the way of fast cars, and anyone who gets bumped just falls over and gets back
 --     up. No damage, nothing gory: this is a kid-friendly game. A fall is the shared limp body
 --     (Shared.Util.Ragdoll: proper elbow and knee limits, a cap on how many at once); when that says no
@@ -795,6 +797,17 @@ local function step()
 	end
 end
 
+-- The walkers on their feet, as their root parts (CombatClient's AIM swings the view onto one).
+function PedClient.Roots()
+	local list = {}
+	for _, ped in ipairs(peds) do
+		if ped.model.Parent and not ped.limp and ped.hum.Health > 0 then
+			table.insert(list, ped.root)
+		end
+	end
+	return list
+end
+
 -- Where the walkers are (TrafficClient stops for them when they cross in front of a car).
 function PedClient.Positions()
 	local list = {}
@@ -1028,8 +1041,9 @@ end
 
 -- A raised gun points along `dir` from `origin` (CombatClient calls this about twice a second while
 -- the local player aims). Walkers within REACT.AimRange who stand close to that line stop, turn to the
--- gun and put their hands up, REACT.MaxHands of them at most; the nervous ones run instead. The hands
--- stay up while the gun stays on them, and when it moves away they hurry off.
+-- gun and put their hands up, REACT.MaxHands of them at most (the most frightened of those drop into a
+-- crouch with their arms over their heads instead: "Cower"); the nervous ones run instead. They stay
+-- that way while the gun stays on them, and when it moves away they hurry off.
 function PedClient.AimedAt(origin, dir)
 	if typeof(origin) ~= "Vector3" or typeof(dir) ~= "Vector3" or dir.Magnitude < 0.05 then
 		return
@@ -1050,13 +1064,15 @@ function PedClient.AimedAt(origin, dir)
 			local after = REACT.HandsTime + 3 -- (the hands, then the run)
 			if ped.mood == "hands" then
 				ped.busyUntil = math.max(ped.busyUntil or 0, now + after)
-				freeze(ped, "hands", "HandsUp", REACT.HandsTime, origin, origin) -- still on them: the time starts over
+				-- (still on them: the time starts over, in the same pose)
+				freeze(ped, "hands", ped.poseName == "Cower" and "Cower" or "HandsUp", REACT.HandsTime, origin, origin)
 			elseif ped.mood == nil then
 				ped.busyUntil = math.max(ped.busyUntil or 0, now + after)
 				if (ped.nerve or 1) < REACT.Hands and hands < REACT.MaxHands and posed < REACT.MaxPosed then
 					hands += 1
 					posed += 1
-					freeze(ped, "hands", "HandsUp", REACT.HandsTime, origin, origin)
+					local cower = (ped.nerve or 1) < REACT.Hands * 0.35
+					freeze(ped, "hands", cower and "Cower" or "HandsUp", REACT.HandsTime, origin, origin)
 				else
 					runFrom(ped, origin, 3, Vector3.new(0, 0, 1), false)
 				end

@@ -2577,7 +2577,7 @@ function PAGES.Settings()
 	})
 	-- The key list is for keyboards: a touch-only player has the on-screen buttons instead.
 	if not (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) then
-		W.note(s, "Keys: P phone · E use · F get in/out · 1 fists · 2+ guns · R reload · Space drift · Shift nitro · H horn/siren · V radio · R flip (in a car)",
+		W.note(s, "Keys: P phone · E use · F get in/out · Z aim · X shoot / punch · R reload · Tab weapons · Space drift · Shift nitro · H horn/siren · V radio · R flip (in a car)",
 			5, nil, Enum.TextXAlignment.Center).Name = "Keys"
 	end
 end
@@ -2662,7 +2662,7 @@ local function guideSections()
 		{
 			Id = "Rob", Title = "Rob stores & ATMs", Short = "ROB",
 			Lines = {
-				"Stores & ATMs: walk up, hold [Rob].",
+				pick("Stores: aim at the clerk ([Z]). ATMs: hold [Rob].", "Stores: [AIM] at the clerk. ATMs: hold [Rob]."),
 				"[GPS] > [HEISTS] shows which are open.",
 				"Cash goes in your bag (max " .. money(bag) .. ").",
 				"Lose the cops, bank it at the Hideout.",
@@ -2677,6 +2677,7 @@ local function guideSections()
 				"Stay out of sight and they fade.",
 				"Banking at the Hideout clears them.",
 				"Spray & Go or a new [OUTFIT] take a star off.",
+				pick("Cornered? [H] hands up: cuffed, not shot.", "Cornered? [HANDS UP]: cuffed, not shot."),
 			},
 			Buttons = { { "GPS: HIDEOUT", Gps = "Hideout" }, { "GPS: SPRAY & GO", Gps = "Spray & Go" } },
 		},
@@ -2713,7 +2714,7 @@ local function guideSections()
 		{
 			Id = "Fight", Title = "Fists & guns", Short = "FIGHT",
 			Lines = {
-				pick("[1] fists · [2+] guns · [R] reload", "Tap [WEAPON] to switch, [FIRE] to shoot."),
+				pick("[Z] aim · [X] shoot (or punch) · [R] reload", "Tap [WEAPON] to switch, [FIRE] to shoot."),
 				"Guns from " .. money(pistol and pistol.Price or 0) .. " at Coast Arms.",
 				"Guns kill, fists knock out. Both drop cash.",
 				"No fights in safe zones or [Passive] mode.",

@@ -6,6 +6,11 @@
 --   * Cops: TASER (T) and SPIKES (G) tiles, flat dark squares with a small drawn glyph, a Display label
 --     and, on a keyboard, the key cap on their left (no gamepad button is bound to them, so no cap
 --     there). SPIKES shows its charges top-right (red at 0). TASER only shows on foot.
+--   * Wanted citizens on foot with police near (a cop, an AI patrol car or an officer on foot within
+--     HANDS_RANGE studs): the HANDS UP tile (H, gamepad Y). It asks the server to put your hands up
+--     (RequestSurrender: PoliceOfficerService), lit while they are; a second press puts them down. While
+--     they are up you can't walk (LocomotionClient.SetCap("surrender", 0)): the police cuff you instead of
+--     shooting, and the sentence is a star shorter.
 --   * Markers for wanted players at their LastSeen spot: a WANTED / LAST SEEN tag with white stars and
 --     the suspect's clues, and a faint red search circle (150 + 50 per star) while their stars are hollow.
 --   * Taser zap beams, and the stamps: CUFFED (with a mugshot headline), BOUNTY +$X (or ARRESTED when
@@ -15,7 +20,7 @@
 -- switches the whole "LawUI" ScreenGui off while its dressing room is open; T and G do nothing then.
 -- THE SIDE COLUMN: situational buttons live under the Buttons zone, right-aligned with it, never in a
 -- zone. Slots from the top: LEAVE HOME (HouseClient, inside your home), WARDROBE (WardrobeUI, inside
--- your home or a hideout), then TASER and SPIKES. PC / gamepad: 52 px squares, one per row, wrapping
+-- your home or a hideout), then TASER and SPIKES (or HANDS UP). PC / gamepad: 52 px squares, one per row, wrapping
 -- into another column to the left before the Corner zone. Phone: 52 x 44 tiles in one column at the
 -- right edge (clear of CombatClient's FIRE / AIM cluster), starting under InteractClient's seated "Get
 -- out first" hint while it hangs under EXIT there, and stopping above Roblox's jump button / the drive
@@ -36,6 +41,7 @@ local Workspace = game:GetService("Workspace")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
+local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 
@@ -45,6 +51,7 @@ local LawClient = {}
 
 local C = Theme.Color
 local TASER_RANGE = 32
+local HANDS_RANGE = 150 -- studs: police this close make HANDS UP show
 -- Side column tiles (see the header).
 local TILE_PC = 52 -- as wide as the Buttons zone
 local GAP_PC = 8
@@ -67,7 +74,8 @@ local HEADLINES = {
 	"Suspect Blames Flamingo for Wrong Turn",
 }
 
-local gui, taserButton, spikeButton, spikeCount, prisonLabel
+local gui, taserButton, spikeButton, spikeCount, prisonLabel, handsButton
+local surrenderCapped = false -- LocomotionClient holds our feet still (hands up)
 local keyCaps = {} -- the T and G caps beside the tiles
 local markers = {} -- [player] = { beacon = Part, label, clues, circle = Part }
 local markerFolder
@@ -301,6 +309,14 @@ local function spikeGlyph(g)
 	stroke(g, 22, 5, 12, 15.5, 0, 3)
 end
 
+-- Hands up: a head and a body with both arms raised.
+local function handsGlyph(g)
+	stroke(g, 4.5, 4.5, 12, 5, 45)
+	stroke(g, 5, 8, 12, 14, 0)
+	stroke(g, 2.5, 9, 6, 6.5, -25)
+	stroke(g, 2.5, 9, 18, 6.5, 25)
+end
+
 -- A flat square tile for the side column: glyph on top, Display label at the bottom (the button's own
 -- Text), key cap on its left (keyboard only).
 local function makeTile(name, text, glyph, key)
@@ -385,6 +401,50 @@ local function dropSpikes()
 	Remotes.Event("RequestSpike"):FireServer()
 end
 
+-- Police this close to `pos`: a player cop, an AI patrol car, or an officer on foot (Workspace.NPCs).
+local function policeNear(pos, range)
+	for _, p in ipairs(Players:GetPlayers()) do
+		local r = p ~= player and p:GetAttribute("Side") == "Cop" and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if r and (r.Position - pos).Magnitude <= range then
+			return true
+		end
+	end
+	local vehicles = Workspace:FindFirstChild("Vehicles")
+	for _, car in ipairs(vehicles and vehicles:GetChildren() or {}) do
+		local chassis = car:GetAttribute("AIPolice") and car.PrimaryPart
+		if chassis and (chassis.Position - pos).Magnitude <= range then
+			return true
+		end
+	end
+	local npcs = Workspace:FindFirstChild("NPCs")
+	for _, m in ipairs(npcs and npcs:GetChildren() or {}) do
+		local r = m:GetAttribute("NPCKind") == "Officer" and m:FindFirstChild("HumanoidRootPart")
+		if r and (r.Position - pos).Magnitude <= range then
+			return true
+		end
+	end
+	return false
+end
+
+local function toggleHands()
+	if not handsButton.Visible or not gui.Enabled or RobloxMenu.IsOpen() then
+		return
+	end
+	Remotes.Event("RequestSurrender"):FireServer(player:GetAttribute("Surrender") ~= true)
+end
+
+-- Hands up: no walking (the police cuff a suspect who stands still), back to normal when they come down.
+local function capFeet(on)
+	if surrenderCapped == on then
+		return
+	end
+	surrenderCapped = on
+	local module = script.Parent:FindFirstChild("LocomotionClient")
+	pcall(function()
+		require(module).SetCap("surrender", on and 0 or nil)
+	end)
+end
+
 local function onAction(name, state)
 	-- (LawUI is off while WardrobeUI's dressing room is open: no zapping from the closet)
 	if state ~= Enum.UserInputState.Begin or side() ~= "Cop" or not gui.Enabled then
@@ -407,8 +467,11 @@ local function build()
 	gui.Parent = player:WaitForChild("PlayerGui")
 	taserButton = makeTile("Taser", "TASER", boltGlyph, "T")
 	spikeButton = makeTile("Spikes", "SPIKES", spikeGlyph, "G")
+	handsButton = makeTile("HandsUp", "HANDS UP", handsGlyph, "H")
+	handsButton.TextSize = 11 -- (two words in a 52 px tile)
 	taserButton.Activated:Connect(fireTaser)
 	spikeButton.Activated:Connect(dropSpikes)
+	handsButton.Activated:Connect(toggleHands)
 	-- Charges left, top-right of the SPIKES tile.
 	spikeCount = Instance.new("TextLabel")
 	spikeCount.Name = "Count"
@@ -457,6 +520,13 @@ local function build()
 
 	ContextActionService:BindAction("NC_Taser", onAction, false, Enum.KeyCode.T)
 	ContextActionService:BindAction("NC_Spike", onAction, false, Enum.KeyCode.G)
+	-- H / gamepad Y: HANDS UP, only while its tile shows (on foot: H is the horn in a car, SoundClient,
+	-- and Y is nitro). Not through ContextActionService, which would take H from the horn.
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if not processed and (input.KeyCode == Enum.KeyCode.H or input.KeyCode == Enum.KeyCode.ButtonY) then
+			toggleHands()
+		end
+	end)
 end
 
 ------------------------------------------------------------------ wanted markers
@@ -613,7 +683,7 @@ end
 local function placeButtons()
 	local touch = Theme.IsTouch()
 	local i = LawClient.PlaceSlots()
-	for _, b in ipairs({ taserButton, spikeButton }) do
+	for _, b in ipairs({ taserButton, spikeButton, handsButton }) do
 		if b.Visible then
 			local pos, size = LawClient.SideSlot(gui, i, touch)
 			b.Position = UDim2.fromOffset(pos.X, pos.Y)
@@ -634,6 +704,17 @@ local function updateUI()
 	local onFoot = hum ~= nil and hum.SeatPart == nil
 	taserButton.Visible = amCop and onFoot and not title
 	spikeButton.Visible = amCop and not title
+	-- HANDS UP: a wanted citizen on foot with police near (or with their hands up already).
+	local root = myRoot()
+	local up = player:GetAttribute("Surrender") == true
+	handsButton.Visible = not title and onFoot and hum.Health > 0 and isWanted(player)
+		and (up or (root ~= nil and policeNear(root.Position, HANDS_RANGE)))
+	if handsButton:GetAttribute("Lit") ~= up then
+		handsButton:SetAttribute("Lit", up) -- (lit while the hands are up; a second press puts them down)
+		Theme.Button(handsButton, up and "Primary" or "Quiet")
+		handsButton.FontFace = Theme.Font.Display
+	end
+	capFeet(up)
 	local charges = player:GetAttribute("SpikeCharges") or 0
 	spikeCount.Text = tostring(charges)
 	spikeCount.TextColor3 = charges > 0 and C.Text or C.Danger
@@ -702,7 +783,13 @@ function LawClient.Init()
 	end)
 	Remotes.OnClient("TaserFx", zap)
 	Remotes.OnClient("Caught", function(info)
-		HUDController.Stamp("CUFFED", HEADLINES[math.random(1, #HEADLINES)], C.Danger)
+		local surrendered = type(info) == "table" and info.Surrendered == true
+		HUDController.Stamp("CUFFED", surrendered and "You came quietly: a shorter sentence" or HEADLINES[math.random(1, #HEADLINES)],
+			C.Danger)
+	end)
+	-- Hands come down with the attribute (an arrest, a new body, no stars left): the feet are free again.
+	player:GetAttributeChangedSignal("Surrender"):Connect(function()
+		capFeet(player:GetAttribute("Surrender") == true)
 	end)
 	Remotes.OnClient("BountyEarned", function(info)
 		if (tonumber(info.Amount) or 0) > 0 then

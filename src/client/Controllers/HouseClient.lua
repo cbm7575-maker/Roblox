@@ -31,7 +31,6 @@
 -- HouseClient.RouteTo(id) -> GPS route to a property's door (your own home if id is nil).
 -- For CombatClient: HouseClient.IsOpen() -> the buy card is up (no gun out, no punches behind it).
 
-local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -43,6 +42,7 @@ local Workspace = game:GetService("Workspace")
 local Housing = require(ReplicatedStorage.Shared.Config.Housing)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
+local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 
@@ -411,7 +411,7 @@ local function buildCard()
 			return
 		end
 		-- Never buy from behind Roblox's own menu (its Y is "Reset Character") or a key something else took.
-		if processed or GuiService.MenuIsOpen then
+		if processed or RobloxMenu.IsOpen() then
 			return
 		end
 		if key == Enum.KeyCode.Return or key == Enum.KeyCode.KeypadEnter or key == Enum.KeyCode.ButtonY then

@@ -76,8 +76,38 @@
 --     pay and how many are found under it); "slow-motion" camera while InStunt (DriveController).
 --   * Race leaderboards: a BEST TIMES board over each race start pad, next to its RACE label (a
 --     BillboardGui "RaceBoard_<Id>"): a flat dark panel, the title in gold Display over a thin rule,
---     the race's checkpoints, par and full reward, then the top 5 from RaceService's "RaceBoard_<Id>"
---     attribute (names in Body, times in Display, the leader in gold).
+--     the race's checkpoints (or laps), par and full reward, then the top 5 from RaceService's
+--     "RaceBoard_<Id>" attribute (names in Body, times in Display, the leader in gold).
+--   * Races with others (RaceService runs them; see its header):
+--       - the lobby banner (label "Lobby", Theme's Banner zone, under the route preview card when that
+--         shows): "OCEAN DRIVE SPRINT  starts in 9 · press Race on the pad to join" for a citizen who
+--         could race, within K.LOBBY_SHOW studs of the pad; "... · 2 racers · you're in" for a member
+--         (ReplicatedStorage attributes RaceLobby_<Id> / RaceLobbyN_<Id>, player attribute RaceLobby);
+--       - POS 2/4 left of the time and LAP 1/2 right of it (labels "Position" and "Lap"), each only while
+--         it means something (others in the race / more than one lap); both pop when they change;
+--       - laps: the race's checkpoints are laid out once per lap (raceView), so everything that follows
+--         a race (rings, line, finish gate) works through every lap unchanged; the checkpoint count and
+--         the minimap's numbers restart each lap;
+--       - the finish card's title says the place ("2ND PLACE") in a race with others, and FINISH alone;
+--       - the standings panel (frame "Standings") hangs under the finish card: RESULTS, then everyone in
+--         order with their times (NPCs dimmer, "..." while still racing, DNF), you in gold with a pink
+--         bar. It updates as the others finish and goes K.STAND_SECONDS after its last update.
+--   * Race challenges (RaceService, remote "RaceChallenge"):
+--       - CHALLENGE (button "Challenge"): while you drive your own car as a free citizen (no race,
+--         lobby, mission, shift or Big Score) with another such driver within K.CHALLENGE_SHOW studs (a
+--         car whose DriverUserId is its owner). It sits in the side column under the Buttons zone
+--         (LawClient.SideSlot, the slot END SHIFT would use: a shift rules challenges out): on a PC a
+--         wider button, right-aligned with the slot, with its key cap ([K] on a keyboard, [R3] on a
+--         gamepad); on a phone the slot's tile (VS over CHALLENGE). It waits while DriveUI's FLIP or key
+--         strip or InteractClient's car card is on its spot. K / R3 / a tap challenges the nearest one;
+--         it then hides until an answer comes (or the challenge lapses);
+--       - the challenge card (ScreenGui "RaceChallenge", over the HUD like CrewClient's invite and in
+--         the same band: under the Banner zone, centred on the Stamp zone): "<name> challenges you to a
+--         race!" with ACCEPT / DECLINE; it goes after the challenge's seconds or when the server says so;
+--       - a challenge race is a race like any other here (its route comes in "Countdown" Def and is put
+--         in racesById under its own id); its card says YOU WIN / YOU LOST with both times and the gap,
+--         and the standings panel shows the two of you with REMATCH (a new challenge, the other way)
+--         while the server allows it.
 --   * Shifts (JobService): the pick-up / drop-off marker (the same ring and beam); the shift's line
 --     (frame "Job", Theme's Banner zone): a flat strip with a thin gold edge, a gold TAXI / COURIER tag
 --     and what to do ("PICK UP MARIA"; a phone shows those words alone, in gold), the seconds left for
@@ -260,6 +290,44 @@ K.STAMP_SECONDS = 2.2 -- the drift stamp stays this long, then fades
 K.STAMP_WAIT = 5.5 -- the longest it waits for a HUDController stamp to clear (about two of them)
 K.HEX_DIM, K.HEX_GOLD, K.HEX_CASH = C.Dim:ToHex(), C.Gold:ToHex(), C.Cash:ToHex()
 
+-- Races with others and race challenges (see the header)
+K.RULES = Activities.RaceRules or {}
+K.DUEL = Activities.Challenge or {}
+K.LOBBY_SHOW = K.RULES.LobbyShow or 150 -- studs from a pad: citizens this close see its lobby banner
+K.LOBBY_W, K.LOBBY_H = 440, 26 -- the lobby banner (never wider than the Banner zone)
+K.TIMER_W, K.TIMER_W_TOUCH = 140, 110 -- the race time; POS and LAP stand either side of it
+K.SIDE_W = 100 -- the POS and LAP boxes
+K.ORDINAL = { "1ST", "2ND", "3RD", "4TH", "5TH", "6TH", "7TH", "8TH" }
+K.STAND_W, K.STAND_W_TOUCH = 300, 250 -- the standings panel
+K.ROW_H, K.ROW_H_TOUCH = 19, 16 -- one racer's row in it
+K.STAND_HEAD = 26 -- its title row
+K.STAND_ROWS = 8 -- the most rows it shows
+K.STAND_SECONDS = 10 -- it goes this long after its last update
+-- Pixels from the finish card's top to just under its values (K.FINISH: ValueY + Value + 4, and a margin):
+-- the standings hang there.
+K.CARD_DOWN, K.CARD_DOWN_TOUCH = 142, 104
+K.REMATCH_H = 36 -- PC (a phone's is Theme.Touch tall)
+K.CHALLENGE_SHOW = K.DUEL.ShowReach or 60 -- studs: another free driver this close shows CHALLENGE
+K.CHALLENGE_EXPIRE = K.DUEL.Expire or 15
+K.CHALLENGE_W = 150 -- PC: the CHALLENGE button's width (a phone uses the side column's tile)
+K.CHALLENGE_KEY, K.CHALLENGE_PAD = Enum.KeyCode.K, Enum.KeyCode.ButtonR3
+K.CHALLENGE_CLEAR = { { "DriveUI", "Flip" }, { "DriveUI", "ControlsHint" }, { "Interact", "CarCard" } }
+K.INVITE_W, K.INVITE_W_TOUCH, K.INVITE_MIN_TOUCH = 320, 380, 330 -- the challenge card (CrewClient's sizes)
+K.ACCEPT_W, K.DECLINE_W = 72, 84 -- its buttons on a phone
+-- Why a race was called off ("Cancelled" Reason).
+K.WHY = {
+	LeftCar = "Race cancelled: you left your car.",
+	Wanted = "Race off: the cops are after you!",
+	TooSlow = "Race cancelled: out of time.",
+	CarLost = "Race cancelled: your car is gone.",
+	Died = "Race over: you went down.",
+	Arrested = "Race over: you got arrested.",
+	Opponent = "Race off: your rival dropped out.",
+	DuelTimeUp = "Race over: you didn't reach the finish in time.",
+	Ended = "Race over.",
+	Invalid = "Race cancelled.",
+}
+
 local racesById = {}
 for _, r in ipairs(Activities.Races) do
 	racesById[r.Id] = r
@@ -283,6 +351,11 @@ end
 --   job (the frame "Job": the shift's line), jobTitle, jobDist, jobBonus
 --   jobTouch, jobDistW, jobBonusW: the layout the line was last placed for (placeHud)
 --   endShiftButton
+--   posLabel, lapLabel (beside the time), posScale, lapScale; sideSize: their text size now (placeHud)
+--   lobby (the lobby banner)
+--   standings (the frame "Standings"), standTitle, standRows (the rows' holder), rematch (REMATCH)
+--   challenge (CHALLENGE), challengeRow (PC: key cap + word), challengeKey (the cap), challengeTile (phone)
+--   inviteGui (ScreenGui "RaceChallenge": the challenge card's)
 local ui = { cardY = 64, finishToken = 0, bigFading = false }
 local ring, beam -- the next checkpoint (also the shift marker); ring = { part, bands }
 local ring2, beam2 -- the checkpoint after it, fainter
@@ -294,7 +367,14 @@ local arrow = { on = false, count = 0, lit = 0, pos = Vector3.zero, dir = Vector
 local gate -- the chequered finish (Model, parented only while it shows)
 local cueSets = {} -- Left / Right = { frame, bars = { { upper, lower } x 3, tail first } }
 local driftKeys = {} -- the two key caps in the how-to row
-local current -- { race, index, startAt } + what the guide keeps on it (see guideTick)
+local current -- { race, index, startAt, laps, pos, of, run, duel } + what the guide keeps on it (see guideTick)
+-- Races with others and challenges: views = races with their laps laid out (raceView); lastRun = the run
+-- (RaceService's Run) we last finished, whose standings may show; standUntil = os.clock() when the
+-- standings go; standBase = their height without REMATCH; pending = os.clock() until which our own
+-- challenge waits for an answer (CHALLENGE hides); rival = who CHALLENGE would challenge now; invite =
+-- the challenge card while it shows; rematch = { userId, untilAt } while REMATCH may be pressed;
+-- duelIds = the challenge routes put in racesById (only the latest is kept); hinted = CHALLENGE was explained.
+local RS = { views = {}, standUntil = 0, standBase = 0, pending = 0, duelIds = {}, hinted = false }
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -502,7 +582,8 @@ local function lineOpts(race, faint, index)
 	local goal = index and race.Checkpoints[index]
 	if goal then
 		opts.Goal = goal
-		opts.GoalText = index == #race.Checkpoints and "🏁" or tostring(index)
+		local per = race.PerLap or #race.Checkpoints -- (the numbers start again each lap)
+		opts.GoalText = index == #race.Checkpoints and "🏁" or tostring((index - 1) % per + 1)
 	end
 	return opts
 end
@@ -1237,6 +1318,108 @@ local function buildDrift()
 	ui.stampShadow = Theme.Shadow(ui.driftStampLabel) -- (Theme.Text made it: this hands it back)
 end
 
+-- The standings panel (see the header): RESULTS, one row per racer (showStandings fills them), REMATCH.
+local function buildStandings()
+	local panel = Instance.new("Frame")
+	panel.Name = "Standings"
+	panel.AnchorPoint = Vector2.new(0.5, 0)
+	panel.Size = UDim2.fromOffset(K.STAND_W, K.STAND_HEAD)
+	Theme.Panel(panel, 0.3)
+	panel.Active = true -- (REMATCH lives on it: taps on the panel don't reach the world)
+	panel.Visible = false
+	panel.Parent = ui.gui
+	ui.standings = panel
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Position = UDim2.fromOffset(12, 4)
+	title.Size = UDim2.new(1, -24, 0, 18)
+	title.Text = "RESULTS"
+	Theme.Text(title, 15, "Display")
+	title.TextColor3 = C.Gold
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = panel
+	ui.standTitle = title
+	local rows = Instance.new("Frame")
+	rows.Name = "Rows"
+	rows.BackgroundTransparency = 1
+	rows.Position = UDim2.fromOffset(0, K.STAND_HEAD)
+	rows.Size = UDim2.new(1, 0, 0, 0)
+	rows.Parent = panel
+	ui.standRows = rows
+	local rematch = Instance.new("TextButton")
+	rematch.Name = "Rematch"
+	rematch.AnchorPoint = Vector2.new(0.5, 1)
+	rematch.Position = UDim2.new(0.5, 0, 1, -8)
+	rematch.Size = UDim2.new(1, -24, 0, K.REMATCH_H)
+	Theme.Button(rematch, "Primary")
+	rematch.TextSize = 15
+	rematch.Text = "REMATCH"
+	rematch.Visible = false
+	rematch.Parent = panel
+	ui.rematch = rematch
+end
+
+-- CHALLENGE (see the header): a PC button (key cap + word, the cap added by refreshChallengeKey) and a
+-- phone tile (VS over CHALLENGE); challengeTick shows the one for this device.
+local function buildChallenge()
+	local b = Instance.new("TextButton")
+	b.Name = "Challenge"
+	b.Text = ""
+	Theme.Button(b, "Quiet")
+	b.Size = UDim2.fromOffset(K.CHALLENGE_W, 44)
+	b.Visible = false
+	b.Parent = ui.gui
+	ui.challenge = b
+	local row = Instance.new("Frame")
+	row.Name = "Row"
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.fromScale(1, 1)
+	row.Parent = b
+	local list = Instance.new("UIListLayout")
+	list.FillDirection = Enum.FillDirection.Horizontal
+	list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	list.VerticalAlignment = Enum.VerticalAlignment.Center
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	list.Padding = UDim.new(0, 8)
+	list.Parent = row
+	local word = Instance.new("TextLabel")
+	word.Name = "Word"
+	word.LayoutOrder = 2
+	word.Size = UDim2.fromOffset(0, 22)
+	word.AutomaticSize = Enum.AutomaticSize.X
+	word.Text = "CHALLENGE"
+	Theme.Text(word, 17, "Display")
+	word.Parent = row
+	ui.challengeRow = row
+	local tile = Instance.new("Frame")
+	tile.Name = "Tile"
+	tile.BackgroundTransparency = 1
+	tile.Size = UDim2.fromScale(1, 1)
+	tile.Visible = false
+	tile.Parent = b
+	local vs = Instance.new("TextLabel")
+	vs.Name = "VS"
+	vs.Position = UDim2.fromOffset(0, 3)
+	vs.Size = UDim2.new(1, 0, 0, 20)
+	vs.Text = "VS"
+	Theme.Text(vs, 18, "Display")
+	vs.TextColor3 = C.Gold
+	vs.Parent = tile
+	local small = Instance.new("TextLabel")
+	small.Name = "Word"
+	small.Position = UDim2.new(0, 2, 1, -18)
+	small.Size = UDim2.new(1, -4, 0, 14)
+	small.Text = "CHALLENGE"
+	Theme.Text(small, nil, "Display")
+	small.TextScaled = true -- (Oswald is narrow: about 10 px fits a 52 px tile)
+	local limit = Instance.new("UITextSizeConstraint")
+	limit.MaxTextSize = 11
+	limit.MinTextSize = 7
+	limit.Parent = small
+	small.Parent = tile
+	ui.challengeTile = tile
+end
+
 local function build()
 	ui.gui = Instance.new("ScreenGui")
 	ui.gui.Name = "ActivityUI"
@@ -1245,9 +1428,27 @@ local function build()
 	ui.gui.Parent = player:WaitForChild("PlayerGui")
 	-- Theme's Banner zone, top centre: the time, and the checkpoint count under it. The cue hangs under
 	-- the zone. (placeHud puts them all in their places for this screen.)
-	ui.timerLabel = text("Timer", UDim2.new(0.5, 0, 0, 64), UDim2.fromOffset(200, 26), 26, "Display")
+	ui.timerLabel = text("Timer", UDim2.new(0.5, 0, 0, 64), UDim2.fromOffset(K.TIMER_W, 26), 26, "Display")
 	ui.cpLabel = text("Checkpoint", UDim2.new(0.5, 0, 0, 90), UDim2.fromOffset(260, 14), 13, "Bold", C.Gold)
 	ui.cpScale = scaler(ui.cpLabel)
+	-- Either side of the time: the place and the lap (refreshRaceHud writes them, placeHud places them).
+	ui.posLabel = text("Position", UDim2.new(0.5, -(K.TIMER_W / 2 + 6), 0, 64), UDim2.fromOffset(K.SIDE_W, 26), 22, "Display")
+	ui.posLabel.AnchorPoint = Vector2.new(1, 0)
+	ui.posLabel.TextXAlignment = Enum.TextXAlignment.Right
+	ui.posLabel.RichText = true
+	ui.posScale = scaler(ui.posLabel)
+	ui.lapLabel = text("Lap", UDim2.new(0.5, K.TIMER_W / 2 + 6, 0, 64), UDim2.fromOffset(K.SIDE_W, 26), 22, "Display")
+	ui.lapLabel.AnchorPoint = Vector2.new(0, 0)
+	ui.lapLabel.TextXAlignment = Enum.TextXAlignment.Left
+	ui.lapLabel.RichText = true
+	ui.lapScale = scaler(ui.lapLabel)
+	-- The lobby banner: a flat strip in the Banner zone (lobbyTick writes and places it).
+	ui.lobby = text("Lobby", UDim2.new(0.5, 0, 0, 64), UDim2.fromOffset(K.LOBBY_W, K.LOBBY_H), 14, "Bold")
+	ui.lobby.RichText = true
+	Theme.Panel(ui.lobby)
+	fitText(ui.lobby, 14)
+	buildStandings()
+	buildChallenge()
 	buildCountdown()
 	buildFinish()
 	buildCue()
@@ -1354,12 +1555,22 @@ local function placeHud()
 	end
 	-- The Banner zone: the time over the checkpoint count. The cue and WRONG WAY hang under the zone;
 	-- the route card and the shift's line take the zone itself.
-	local _, top, _, h = zoneBox("Banner", touch, size.X, size.Y)
+	local _, top, bannerW, h = zoneBox("Banner", touch, size.X, size.Y)
 	top, h = math.floor(top), math.floor(h)
 	local timeH = h - 14
+	local timeW = touch and K.TIMER_W_TOUCH or K.TIMER_W
 	ui.timerLabel.Position = UDim2.new(0.5, 0, 0, top)
-	ui.timerLabel.Size = UDim2.fromOffset(200, timeH)
+	ui.timerLabel.Size = UDim2.fromOffset(timeW, timeH)
 	ui.timerLabel.TextSize = math.min(timeH, 28)
+	-- POS on the left of the time, LAP on its right, a little smaller.
+	ui.sideSize = math.min(timeH, touch and 18 or 22)
+	for _, l in ipairs({ ui.posLabel, ui.lapLabel }) do
+		l.Size = UDim2.fromOffset(K.SIDE_W, timeH)
+		l.TextSize = ui.sideSize
+	end
+	ui.posLabel.Position = UDim2.new(0.5, -(timeW / 2 + 6), 0, top)
+	ui.lapLabel.Position = UDim2.new(0.5, timeW / 2 + 6, 0, top)
+	ui.lobby.Size = UDim2.fromOffset(math.min(K.LOBBY_W, math.max(200, math.floor(bannerW))), K.LOBBY_H)
 	ui.cpLabel.Position = UDim2.new(0.5, 0, 0, top + timeH)
 	ui.turnCue.Position = UDim2.new(0.5, 0, 0, top + h + 8)
 	ui.wrongLabel.Position = UDim2.new(0.5, 0, 0, top + h + 12)
@@ -1442,7 +1653,8 @@ local function showCheckpoint()
 		local nextCp = race.Checkpoints[current.index + 1]
 		placeRing(ring2, beam2, nextCp, size, current.index + 1 == n and K.WHITE or K.GOLD, K.NEXT_STRENGTH, K.BEAM_NEXT_ALPHA, y)
 	end
-	local label = last and "FINISH LINE" or string.format("CHECKPOINT %d / %d", current.index, n)
+	local per = race.PerLap or n -- (counted per lap; the LAP label says which)
+	local label = last and "FINISH LINE" or string.format("CHECKPOINT %d / %d", (current.index - 1) % per + 1, per)
 	if ui.cpLabel.Text ~= label or not ui.cpLabel.Visible then
 		ui.cpLabel.Text = label
 		ui.cpLabel.Visible = true
@@ -1560,8 +1772,9 @@ local function showPreview(race)
 		known.frame.Visible = known.frame == shape
 	end
 	ui.previewTitle.Text = string.upper(race.Name)
-	ui.previewLine.Text = string.format("beat %s  ·  %s + %s bonus", clock(race.Par),
-		HUDController.Money(race.Reward), HUDController.Money(race.ParBonus))
+	local laps = race.Laps or 1
+	ui.previewLine.Text = string.format("%sbeat %s  ·  %s + %s bonus", laps > 1 and (laps .. " laps  ·  ") or "",
+		clock(race.Par), HUDController.Money(race.Reward), HUDController.Money(race.ParBonus))
 	ui.previewCard.Visible = cardFits()
 end
 
@@ -1690,6 +1903,37 @@ local function guideTick()
 	setCue((not wrong and cueSide and t < cueUntil) and cueSide or nil)
 end
 
+-- POS and LAP beside the time (see the header). popPos / popLap: pop the one that just changed.
+local function refreshRaceHud(popPos, popLap)
+	local c = current
+	local small = math.floor((ui.sideSize or 22) * 0.62)
+	local showPos = c ~= nil and type(c.of) == "number" and c.of > 1 and type(c.pos) == "number"
+	if showPos then
+		local words = string.format('<font size="%d">POS </font>%d<font size="%d">/%d</font>', small, c.pos, small, c.of)
+		if ui.posLabel.Text ~= words then
+			ui.posLabel.Text = words
+			if popPos and ui.posLabel.Visible then
+				pop(ui.posScale, 1.3)
+			end
+		end
+	end
+	ui.posLabel.Visible = showPos
+	local laps = c and c.laps or 1
+	local showLap = c ~= nil and laps > 1
+	if showLap then
+		local per = c.race.PerLap or #c.race.Checkpoints
+		local lap = math.clamp((c.index - 1) // per + 1, 1, laps)
+		local words = string.format('<font size="%d">LAP </font>%d<font size="%d">/%d</font>', small, lap, small, laps)
+		if ui.lapLabel.Text ~= words then
+			ui.lapLabel.Text = words
+			if popLap and ui.lapLabel.Visible then
+				pop(ui.lapScale, 1.3)
+			end
+		end
+	end
+	ui.lapLabel.Visible = showLap
+end
+
 local function endRace()
 	current = nil
 	GPSClient.ClearPath(K.LINE)
@@ -1699,27 +1943,90 @@ local function endRace()
 	setCue(nil)
 	setWrong(false)
 	showCheckpoint()
+	refreshRaceHud(false, false)
 end
 
--- The finish card (see the header). d = RaceService's "Finished": Time, Par, Reward (the par bonus
--- included when it was earned), NewBest, Best.
-local function showFinish(race, d)
+-- A race as it is driven: with more than one lap its checkpoints repeat once per lap (the server counts
+-- one list through every lap too) and PerLap says how many make a lap. Kept per race and lap count.
+local function raceView(race, laps)
+	if laps <= 1 then
+		return race
+	end
+	local key = race.Id .. "x" .. laps
+	local view = RS.views[key]
+	if not view then
+		view = table.clone(race)
+		view.Id = key
+		view.Laps = laps
+		view.PerLap = #race.Checkpoints
+		view.Checkpoints = {}
+		for _ = 1, laps do
+			for _, cp in ipairs(race.Checkpoints) do
+				table.insert(view.Checkpoints, cp)
+			end
+		end
+		RS.views[key] = view
+	end
+	return view
+end
+
+-- A challenge's route ("Countdown" Def) as a race of its own, under its own id. Only the latest is kept
+-- (with its drawn route). nil if it doesn't look like a route.
+local function registerDuel(id, def)
+	if type(id) ~= "string" or type(def) ~= "table" or type(def.Checkpoints) ~= "table" then
+		return nil
+	end
+	if typeof(def.Start) ~= "Vector3" or typeof(def.Heading) ~= "Vector3" then
+		return nil
+	end
+	local cps = {}
+	for i, v in ipairs(def.Checkpoints) do
+		if typeof(v) ~= "Vector3" or i > 100 then
+			return nil
+		end
+		cps[i] = v
+	end
+	if #cps == 0 then
+		return nil
+	end
+	for _, old in ipairs(RS.duelIds) do
+		racesById[old] = nil
+		routes[old] = nil
+	end
+	table.clear(RS.duelIds)
+	local race = {
+		Id = id,
+		Name = type(def.Name) == "string" and def.Name or "Street Duel",
+		Start = def.Start,
+		Heading = def.Heading,
+		Checkpoints = cps,
+		Par = type(def.Par) == "number" and def.Par or 60,
+		Reward = 0,
+		ParBonus = 0,
+		Duel = true,
+	}
+	racesById[id] = race
+	table.insert(RS.duelIds, id)
+	return race
+end
+
+-- The finish card (see the header): kicker over the title, then three columns, each
+-- { cap, cap colour, value, value colour } (a street race: time, best, reward; a challenge: both times
+-- and the gap).
+local function showFinish(kicker, title, titleColor, cols)
 	ui.finishToken += 1
 	local token = ui.finishToken
-	local underPar = d.Time <= d.Par
 	local stats = ui.finishStats
-	ui.finishKicker.Text = string.upper(race.Name)
-	stats[1].cap.Text = underPar and "UNDER PAR" or "TIME"
-	stats[1].cap.TextColor3 = underPar and C.Gold or C.Dim
-	stats[1].value.Text = fmt(d.Time)
-	stats[2].cap.Text = d.NewBest and "NEW BEST" or "BEST"
-	stats[2].cap.TextColor3 = d.NewBest and C.Gold or C.Dim
-	stats[2].value.Text = fmt(type(d.Best) == "number" and d.Best or d.Time)
-	stats[2].value.TextColor3 = d.NewBest and C.Gold or C.Text
-	stats[3].cap.Text = underPar and "WITH BONUS" or "REWARD" -- (short words: a phone's column is 120 px)
-	stats[3].cap.TextColor3 = underPar and C.Gold or C.Dim
-	stats[3].value.Text = "+" .. HUDController.Money(d.Reward)
-	stats[3].value.TextColor3 = C.Cash -- green = cash
+	ui.finishKicker.Text = kicker
+	ui.finishTitle.Text = title
+	ui.finishTitle.TextColor3 = titleColor or C.Text
+	for i, stat in ipairs(stats) do
+		local col = cols[i] or { "", C.Dim, "", C.Text }
+		stat.cap.Text = col[1]
+		stat.cap.TextColor3 = col[2] or C.Dim
+		stat.value.Text = col[3]
+		stat.value.TextColor3 = col[4] or C.Text
+	end
 	task.spawn(function()
 		-- Never on top of a HUDController stamp (RANK UP can land in the same moment): wait for it a
 		-- little, and if stamps keep coming, show under them.
@@ -1778,25 +2085,579 @@ local function showFinish(race, d)
 	end)
 end
 
+-- A street race's finish card. d = RaceService's "Finished": Time, Par, Reward (the par bonus included
+-- when it was earned: Bonus), NewBest, Best, Place, Of.
+local function streetFinish(race, d)
+	local underPar = d.Time <= d.Par
+	local bonus = d.Bonus
+	if bonus == nil then
+		bonus = underPar -- (a server from before places: every finish under par had the bonus)
+	end
+	local place, of = tonumber(d.Place), tonumber(d.Of)
+	local title, color = "FINISH", C.Text
+	if place and of and of > 1 then
+		title = (K.ORDINAL[place] or (place .. "TH")) .. " PLACE"
+		color = place == 1 and C.Gold or C.Text
+	end
+	showFinish(string.upper(race.Name), title, color, {
+		{ underPar and "UNDER PAR" or "TIME", underPar and C.Gold or C.Dim, fmt(d.Time), C.Text },
+		{ d.NewBest and "NEW BEST" or "BEST", d.NewBest and C.Gold or C.Dim,
+			fmt(type(d.Best) == "number" and d.Best or d.Time), d.NewBest and C.Gold or C.Text },
+		-- (short words: a phone's column is 120 px; green = cash)
+		{ bonus and "WITH BONUS" or "REWARD", bonus and C.Gold or C.Dim, "+" .. HUDController.Money(d.Reward), C.Cash },
+	})
+end
+
+-- A challenge's card: YOU WIN / YOU LOST, both times and the gap. mine / theirs = { Name, Time }; a
+-- missing time is "..." while they may still finish (waiting) and DNF once it's over.
+local function duelCard(win, mine, theirs, waiting)
+	local function shown(row)
+		return type(row.Time) == "number" and fmt(row.Time) or (waiting and "..." or "DNF")
+	end
+	local gap = "-"
+	if type(mine.Time) == "number" and type(theirs.Time) == "number" then
+		gap = string.format("%s%.2fs", mine.Time <= theirs.Time and "-" or "+", math.abs(mine.Time - theirs.Time))
+	end
+	showFinish("STREET DUEL", win and "YOU WIN" or "YOU LOST", win and C.Gold or C.Orange, {
+		{ "YOUR TIME", C.Dim, shown(mine), win and C.Gold or C.Text },
+		{ string.upper(tostring(theirs.Name or "RIVAL")), C.Dim, shown(theirs), C.Text },
+		{ "GAP", C.Dim, gap, win and C.Cash or C.Orange },
+	})
+end
+
+-- The standings hang under the finish card, wherever that is now (it can step down under a stamp).
+local function placeStandings()
+	local touch = Theme.IsTouch()
+	ui.standings.Position = UDim2.new(0.5, 0, 0, ui.finish.Position.Y.Offset + (touch and K.CARD_DOWN_TOUCH or K.CARD_DOWN) + 6)
+end
+
+-- One cell of a standings row.
+local function standCell(line, name, x, w, words, kind, align, size, color)
+	local l = Instance.new("TextLabel")
+	l.Name = name
+	l.Position = x
+	l.Size = w
+	l.Text = words
+	Theme.Text(l, size, kind)
+	l.TextColor3 = color
+	l.TextXAlignment = align
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.Parent = line
+	return l
+end
+
+-- Fill and show the standings (see the header). rows = RaceService's { Name, Time, Out, Npc, UserId }.
+local function showStandings(rows, title)
+	local touch = Theme.IsTouch()
+	local rowH = touch and K.ROW_H_TOUCH or K.ROW_H
+	local size = touch and 13 or 14
+	ui.standRows:ClearAllChildren()
+	ui.standTitle.Text = title
+	local n = 0
+	for i, row in ipairs(rows) do
+		if i > K.STAND_ROWS then
+			break
+		end
+		if type(row) == "table" then
+			n += 1
+			local me = row.UserId == player.UserId
+			local line = Instance.new("Frame")
+			line.Name = "Row" .. n
+			line.BackgroundTransparency = 1
+			line.Position = UDim2.fromOffset(0, (n - 1) * rowH)
+			line.Size = UDim2.new(1, 0, 0, rowH)
+			line.Parent = ui.standRows
+			if me then
+				local bar = Instance.new("Frame") -- a thin pink bar: this one is you
+				bar.Name = "You"
+				bar.Position = UDim2.fromOffset(4, 2)
+				bar.Size = UDim2.new(0, 2, 1, -4)
+				bar.BackgroundColor3 = C.Brand
+				bar.BorderSizePixel = 0
+				bar.Parent = line
+			end
+			local color = me and C.Gold or (row.Npc and C.Dim or C.Text)
+			local timed = type(row.Time) == "number"
+			standCell(line, "Place", UDim2.fromOffset(12, 0), UDim2.new(0, 22, 1, 0), tostring(n), "Display",
+				Enum.TextXAlignment.Left, size + 2, color)
+			standCell(line, "Name", UDim2.fromOffset(36, 0), UDim2.new(1, -36 - 82, 1, 0), tostring(row.Name or "?"), "Body",
+				Enum.TextXAlignment.Left, size, color)
+			standCell(line, "Time", UDim2.new(1, -80, 0, 0), UDim2.new(0, 68, 1, 0),
+				timed and fmt(row.Time) or (row.Out and "DNF" or "..."), "Display", Enum.TextXAlignment.Right, size + 2,
+				timed and color or C.Dim)
+		end
+	end
+	local buttonH = touch and Theme.Touch or K.REMATCH_H
+	RS.standBase = K.STAND_HEAD + n * rowH + 8
+	local w = touch and K.STAND_W_TOUCH or K.STAND_W
+	ui.standings.Size = UDim2.fromOffset(w, RS.standBase + (RS.rematch and (buttonH + 8) or 0))
+	ui.rematch.Size = UDim2.new(1, -24, 0, buttonH)
+	ui.rematch.Visible = RS.rematch ~= nil
+	placeStandings()
+	ui.standings.Visible = true
+end
+
+-- Five times a second: REMATCH's seconds, and the panel goes when its time is up or a race starts.
+local function standingsTick()
+	if not ui.standings.Visible then
+		return
+	end
+	local t = os.clock()
+	local m = RS.rematch
+	if m then
+		local left = math.ceil(m.untilAt - t)
+		if left <= 0 then
+			RS.rematch = nil
+			ui.rematch.Visible = false
+			ui.standings.Size = UDim2.fromOffset(ui.standings.Size.X.Offset, RS.standBase)
+		else
+			local words = "REMATCH  " .. left
+			if ui.rematch.Text ~= words then
+				ui.rematch.Text = words
+			end
+		end
+	end
+	if current or (not RS.rematch and t > RS.standUntil) or player:GetAttribute("TitleScreen") == true then
+		ui.standings.Visible = false
+		RS.rematch = nil
+		return
+	end
+	placeStandings()
+end
+
+local function pressRematch()
+	local m = RS.rematch
+	if not m then
+		return
+	end
+	RS.rematch = nil
+	ui.rematch.Visible = false
+	ui.standings.Size = UDim2.fromOffset(ui.standings.Size.X.Offset, RS.standBase)
+	RS.pending = os.clock() + 3 -- (ChallengeSent makes it the challenge's own time)
+	task.spawn(function()
+		Remotes.Event("RaceChallenge"):FireServer("Rematch", m.userId)
+	end)
+end
+
+-- Five times a second: the lobby banner (see the header) for the lobby a member is in, or one open
+-- near a citizen who could join it.
+local function lobbyTick()
+	local words
+	if not current and player:GetAttribute("TitleScreen") ~= true and not ui.job.Visible then
+		local mine = player:GetAttribute("RaceLobby")
+		local root = rootPart()
+		local pos = root and flat(root.Position)
+		local free = canRace()
+		local t = now()
+		for _, race in ipairs(Activities.Races) do
+			local startsAt = ReplicatedStorage:GetAttribute("RaceLobby_" .. race.Id)
+			local member = mine == race.Id
+			if type(startsAt) == "number" and startsAt > t
+				and (member or (free and pos ~= nil and (pos - flat(race.Start)).Magnitude <= K.LOBBY_SHOW)) then
+				local n = ReplicatedStorage:GetAttribute("RaceLobbyN_" .. race.Id)
+				n = type(n) == "number" and n or 0
+				local tail
+				if member then
+					tail = n > 1 and string.format("%d racers  ·  you're in", n) or "you're in"
+				elseif n >= (K.RULES.MaxRacers or 6) then
+					tail = "full"
+				else
+					tail = "press Race on the pad to join"
+				end
+				words = string.format('<font color="#%s">%s</font>  starts in %d  ·  %s', K.HEX_GOLD, string.upper(race.Name),
+					math.max(1, math.ceil(startsAt - t)), tail)
+				break
+			end
+		end
+	end
+	ui.lobby.Visible = words ~= nil
+	if words then
+		if ui.lobby.Text ~= words then
+			ui.lobby.Text = words
+		end
+		-- Under the route preview card while that shows (a member stopped on the pad sees both).
+		ui.lobby.Position = UDim2.new(0.5, 0, 0, ui.cardY + (ui.previewCard.Visible and (K.CARD_H + 6) or 0))
+	end
+end
+
+-- Race challenges ----------------------------------------------------------------------------------
+
+-- Could this player race a challenge now (the server checks the same)?
+local function freeToDuel(p)
+	return p:GetAttribute("Side") == "Civilian" and (p:GetAttribute("Heat") or 0) <= 0
+		and p:GetAttribute("Mission") == nil and p:GetAttribute("JobKind") == nil and not p:GetAttribute("BigScore")
+		and p:GetAttribute("RacingId") == nil and p:GetAttribute("RaceLobby") == nil and p:GetAttribute("InHome") ~= true
+end
+
+-- The nearest other free driver at the wheel of their own car (not a boat) within K.CHALLENGE_SHOW
+-- studs of ours, while we sit at the wheel of ours; else nil. Who drives which car comes from
+-- VehicleService's DriverUserId attribute (it replicates; another body's seat doesn't always).
+local function challengeRival()
+	if player:GetAttribute("TitleScreen") == true or not freeToDuel(player) then
+		return nil
+	end
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	local seat = hum and hum.Health > 0 and hum.SeatPart
+	local mine = seat and seat.Name == "DriverSeat" and seat.Parent
+	if not mine or mine:GetAttribute("OwnerUserId") ~= player.UserId or mine:GetAttribute("Boat") == true or not mine.PrimaryPart then
+		return nil
+	end
+	local here = flat(mine.PrimaryPart.Position)
+	local vehicles = Workspace:FindFirstChild("Vehicles")
+	local best, bestD
+	for _, car in ipairs(vehicles and vehicles:GetChildren() or {}) do
+		local id = car:GetAttribute("DriverUserId")
+		if car ~= mine and id ~= nil and id == car:GetAttribute("OwnerUserId") and car:GetAttribute("Boat") ~= true and car.PrimaryPart then
+			local p = Players:GetPlayerByUserId(id)
+			if p and p ~= player and freeToDuel(p) then
+				local d = (flat(car.PrimaryPart.Position) - here).Magnitude
+				if d <= K.CHALLENGE_SHOW and (not bestD or d < bestD) then
+					best, bestD = p, d
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- The key for CHALLENGE from the last input used: "K", "R3", or nil after a touch.
+local function challengeKeyWord()
+	local name = UserInputService:GetLastInputType().Name
+	if string.sub(name, 1, 7) == "Gamepad" then
+		return "R3"
+	elseif Theme.IsTouch() or name == "Touch" then
+		return nil
+	end
+	return "K"
+end
+
+-- The key cap on the PC button (none after a touch).
+local function refreshChallengeKey()
+	local word = challengeKeyWord()
+	local cap = ui.challengeKey
+	if cap and cap.Text == word then
+		return
+	end
+	if cap then
+		cap:Destroy()
+		ui.challengeKey = nil
+	end
+	if word then
+		ui.challengeKey = Theme.Key(ui.challengeRow, word)
+		ui.challengeKey.LayoutOrder = 1
+	end
+end
+
+-- Into the side column's slot (see the header).
+local function placeChallenge()
+	local touch = Theme.IsTouch()
+	local pos, size = LawClient.SideSlot(ui.gui, LawClient.PlaceSlots(), touch)
+	local b = ui.challenge
+	if touch then
+		b.Position = UDim2.fromOffset(pos.X, pos.Y)
+		b.Size = UDim2.fromOffset(size.X, size.Y)
+	else
+		b.Position = UDim2.fromOffset(pos.X + size.X - K.CHALLENGE_W, pos.Y)
+		b.Size = UDim2.fromOffset(K.CHALLENGE_W, 44)
+	end
+	ui.challengeRow.Visible = not touch
+	ui.challengeTile.Visible = touch
+end
+
+-- Is one of K.CHALLENGE_CLEAR on the button's spot right now?
+local function challengeCovered()
+	local playerGui = player:FindFirstChild("PlayerGui")
+	local origin = ui.gui.AbsolutePosition
+	local b = ui.challenge
+	local x, y, w, h = b.Position.X.Offset, b.Position.Y.Offset, b.Size.X.Offset, b.Size.Y.Offset
+	for _, path in ipairs(K.CHALLENGE_CLEAR) do
+		local ox, oy, ow, oh = liveBox(playerGui, path, origin)
+		if ox and ox < x + w and ox + ow > x and oy < y + h and oy + oh > y then
+			return true
+		end
+	end
+	return false
+end
+
+-- Five times a second: CHALLENGE shows while there is somebody to challenge (and no answer is awaited).
+local function challengeTick()
+	local rival = nil
+	if not current and os.clock() >= RS.pending then
+		rival = challengeRival()
+	end
+	RS.rival = rival
+	local show = rival ~= nil
+	if show then
+		placeChallenge()
+		refreshChallengeKey()
+		show = not challengeCovered()
+	end
+	if ui.challenge.Visible ~= show then
+		ui.challenge.Visible = show
+		if show and not RS.hinted then
+			RS.hinted = true
+			local key = challengeKeyWord()
+			local how = key and ("press " .. key .. " (or click CHALLENGE)") or "tap CHALLENGE"
+			NotifyController.Show("Another driver is right next to you: " .. how .. " to race them!", C.Gold, "info")
+		end
+	end
+end
+
+local function sendChallenge()
+	local rival = RS.rival
+	if not rival or not ui.challenge.Visible then
+		return
+	end
+	RS.pending = os.clock() + 3 -- (ChallengeSent makes it the challenge's own time)
+	ui.challenge.Visible = false
+	local userId = rival.UserId
+	task.spawn(function()
+		Remotes.Event("RaceChallenge"):FireServer("Challenge", userId)
+	end)
+end
+
+-- The challenge card (see the header), laid out like CrewClient's invite card.
+local function fitInvite()
+	local card = RS.invite
+	local gui = ui.inviteGui
+	if not card or not gui then
+		return
+	end
+	local screen = gui.AbsoluteSize
+	if screen.X < 1 then
+		return
+	end
+	local W, H = screen.X, screen.Y
+	local touch = Theme.IsTouch()
+	local pad = touch and 8 or 10
+	local buttonH = touch and Theme.Touch or 32
+	local h = touch and (pad + buttonH + pad) or (pad + 18 + 36 + 6 + buttonH + pad)
+	-- Across: right of the left column (feed; minimap on phones), left of the Status column.
+	local lx, _, lw = zoneBox(touch and "Minimap" or "Feed", touch, W, H)
+	local left = lx + lw + 8
+	local right = zoneBox("Status", touch, W, H) - 8
+	local least = touch and K.INVITE_MIN_TOUCH or K.INVITE_W
+	if right - left < least then
+		left = 12 -- too tight (small phones): cover the minimap rather than squash the words
+	end
+	local w = math.min(touch and K.INVITE_W_TOUCH or K.INVITE_W, math.max(least, right - left), W - 24)
+	local x = math.clamp(W / 2, left + w / 2, math.max(left + w / 2, right - w / 2))
+	-- Down: centred on the Stamp zone, under the Banner zone and above the Subtitle zone (phones: Action).
+	local _, sy, _, sh = zoneBox("Stamp", touch, W, H)
+	local _, by, _, bh = zoneBox("Banner", touch, W, H)
+	local _, ly = zoneBox(touch and "Action" or "Subtitle", touch, W, H)
+	local minTop = by + bh + 4
+	local y = math.clamp(sy + sh / 2 - h / 2, minTop, math.max(minTop, ly - 4 - h))
+	card.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
+	card.Size = UDim2.fromOffset(w, h)
+	local tag, line = card:FindFirstChild("Tag"), card:FindFirstChild("Line")
+	local accept, decline = card:FindFirstChild("Accept"), card:FindFirstChild("Decline")
+	if not (tag and line and accept and decline) then
+		return
+	end
+	if touch then
+		-- One row: [RACE CHALLENGE / <name> challenges you...] .... [ACCEPT] [DECLINE]
+		local reserved = 14 + 10 + K.ACCEPT_W + 6 + K.DECLINE_W + 8
+		tag.TextSize = 13
+		tag.Position = UDim2.fromOffset(14, 6)
+		tag.Size = UDim2.new(1, -reserved, 0, 14)
+		line.TextSize = 13
+		line.Position = UDim2.fromOffset(14, 22)
+		line.Size = UDim2.new(1, -reserved, 0, 32)
+		decline.AnchorPoint = Vector2.new(1, 0.5)
+		decline.Position = UDim2.new(1, -8, 0.5, 0)
+		decline.Size = UDim2.fromOffset(K.DECLINE_W, buttonH)
+		accept.AnchorPoint = Vector2.new(1, 0.5)
+		accept.Position = UDim2.new(1, -(8 + K.DECLINE_W + 6), 0.5, 0)
+		accept.Size = UDim2.fromOffset(K.ACCEPT_W, buttonH)
+	else
+		tag.TextSize = 14
+		tag.Position = UDim2.fromOffset(16, pad)
+		tag.Size = UDim2.new(1, -32, 0, 16)
+		line.TextSize = 15
+		line.Position = UDim2.fromOffset(16, pad + 18)
+		line.Size = UDim2.new(1, -32, 0, 36)
+		for _, b in ipairs({ accept, decline }) do
+			b.AnchorPoint = Vector2.new(0, 1)
+			b.Size = UDim2.new(0.5, -(16 + 4), 0, buttonH)
+			b.Position = UDim2.new(b == accept and 0 or 0.5, b == accept and 16 or 4, 1, -pad)
+		end
+	end
+end
+
+local function closeInvite()
+	if RS.invite then
+		RS.invite:Destroy()
+		RS.invite = nil
+	end
+end
+
+local function inviteButton(card, name, words, kind, action)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	Theme.Button(b, kind)
+	if kind == "Quiet" then
+		b.BackgroundColor3 = C.PanelLight
+		b.BackgroundTransparency = 0.15
+	end
+	b.TextSize = 14
+	b.Text = words
+	b.Parent = card
+	b.Activated:Connect(function()
+		local from = card:GetAttribute("From") -- (whose challenge this card is: the server checks it)
+		closeInvite()
+		task.spawn(function()
+			Remotes.Event("RaceChallenge"):FireServer(action, from)
+		end)
+	end)
+	return b
+end
+
+-- The card shows unless a stamp uses its spot or the title screen is up (it keeps its time meanwhile).
+local function inviteWanted()
+	return player:GetAttribute("TitleScreen") ~= true and stampBand() == nil
+end
+
+-- d = RaceService's "Challenge": FromName, Expires, Rematch.
+local function showInvite(d)
+	closeInvite()
+	local card = Instance.new("Frame")
+	card.Name = "RaceChallenge"
+	card.AnchorPoint = Vector2.new(0.5, 0)
+	card.Active = true -- taps on the card don't reach the world behind it
+	Theme.Panel(card, 0.2)
+	card.Parent = ui.inviteGui
+	local accent = Instance.new("Frame")
+	accent.Name = "Accent"
+	accent.Position = UDim2.fromOffset(0, 8)
+	accent.Size = UDim2.new(0, 2, 1, -16)
+	accent.BackgroundColor3 = C.Gold
+	accent.BorderSizePixel = 0
+	accent.Parent = card
+	local tag = Instance.new("TextLabel")
+	tag.Name = "Tag"
+	Theme.Text(tag, 14, "Display")
+	tag.TextColor3 = C.Gold
+	tag.TextXAlignment = Enum.TextXAlignment.Left
+	tag.Size = UDim2.new(1, -32, 0, 16)
+	tag.Text = d.Rematch and "REMATCH" or "RACE CHALLENGE"
+	tag.Parent = card
+	if type(d.FromUserId) == "number" then
+		card:SetAttribute("From", d.FromUserId)
+	end
+	local line = Instance.new("TextLabel")
+	line.Name = "Line"
+	Theme.Text(line, 15, "Body")
+	line.TextXAlignment = Enum.TextXAlignment.Left
+	line.TextYAlignment = Enum.TextYAlignment.Top
+	line.TextWrapped = true
+	line.TextTruncate = Enum.TextTruncate.AtEnd
+	line.Size = UDim2.new(1, -32, 0, 36)
+	line.Text = tostring(d.FromName or "Someone") .. (d.Rematch and " wants a rematch!" or " challenges you to a race!")
+	line.Parent = card
+	inviteButton(card, "Accept", "ACCEPT", "Primary", "Accept")
+	inviteButton(card, "Decline", "DECLINE", "Quiet", "Decline")
+	RS.invite = card
+	fitInvite()
+	card.Visible = inviteWanted()
+	local seconds = math.clamp(tonumber(d.Expires) or K.CHALLENGE_EXPIRE, 1, 60)
+	task.delay(seconds, function()
+		if RS.invite == card then
+			closeInvite()
+		end
+	end)
+end
+
+local function inviteTick()
+	local card = RS.invite
+	if card then
+		local want = inviteWanted()
+		if card.Visible ~= want then
+			card.Visible = want
+		end
+	end
+end
+
+-- A challenge's result (RaceService's "DuelResult"): the card, the two rows and REMATCH.
+local function onDuelResult(d)
+	if type(d.Rows) ~= "table" then
+		return
+	end
+	if current and current.duel and current.run == d.Run then
+		endRace() -- (the one who crossed second: the race ends here with the result)
+	elseif current then
+		return -- (a late result from an earlier challenge while already in a new race: never over it)
+	end
+	local mine, theirs
+	for _, row in ipairs(d.Rows) do
+		if type(row) == "table" then
+			if row.UserId == player.UserId then
+				mine = row
+			else
+				theirs = row
+			end
+		end
+	end
+	if not mine or not theirs then
+		return
+	end
+	RS.lastRun = d.Run
+	duelCard(d.Win == true, mine, theirs, false)
+	local rematch = math.clamp(tonumber(d.Rematch) or 0, 0, 60)
+	RS.rematch = (rematch > 0 and type(d.OpponentUserId) == "number") and { userId = d.OpponentUserId, untilAt = os.clock() + rematch } or nil
+	RS.standUntil = os.clock() + math.max(K.STAND_SECONDS, rematch)
+	ui.rematch.Text = "REMATCH"
+	showStandings(d.Rows, "STREET DUEL")
+end
+
 local function onRace(kind, d)
 	if type(d) ~= "table" then
 		return
 	end
 	if kind == "Countdown" then
-		local race = racesById[d.Id]
-		if not race or type(d.StartAt) ~= "number" then
+		local base
+		if d.Def ~= nil then
+			base = registerDuel(d.Id, d.Def)
+		else
+			base = racesById[d.Id]
+		end
+		if not base or type(d.StartAt) ~= "number" then
 			return
 		end
-		current = { race = race, index = 1, startAt = d.StartAt }
+		local laps = math.clamp(math.floor(tonumber(d.Laps) or 1), 1, 9)
+		local race = raceView(base, laps)
+		current = {
+			race = race, index = 1, startAt = d.StartAt, laps = laps, pos = tonumber(d.Grid), of = tonumber(d.Of),
+			run = d.Run, duel = base.Duel == true,
+		}
 		previewRace = nil
 		ui.previewCard.Visible = false
 		ui.finishToken += 1 -- (a finish card still up makes way for the countdown)
 		ui.finish.Visible = false
-		ui.bigKicker.Text = string.upper(race.Name)
+		ui.standings.Visible = false
+		RS.rematch = nil
+		RS.pending = 0
+		closeInvite()
+		ui.bigKicker.Text = string.upper(current.duel and ("vs " .. tostring(d.Opponent or "your rival")) or race.Name)
 		showCheckpoint()
 		showLine()
 		ui.timerLabel.Visible = true
-		NotifyController.Show(race.Name .. ": beat " .. clock(race.Par) .. " for the bonus!", C.Gold, "info")
+		refreshRaceHud(false, false)
+		if current.duel then
+			NotifyController.Show(string.format("Race vs %s: first across the finish line wins!", tostring(d.Opponent or "your rival")),
+				C.Gold, "info")
+		else
+			local field = {}
+			if (current.of or 1) > 1 then
+				table.insert(field, current.of .. " cars")
+			end
+			if laps > 1 then
+				table.insert(field, laps .. " laps")
+			end
+			local goal = (current.of or 1) > 1 and ("Win under " .. clock(race.Par)) or ("Beat " .. clock(race.Par))
+			NotifyController.Show(string.format("%s: %s%s for the bonus!", race.Name,
+				#field > 0 and (table.concat(field, ", ") .. ". ") or "", goal), C.Gold, "info")
+		end
 	elseif kind == "Checkpoint" and current then
 		local race = current.race
 		if type(d.Index) ~= "number" or not race.Checkpoints[d.Index] then
@@ -1809,25 +2670,71 @@ local function onRace(kind, d)
 		current.index = d.Index
 		showCheckpoint()
 		showLine()
+		refreshRaceHud(false, true)
+		local per = race.PerLap
+		if per and current.laps > 1 and d.Index == (current.laps - 1) * per + 1 then
+			NotifyController.Show("Final lap!", C.Gold, "info")
+		end
+	elseif kind == "Position" and current then
+		local pos, of = tonumber(d.Pos), tonumber(d.Of)
+		if pos and of then
+			local moved = current.pos ~= pos
+			current.pos, current.of = pos, of
+			refreshRaceHud(moved, false)
+		end
 	elseif kind == "Finished" then
 		local race = current and current.race or racesById[d.Id]
-		if current then
+		if current and race then
 			burstAt(race.Checkpoints[#race.Checkpoints], ringSize(race), K.WHITE, ringBase(race))
 		end
 		endRace()
-		if race and type(d.Time) == "number" and type(d.Par) == "number" and type(d.Reward) == "number" then
-			showFinish(race, d)
+		RS.lastRun = d.Run
+		if d.Duel then
+			if type(d.Time) == "number" then
+				duelCard(true, { Time = d.Time }, { Name = d.Opponent }, true) -- (the rival's time comes with DuelResult)
+			end
+		elseif race and type(d.Time) == "number" and type(d.Par) == "number" and type(d.Reward) == "number" then
+			streetFinish(race, d)
 		end
+	elseif kind == "Standings" then
+		-- Only for the run we just finished (a later race of ours, or one we're in now, wins).
+		if not current and d.Run ~= nil and d.Run == RS.lastRun and type(d.Rows) == "table" and #d.Rows > 1 then
+			RS.standUntil = os.clock() + K.STAND_SECONDS
+			showStandings(d.Rows, "RESULTS")
+		end
+	elseif kind == "DuelResult" then
+		onDuelResult(d)
+	elseif kind == "DuelLead" then
+		NotifyController.Show(string.format("%s crossed the line first! Finish within %d s for your time.",
+			tostring(d.Name or "Your rival"), tonumber(d.Grace) or 30), C.Orange, "warning")
 	elseif kind == "Cancelled" then
 		endRace()
-		local why = {
-			LeftCar = "Race cancelled: you left your car.",
-			Wanted = "Race cancelled: the cops are after you!",
-			TooSlow = "Race cancelled: out of time.",
-			CarLost = "Race cancelled: your car is gone.",
-			Invalid = "Race cancelled.",
-		}
-		NotifyController.Show(why[d.Reason] or "Race cancelled.", C.Orange, "warning")
+		NotifyController.Show(K.WHY[d.Reason] or "Race cancelled.", C.Orange, "warning")
+	elseif kind == "Lobby" then
+		local race = racesById[d.Id]
+		local left = type(d.StartsAt) == "number" and math.max(1, math.ceil(d.StartsAt - now())) or nil
+		if race and left then
+			NotifyController.Show(string.format("You're in! %s starts in %d s. Others can join at the pad.", race.Name, left), C.Gold, "info")
+		end
+	elseif kind == "LobbyJoin" then
+		NotifyController.Show(tostring(d.Name or "Someone") .. " joined the race!", C.Gold, "info")
+	elseif kind == "Challenge" then
+		showInvite(d)
+	elseif kind == "ChallengeGone" then
+		closeInvite()
+	elseif kind == "ChallengeSent" then
+		RS.pending = os.clock() + (tonumber(d.Expires) or K.CHALLENGE_EXPIRE) + 1
+		NotifyController.Show(string.format("Race challenge sent to %s. Waiting for an answer...", tostring(d.Name or "them")), C.Gold, "info")
+	elseif kind == "ChallengeAnswer" then
+		RS.pending = 0
+		local name = tostring(d.Name or "They")
+		if d.Answer == "Declined" then
+			NotifyController.Show(name .. " declined your race challenge.", nil, "info")
+		elseif d.Answer == "Expired" then
+			NotifyController.Show(name .. " didn't answer your race challenge.", nil, "info")
+		else
+			NotifyController.Show("The race challenge with " .. name .. " is off.", C.Orange, "warning")
+		end
 	end
 end
 
@@ -2336,8 +3243,9 @@ local function buildBoards()
 		rule.BorderSizePixel = 0
 		rule.Parent = bg
 		local facts = line("Facts", 33, 15, 13, "Bold", C.Dim, Enum.TextXAlignment.Center, 8)
-		facts.Text = string.format("%d CP  ·  PAR %s  ·  %s", #race.Checkpoints, clock(race.Par),
-			HUDController.Money(race.Reward + race.ParBonus))
+		local laps = race.Laps or 1
+		facts.Text = string.format("%s  ·  PAR %s  ·  %s", laps > 1 and (laps .. " LAPS") or (#race.Checkpoints .. " CP"),
+			clock(race.Par), HUDController.Money(race.Reward + race.ParBonus))
 		local rows = {} -- [i] = { name, time }
 		for i = 1, 5 do
 			local y = 51 + (i - 1) * 16
@@ -2391,6 +3299,27 @@ function ActivityClient.Init()
 	ui.endShiftButton.Activated:Connect(function()
 		Remotes.Event("RequestJob"):FireServer("End")
 	end)
+	-- Race challenges: the card's own ScreenGui over the HUD (like CrewClient's invite), CHALLENGE and its
+	-- key (K on a keyboard, R3 on a gamepad: neither is bound anywhere else), REMATCH.
+	ui.inviteGui = Instance.new("ScreenGui")
+	ui.inviteGui.Name = "RaceChallenge"
+	ui.inviteGui.ResetOnSpawn = false
+	ui.inviteGui.IgnoreGuiInset = true -- (the zone map's coordinates)
+	ui.inviteGui.DisplayOrder = 8
+	ui.inviteGui.Parent = player:WaitForChild("PlayerGui")
+	ui.inviteGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitInvite)
+	UserInputService:GetPropertyChangedSignal("TouchEnabled"):Connect(fitInvite)
+	UserInputService:GetPropertyChangedSignal("MouseEnabled"):Connect(fitInvite)
+	ui.challenge.Activated:Connect(sendChallenge)
+	ui.rematch.Activated:Connect(pressRematch)
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then
+			return -- (typing in the chat, a text box)
+		end
+		if (input.KeyCode == K.CHALLENGE_KEY or input.KeyCode == K.CHALLENGE_PAD) and ui.challenge.Visible then
+			sendChallenge()
+		end
+	end)
 	Remotes.OnClient("JobEvent", onJob)
 	Remotes.OnClient("RaceEvent", onRace)
 	Remotes.OnClient("StuntEvent", onStunt)
@@ -2406,6 +3335,10 @@ function ActivityClient.Init()
 			task.wait(0.2)
 			safely("shift line", updateJobUI)
 			safely("route preview", previewTick)
+			safely("race lobby", lobbyTick)
+			safely("race standings", standingsTick)
+			safely("race challenge", challengeTick)
+			safely("challenge card", inviteTick)
 			safely("drift zone", driftTick)
 		end
 	end)

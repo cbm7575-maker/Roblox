@@ -18,6 +18,11 @@
 --   * They leave when the target is no longer wanted, leaves, or they fall 900+ studs behind for 15 s.
 --   * Reset Character is no way out: a target whose body goes down by itself with a patrol close by is
 --     arrested (ArrestService.GaveUp). Further away the patrols leave and new ones find the new body.
+--   * Officers (PoliceOfficerService): one rides in each car, two from 3 stars. Once the car pulls up
+--     next to a suspect on foot or in a stopped car they get out and do the arresting (or the shooting)
+--     on foot, and the car waits with its brakes on; they get back in when the suspect drives off. A car
+--     whose officers are all down or dead stays put for GONE_WAIT seconds, then goes (a new one comes).
+--     Without officers (their looks not built yet) the car arrests by itself, as it always did.
 -- Server-owned physics (CarPhysics) so VehicleGuard never checks them.
 
 local Players = game:GetService("Players")
@@ -31,6 +36,7 @@ local CarPhysics = require(ReplicatedStorage.Shared.Util.CarPhysics)
 local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
 local CarBuilder = require(ServerStorage.Tools.CarBuilder)
 local HeatService = require(ServerScriptService.Services.HeatService)
+local Officers = require(ServerScriptService.Services.PoliceOfficerService)
 
 local AIPoliceService = {}
 
@@ -46,6 +52,7 @@ local ARREST_SECONDS = 3
 local LOST_RANGE = 900
 local LOST_SECONDS = 15
 local SPAWN_GAP = 6 -- seconds between spawns for the same target
+local GONE_WAIT = 15 -- seconds a car whose officers are all down waits before it goes
 
 local units = {} -- list of AI unit tables
 local lastSpawnFor = {} -- [player] = os.clock()
@@ -114,6 +121,10 @@ local function despawn(u)
 			table.remove(units, i)
 			break
 		end
+	end
+	if u.crew then
+		Officers.Remove(u.crew)
+		u.crew = nil
 	end
 	if u.car.Parent then
 		HeatService.UnregisterEye(u.car.PrimaryPart)
@@ -215,6 +226,8 @@ local function spawnFor(p, info)
 	}
 	table.insert(units, u)
 	lastSpawnFor[p] = os.clock()
+	local ok, crew = pcall(Officers.Board, car, (p:GetAttribute("Heat") or 0) >= 3 and 2 or 1)
+	u.crew = ok and crew or nil
 end
 
 local function drive(u, dt, now)
@@ -256,6 +269,22 @@ local function drive(u, dt, now)
 	end
 	if pos.Y < 0.2 or pos.Y < -60 then
 		return despawn(u) -- drove into water or fell out of the world
+	end
+
+	-- Officers out on foot: the car waits (brakes on, lights on) until they're back in.
+	if u.crew then
+		local mode = Officers.Step(u.crew, dt, p, info, chassis.AssemblyLinearVelocity.Magnitude)
+		if mode == "gone" then
+			u.goneAt = u.goneAt or now
+			if now - u.goneAt > GONE_WAIT then
+				return despawn(u)
+			end
+		end
+		if mode ~= "ride" then
+			local fwd = chassis.AssemblyLinearVelocity:Dot(cf.LookVector)
+			CarPhysics.Step(u.phys, dt, { Throttle = math.abs(fwd) > 1 and -math.sign(fwd) or 0, Steer = 0, SpeedScale = 1 })
+			return
+		end
 	end
 
 	-- Where to aim: straight at the target when close or in sight, otherwise along the roads.
@@ -337,9 +366,11 @@ local function drive(u, dt, now)
 	CarPhysics.Step(u.phys, dt, { Throttle = throttle, Steer = steer, SpeedScale = scale })
 
 	-- Arrest a target who stays (nearly) stopped right next to us. Brief wiggles don't reset the
-	-- timer, they only slow it down; driving off properly does.
+	-- timer, they only slow it down; driving off properly does. (A car with officers leaves that to them.)
 	local slow = info.inCar and info.vel.Magnitude < 8 or (not info.inCar and info.vel.Magnitude < 10)
-	if dist < ARREST_RANGE and slow then
+	if u.crew then
+		u.arrestFor = 0
+	elseif dist < ARREST_RANGE and slow then
 		u.arrestFor += dt
 		if u.arrestFor >= ARREST_SECONDS then
 			u.arrestFor = 0

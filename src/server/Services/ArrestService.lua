@@ -99,6 +99,8 @@ function ArrestService.Arrest(target, cop, gaveUp)
 		hum.Sit = false
 	end
 	local heat = HeatService.GetHeat(target)
+	-- Hands up (PoliceOfficerService: RequestSurrender) when caught: a star off the sentence.
+	local surrendered = target:GetAttribute("Surrender") == true
 	local bounty = HeatService.Bounty(target)
 	local paidStars = HeatService.PaidStars(target) -- fight, breakout and hot-car stars earn no XP
 	EconomyService.TakeCarried(target, "arrested")
@@ -116,13 +118,14 @@ function ArrestService.Arrest(target, cop, gaveUp)
 		bountyEarned:FireClient(cop, { Amount = bounty, Name = target.DisplayName })
 	end
 	target:SetAttribute("TimesCaught", (target:GetAttribute("TimesCaught") or 0) + 1)
-	caught:FireClient(target, { Heat = heat, By = cop and cop.DisplayName or "Police" })
+	caught:FireClient(target, { Heat = heat, By = cop and cop.DisplayName or "Police", Surrendered = surrendered })
 	feed:FireAllClients("Arrest", { Name = target.DisplayName, Cop = cop and cop.DisplayName or "an AI patrol" })
 	-- The taser stun and a knock-out belong to the body that was caught. Left running, the new prisoner
 	-- dropped flat in the yard (LawClient holds a stunned body down) or kept the grey knocked-out screen.
 	target:SetAttribute("StunnedUntil", nil)
 	target:SetAttribute("KnockedUntil", nil)
-	prison().Jail(target, heat)
+	target:SetAttribute("Surrender", nil)
+	prison().Jail(target, surrendered and math.max(1, heat - 1) or heat)
 end
 
 -- Reset Character (or the body going down by itself any other way) must not be a way out of a chase:

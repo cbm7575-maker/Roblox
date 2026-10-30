@@ -1,17 +1,25 @@
 -- ImpactService (ModuleScript, ServerScriptService.Services.ImpactService)
--- Kid-friendly bumps between cars and people (nobody ever loses health), plus getting into your car
--- with the F key / GET IN button.
---   * ImpactHit (driver's device -> server): "my car just hit this player on foot". The driver's
---     device owns its car's physics, so it spots the hit (ImpactClient). We check it: rate limit, the
---     hitter really is driving, the car is right next to the victim, the victim is on foot and not
---     already down. Then the victim is knocked over:
+-- Cars hitting people on foot, plus getting into your car with the F key / GET IN button.
+-- Every car hit also costs health by its speed (owner, Oct 30: a bump hurts a little, a fast hit a lot,
+-- running someone over again and again can kill): CombatService.CarHit does the damage, the death and
+-- the protections (safe zones, spawn protection, passive mode and crewmates for a player's car).
+--   * ImpactHit (driver's device -> server): "my car just hit this player on foot, this fast". The
+--     driver's device owns its car's physics, so it spots the hit (ImpactClient). We check it: rate
+--     limit, the hitter really is driving, the car is right next to the victim, the victim is on foot.
+--     The speed for the damage is the device's, but never more than what we saw the car doing before
+--     the bump slowed it (the device takes a quarter off the moment it hits). Someone already down is
+--     only hurt (run over again: Combat.CarHit.Downed of the damage). Anyone else is knocked over:
 --       - "Knockdown" (direction, speed, seconds) goes to the victim's device, which owns their
 --         character and does the fall, the dizzy stars and getting up (ImpactClient).
 --       - Player attribute KnockedUntil (server time) lets every device show the dizzy stars.
 --     After getting up you can't be knocked again for a couple of seconds (no chain knock-downs).
 --   * AI patrol cars are server cars, so we check them here 5 times a second: one moving fast that
---     drives into someone on foot knocks them over. Never a player any patrol is chasing (their unit
---     parks beside them; a knock-down there would turn straight into an arrest, which isn't fair).
+--     drives into someone on foot knocks them over (and hurts them). Never a player any patrol is
+--     chasing (their unit parks beside them; a knock-down there would turn straight into an arrest,
+--     which isn't fair).
+--   * TrafficHit (victim's device -> server): street traffic lives on each device alone, so a traffic car
+--     that knocks you over is reported by your own device, with its speed (ImpactClient.KnockLocal).
+--     It can only ever hurt the one who sends it; at most one every 1.5 s.
 --   * RequestEnterCar (F / GET IN / gamepad X): sits you in your own empty car, or (civilians only) in
 --     the hot car you stole (its Drive prompt is gone once stolen, so this is the only way back in),
 --     when you're close and not knocked over or tasered. The E prompt (VehicleService) has the same
@@ -32,6 +40,20 @@ local Workspace = game:GetService("Workspace")
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local VehicleService = require(ServerScriptService.Services.VehicleService)
+local Vehicles = require(ReplicatedStorage.Shared.Config.Vehicles)
+
+-- CombatService requires this module, so it is looked up when first needed (it has started by then).
+local CombatService
+local function combat()
+	if CombatService == nil then
+		local module = ServerScriptService.Services:FindFirstChild("CombatService")
+		local ok, result = pcall(function()
+			return module and require(module)
+		end)
+		CombatService = (ok and type(result) == "table") and result or false
+	end
+	return CombatService or nil
+end
 
 -- Limp bodies (RagdollService). Optional on purpose: if that module is missing or fails to load, a
 -- knock-down is still the stiff tip-over ImpactClient does by itself.
@@ -55,6 +77,12 @@ local AI_INTERVAL = 0.2
 local AI_MIN_SPEED = 20
 local AI_MARGIN = 1.5
 local ENTER_RANGE = 16 -- the client offers GET IN at 12 studs; a little slack for lag
+local BUMP_KEEP = 0.7 -- the driver's device cuts its speed to 75% on hitting someone: we may see that already
+local CONTACT_SLACK = 4 -- studs past the car's box a victim may be and still count as hit (for the damage)...
+local CONTACT_LAG = 0.12 -- ...plus this many per stud/s of speed (what we see is a little behind the driver)
+local contactParams = RaycastParams.new()
+contactParams.FilterType = Enum.RaycastFilterType.Exclude
+contactParams.IgnoreWater = true
 
 local safeUntil = {} -- [player] = os.clock() until which they can't be knocked down again
 local downUntil = {} -- [player] = os.clock() until which they're on the ground
@@ -138,6 +166,28 @@ function ImpactService.KnockDown(victim, dir, speed, seconds, reason)
 	return knockDown(victim, flatDir, math.clamp(speed, 0, 200), math.clamp(seconds, 0.5, 10), type(reason) == "string" and reason or "ko")
 end
 
+-- The car's name for the death screen ("Hit by <name>"): its Config.Vehicles display name.
+local function carName(car)
+	local def = car and Vehicles.ById[car:GetAttribute("VehicleId") or car.Name]
+	return def and def.DisplayName or "a car"
+end
+
+-- Health off for a car hit (CombatService.CarHit), inside a pcall: a fault there never stops the knock-down.
+local function hurt(victim, speed, dir, driver, car, downAlready, selfReported)
+	local cs = combat()
+	if cs and type(cs.CarHit) == "function" then
+		local ok, err = pcall(cs.CarHit, victim, speed, dir, driver, car and carName(car) or nil, downAlready, selfReported)
+		if not ok then
+			warn("[ImpactService] car hit: " .. tostring(err))
+		end
+	end
+end
+
+local function isDown(p)
+	local t = Workspace:GetServerTimeNow()
+	return (downUntil[p] or 0) > os.clock() or (p:GetAttribute("KnockedUntil") or 0) > t or (p:GetAttribute("StunnedUntil") or 0) > t
+end
+
 -- Push direction: mostly along the car's travel, a bit away from the car's centre.
 local function pushDir(chassis, root, flatVel)
 	local away = (root.Position - chassis.Position) * Vector3.new(1, 0, 1)
@@ -149,7 +199,7 @@ local function pushDir(chassis, root, flatVel)
 	return dir.Unit
 end
 
-local function onHit(player, victim)
+local function onHit(player, victim, reported)
 	if not RateLimit.Allow(player, "ImpactHit", 3, 4) then
 		return
 	end
@@ -174,7 +224,47 @@ local function onHit(player, victim)
 	if dist > HIT_RANGE + math.min(speed * 0.12, LAG_RANGE) then
 		return
 	end
-	knockDown(victim, pushDir(chassis, root, flatVel), speed)
+	-- How hard: the device's number, within what we saw (it may already be the slowed-down speed).
+	local hitSpeed = speed
+	reported = tonumber(reported)
+	if reported and reported == reported then
+		hitSpeed = math.clamp(reported, speed, speed / BUMP_KEEP + 5)
+	end
+	local dir = pushDir(chassis, root, flatVel)
+	local wasDown = isDown(victim)
+	if not wasDown then
+		knockDown(victim, dir, speed)
+	end
+	-- The damage needs real contact, not just "near": the victim inside the car's box (plus what the two
+	-- devices' lag can account for), and nothing solid between the car and them. A report from a
+	-- tampered device about someone round a corner knocks nobody out of a building.
+	local rel = chassis.CFrame:PointToObjectSpace(root.Position)
+	local half = chassis.Size / 2
+	local slack = CONTACT_SLACK + speed * CONTACT_LAG
+	if math.abs(rel.X) > half.X + slack or math.abs(rel.Z) > half.Z + slack or rel.Y < -half.Y - 3 or rel.Y > half.Y + 7 then
+		return
+	end
+	contactParams.FilterDescendantsInstances = { car, victim.Character, Workspace:FindFirstChild("Vehicles") or car }
+	local from = chassis.Position + Vector3.new(0, 1, 0)
+	if Workspace:Raycast(from, root.Position - from, contactParams) then
+		return
+	end
+	hurt(victim, hitSpeed, dir, player, car, wasDown)
+end
+
+-- A traffic car knocked this player over on their own device (ImpactClient.KnockLocal).
+local function onTrafficHit(player, speed, dir)
+	if not RateLimit.Allow(player, "TrafficHit", 1 / 1.5, 1) then
+		return
+	end
+	speed = tonumber(speed)
+	if not speed or speed ~= speed or typeof(dir) ~= "Vector3" or dir.X ~= dir.X or dir.Z ~= dir.Z then
+		return
+	end
+	if not onFoot(player) then
+		return
+	end
+	hurt(player, math.clamp(speed, 0, 90), dir, nil, nil, false, true) -- (traffic never drives faster than that)
 end
 
 -- AI patrols driving into people on foot (5 times a second).
@@ -224,7 +314,10 @@ local function checkAI()
 						local z = rel.Z - shift
 						if math.abs(rel.X) < half.X + AI_MARGIN and math.abs(z) < half.Z + sweep / 2 + AI_MARGIN
 							and rel.Y > -half.Y - 2 and rel.Y < half.Y + 6 then
-							knockDown(p, pushDir(chassis, root, flatVel), speed)
+							local dir = pushDir(chassis, root, flatVel)
+							if knockDown(p, dir, speed) then
+								hurt(p, speed, dir, nil, car, false)
+							end
 						end
 					end
 				end
@@ -286,6 +379,7 @@ function ImpactService.Init()
 	knockRemote = Remotes.Event("Knockdown")
 	notify = Remotes.Event("Notify")
 	Remotes.Event("ImpactHit").OnServerEvent:Connect(onHit)
+	Remotes.Event("TrafficHit").OnServerEvent:Connect(onTrafficHit)
 	Remotes.Event("RequestEnterCar").OnServerEvent:Connect(onEnter)
 	Players.PlayerRemoving:Connect(function(p)
 		safeUntil[p] = nil

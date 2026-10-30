@@ -147,7 +147,7 @@ end
 
 -- Reasons whose stars cost the wanted player nothing yet (an empty bag): they pay no bounty.
 -- carjack: taking a street car (CarjackService), so friends can't jack cars to be arrested for cash.
-local NO_BOUNTY = { breakout = true, carboost = true, carjack = true }
+local NO_BOUNTY = { breakout = true, carboost = true, carjack = true, street_race = true }
 
 -- A crime was seen (store camera, witness): add heat and mark where it happened.
 function HeatService.Add(player, amount, reason)

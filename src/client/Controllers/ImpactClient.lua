@@ -23,9 +23,12 @@
 --             pass-through. You slide along it (your heading minus the part going into it), or glance
 --             off to your side of it.
 --           . AI patrol cars (AIPolice) stay solid walls with no push.
---       - A person on foot: your car loses about 25% of its speed and the server is told (ImpactHit);
---         ImpactService checks it and knocks them over.
---   * Knocked over (server "Knockdown", or a traffic car through ImpactClient.KnockLocal): your
+--       - A person on foot: your car loses about 25% of its speed and the server is told (ImpactHit,
+--         with how fast we hit them); ImpactService checks it, knocks them over and CombatService.CarHit
+--         takes health by the speed. Someone already lying in the road is hit too (run over again: no
+--         slow-down, a lighter thud), at most once a second each.
+--   * Knocked over (server "Knockdown", or a traffic car through ImpactClient.KnockLocal, which also tells
+--     the server how fast it was going: TrafficHit, so the hit costs health like any other car's): your
 --     character tips over, the dazed marks circle your head, and you get back up after ~2.5 s (a
 --     server knockout while you're already down stretches that to its own time). Never while seated
 --     or swimming (CombatService doesn't count a knockout on a swimmer either).
@@ -48,7 +51,8 @@
 --     with "Vehicles", like PedClient's walkers) on this device only, until ~0.6 s after the car is
 --     clear. Driving: other players near our car. On foot: our own character near any car. The
 --     scripted knock-down is then the only reaction. Slow bumps stay ordinary physics.
--- Other controllers: ImpactClient.IsKnocked(), ImpactClient.KnockLocal(dir, speed).
+-- Other controllers: ImpactClient.IsKnocked(), ImpactClient.KnockLocal(dir, speed, fromTraffic).
+-- (fromTraffic = true: a traffic car did it, and the server is told so: TrafficHit.)
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -104,6 +108,7 @@ local CLEAR_GAP = 0.3 -- studs apart we ease out to; collisions come back from 0
 
 local lastHit = setmetatable({}, { __mode = "k" }) -- [car model or Player] = os.clock()
 local hitRemote
+local trafficRemote -- TrafficHit: a traffic car (this device only) knocked us over
 local shakeUntil, shakeAmp = 0, 0
 local knocked = nil -- { hum, endAt = os.clock() to get up, timers } while this character is on the ground
 local safeUntil = 0
@@ -470,12 +475,17 @@ function ImpactClient.IsKnocked()
 end
 
 -- Ambient traffic (TrafficClient) clipped us: same fall, only on this device.
-function ImpactClient.KnockLocal(dir, speed)
+function ImpactClient.KnockLocal(dir, speed, fromTraffic)
 	if os.clock() < safeUntil or typeof(dir) ~= "Vector3" then
 		return false
 	end
 	local fell = knock(dir, tonumber(speed) or 30, KNOCK_TIME)
 	if fell then
+		-- Traffic lives on this device only, so the server hears it from us: the hit costs health by its
+		-- speed (ImpactService -> CombatService.CarHit; only ever our own).
+		if fromTraffic == true and trafficRemote then -- (a hard landing falls this way too: no damage for that here)
+			trafficRemote:FireServer(tonumber(speed) or 30, dir)
+		end
 		-- Loose joints for everyone (RagdollService checks it). JointsOnly: knock() above already has the
 		-- body down and recover() stands it up, so Ragdoll only loosens the joints and never stands it.
 		-- The server is asked for a little less than KNOCK_TIME (the trip there and back), so the joints
@@ -912,13 +922,17 @@ local function hitCar(chassis, car, other, oc, before, closing, toOther)
 	shake(0.35 + 0.45 * math.clamp(closing / 100, 0, 1))
 end
 
-local function hitPerson(chassis, before, victim)
+-- speed: how fast we went into them (studs/s; the server takes it, within what it saw, for the damage).
+-- down: they were already lying in the road: the car bumps over them without slowing much.
+local function hitPerson(chassis, before, victim, speed, down)
 	push = nil -- a new bump takes over from any push, so the push can't undo this slow-down
-	slowTo(chassis, before, PERSON_KEEP)
-	SoundClient.Play("Crash", chassis.Position, 0.45)
-	shake(0.2)
+	if not down then
+		slowTo(chassis, before, PERSON_KEEP)
+	end
+	SoundClient.Play("Crash", chassis.Position, down and 0.3 or 0.45)
+	shake(down and 0.12 or 0.2)
 	if hitRemote then
-		hitRemote:FireServer(victim)
+		hitRemote:FireServer(victim, speed)
 	end
 end
 
@@ -979,7 +993,7 @@ local function checkHits(dt)
 			if closeCall(cf, half, before, root, dt, ghosts[char] ~= nil) then
 				ghost(char, GHOST_HOLD)
 			end
-			if not boat and now - (lastHit[p] or 0) > HIT_COOLDOWN and not isDown(p) then
+			if not boat and now - (lastHit[p] or 0) > HIT_COOLDOWN then
 				local rel = cf:PointToObjectSpace(root.Position)
 				local speed = (myFlat - flat(root.AssemblyLinearVelocity)).Magnitude
 				local margin = PERSON_MARGIN + speed * dt
@@ -989,7 +1003,7 @@ local function checkHits(dt)
 					-- Only when the car is moving into them (not just sliding past alongside).
 					if toThem.Magnitude > 0.1 and myFlat:Dot(toThem.Unit) > 8 then
 						lastHit[p] = now
-						hitPerson(chassis, before, p)
+						hitPerson(chassis, before, p, speed, isDown(p))
 					end
 				end
 			end
@@ -1031,6 +1045,9 @@ function ImpactClient.Init()
 	-- Fetched in its own thread: the client version of Remotes.Event waits for the server to make it.
 	task.spawn(function()
 		hitRemote = Remotes.Event("ImpactHit")
+	end)
+	task.spawn(function()
+		trafficRemote = Remotes.Event("TrafficHit")
 	end)
 	Remotes.OnClient("Knockdown", function(dir, speed, seconds)
 		if typeof(dir) ~= "Vector3" or dir.X ~= dir.X or dir.Z ~= dir.Z then
