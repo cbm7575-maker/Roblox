@@ -2715,7 +2715,7 @@ local function guideSections()
 			Lines = {
 				pick("[1] fists · [2+] guns · [R] reload", "Tap [WEAPON] to switch, [FIRE] to shoot."),
 				"Guns from " .. money(pistol and pistol.Price or 0) .. " at Coast Arms.",
-				"Knockouts drop cash. Everyone gets back up!",
+				"Guns kill, fists knock out. Both drop cash.",
 				"No fights in safe zones or [Passive] mode.",
 			},
 			Buttons = {

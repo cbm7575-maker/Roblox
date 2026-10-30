@@ -8,6 +8,7 @@ local ORDER = {
 	"VehicleService",
 	"VehicleGuard",
 	"TeamService",
+	"RespawnService", -- loads characters (Roblox's own respawn is off): on joining, and the death screen's RESPAWN
 	"AnimationService", -- walk / run / idle sets on every character (Config.Animations)
 	"EconomyService",
 	"DataService",

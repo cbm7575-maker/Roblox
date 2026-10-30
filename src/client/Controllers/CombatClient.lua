@@ -1,7 +1,8 @@
 -- CombatClient (ModuleScript, StarterPlayerScripts.Controllers.CombatClient)
 -- Your side of fights: fists and guns. CombatService decides every hit, every round in the magazine
--- and every dollar; this file only asks and shows. Kid-safe: nothing gory, nobody is gone for good,
--- people are KNOCKED OUT and get back up. Numbers and gun stats live in Config.Combat.
+-- and every dollar; this file only asks and shows. Nothing gory: a gun kills (RespawnClient shows the
+-- death screen and its RESPAWN button), fists KNOCK people OUT and they get back up. Numbers and gun
+-- stats live in Config.Combat.
 --   * Tools from the Roblox backpack: Fists (hotbar 1) and the guns you own (2 and up) for citizens, the
 --     Service Pistol for cops. Switch with the hotbar keys or the gamepad bumpers (Roblox's own), or the
 --     weapon wheel (WeaponWheel: hold Tab / D-pad left). On a phone the hotbar is hidden (it would cover
@@ -55,8 +56,8 @@
 --     when your shot counted (white; blue when armor took it all, gold for a knockout), toasts for
 --     grabbed or returned cash. Whoever is hit flinches and brings a hand to the spot (PoseClient
 --     "Flinch" + "HandToHit"), on every device that saw it.
---   * Big moments go through HUDController.Stamp (one queue, so two never overlap): KNOCKOUT, bounties,
---     YOU BAILED. Being knocked out is a short scene of its own: the fall at real speed, then after
+--   * Big moments go through HUDController.Stamp (one queue, so two never overlap): KNOCKOUT, ELIMINATED
+--     (you shot someone dead), bounties, YOU BAILED. Being knocked out is a short scene of its own: the fall at real speed, then after
 --     about a second the picture drains to grey with a slight blur (local Lighting effects
 --     "NCKnockedOut" / "NCKnockedOutBlur", on top of ImpactClient's lighter grey) and a low drone
 --     (optional sound key "KnockedOut"), then "KNOCKED OUT" with who did it and what you dropped; the
@@ -3045,7 +3046,7 @@ local function onFx(kind, a, b, c, d, e)
 		local name = tostring(a.Name or "They")
 		local bounty = math.floor(tonumber(a.Bounty) or 0)
 		local _, onGround = lossText(a)
-		local sub = name .. (a.Fled and " bailed out" or " is down")
+		local sub = name .. (a.Fled and " bailed out" or a.Killed and " is dead" or " is down")
 		if onGround > 0 then
 			sub ..= " · " .. money(onGround) .. " on the ground"
 		end
@@ -3053,7 +3054,7 @@ local function onFx(kind, a, b, c, d, e)
 			HUDController.Stamp("+" .. money(bounty) .. (a.BountyKind == "Vigilante" and " VIGILANTE PAY" or " BOUNTY"), sub, C.Cash)
 			SoundClient.Play("Cash")
 		else
-			HUDController.Stamp(a.Fled and "THEY BAILED" or "KNOCKOUT", sub) -- (a reset mid-fight counts)
+			HUDController.Stamp(a.Fled and "THEY BAILED" or a.Killed and "ELIMINATED" or "KNOCKOUT", sub) -- (a reset mid-fight counts)
 		end
 	elseif kind == "Fled" and type(a) == "table" then
 		local loss = lossText(a)

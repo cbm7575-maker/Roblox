@@ -1,6 +1,7 @@
 -- CombatService (ModuleScript, ServerScriptService.Services.CombatService)
--- Fists and guns, kid-safe: nothing gory, and nobody is ever gone for good. People are KNOCKED OUT and
--- get back up. Numbers live in Config.Combat. The client only asks; every hit is decided here.
+-- Fists and guns, nothing gory. A gun that takes someone's health to 0 KILLS them (they come back with
+-- the death screen's RESPAWN button: RespawnService); fists KNOCK them OUT and they get back up. Numbers
+-- live in Config.Combat. The client only asks; every hit is decided here.
 --   * Tools (given on spawn, side change, purchase; checked again every 2 s):
 --       citizens  "Fists" (everyone) + every gun they own (Combat.GunOrder: Pistol, SMG, Shotgun, Rifle),
 --                 bought once at Coast Arms and saved as data.gear.guns[id] = true. An old Stun Blaster
@@ -46,16 +47,20 @@
 --   * Health and armor: attribute "Daze" (0-100) is the damage taken, shown as HEALTH = 100 - Daze. It
 --     heals 15 a second after 4 s without a hit. "Armor" (0-100, citizens only, saved as
 --     data.gear.armor, bought at Coast Arms) soaks up damage first, fists included.
---     At 0 health you're knocked out (ImpactService.KnockDown, 5 s on the ground), health refills, and
---     you're immune to combat for 10 s after getting up (attribute CombatSafeUntil, server time; firing
---     a shot or landing a hit ends it early).
---     Swimmers can't fall over: they stay at 5 health and the next hit once they're out of the water
---     does it. "Swimming" means the Swimming humanoid state (which the player's own device reports) AND
+--     At 0 health from a gun you die (kill): the body falls limp for good (RagdollService, opts.Dead) and
+--     its health goes to 0 K.KILL_DELAY later; HEALTH shows 0 until the new body. What follows the death
+--     is ArrestService's (a wanted player with police within 120 studs is arrested on the spot) and
+--     RespawnService's (RESPAWN). At 0 health from fists you're knocked out (ImpactService.KnockDown,
+--     5 s on the ground), health refills, and you're immune to combat for 10 s after getting up
+--     (attribute CombatSafeUntil, server time; firing a shot or landing a hit ends it early).
+--     Swimmers can't fall over: a punch leaves them at 5 health and the next hit once they're out of the
+--     water does it (a gun kills them where they are). "Swimming" means the Swimming humanoid state
+--     (which the player's own device reports) AND
 --     terrain water at their body, so faking the state on land does nothing.
 --     Bailing out mid-fight (the Reset button, a side switch, leaving) counts as being knocked out: the
 --     bag and wallet still drop and the attacker gets the heat and the bounty (going by what you were
 --     when last hit). Getting arrested mid-fight doesn't: the cops already took the bag.
---   * Money from a knockout:
+--   * Money from a knockout or a kill (the same for both):
 --       - Bag: carrying $50+ in the robbery bag, 25% of it (at least $50) drops as a glowing duffel.
 --       - Wallet: a citizen also drops 2% of their Cash ($20-$400) as a small wallet, at most once
 --         every 120 s per victim (never when leaving the game: their save is already being written).
@@ -63,7 +68,7 @@
 --         heat when it isn't theirs); a cop returns them to the bank (the money is gone; evidence reward up
 --         to $100, never more than half). Walking over one only picks it up for its owner, cops and
 --         wanted players. Models carry the attributes Kind ("Bag" | "Wallet") and Amount.
---       - Bounty: knocking out a WANTED citizen pays their PAID stars x $200 from the system (cops:
+--       - Bounty: knocking out or killing a WANTED citizen pays their PAID stars x $200 from the system (cops:
 --         "ko_bounty", citizens: "vigilante"), once per wanted spell (WantedSince) and at most once per
 --         victim every 5 minutes. Fight stars pay nothing, so friends can't fire into the air and farm
 --         each other, and a friend who stays wanted can't be knocked out for cash over and over.
@@ -88,7 +93,8 @@
 --     "Armor"): citizen, at the counter, not owned / armor not full, rank, cash.
 -- Player attributes set here: Daze, Armor, Guns ("Pistol,Rifle"; nil until the save loads), Passive,
 -- InSafeZone, SpawnSafeUntil, CombatSafeUntil, CombatStars.
--- Remote CombatFx (server -> client): "Hit", "Punch", "Shot", "HitMark", "Reload", "KO", "KOd", "Fled",
+-- Remote CombatFx (server -> client): "Hit", "Punch", "Shot", "HitMark", "Reload", "KO", "Killed" (to the
+-- one who died: RespawnClient's death screen), "KOd" (to the attacker; Killed = true for a kill), "Fled",
 -- "Grabbed", "Returned", "Bought".
 -- (Luau allows 200 locals at a script's top level: constants live in the table K, state in the table S.)
 -- Public:
@@ -97,6 +103,7 @@
 --   CombatService.LastAggro(player) -> os.clock() of their last accepted swing or shot (or nil), "Fists" | "Gun"
 --   CombatService.CrimeHeat(player, amount, reason, withGun) -> stars added (fight stars, capped as above)
 --   CombatService.IsSafe(player) -> bool (safe zone, home or prisoner)
+--   CombatService.ShotDead(player) -> bool (their current body was killed by a gun)
 
 local Players = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
@@ -115,6 +122,17 @@ local EconomyService = require(ServerScriptService.Services.EconomyService)
 local HeatService = require(ServerScriptService.Services.HeatService)
 local ImpactService = require(ServerScriptService.Services.ImpactService)
 local SettingsService = require(ServerScriptService.Services.SettingsService)
+
+-- Limp bodies for kills (RagdollService). Optional, as in ImpactService: without it a killed body just
+-- dies where it stands.
+local RagdollService
+do
+	local module = ServerScriptService.Services:FindFirstChild("RagdollService")
+	local ok, result = pcall(function()
+		return module and require(module)
+	end)
+	RagdollService = (ok and type(result) == "table") and result or nil
+end
 
 local CombatService = {}
 
@@ -137,6 +155,8 @@ K.ATTR = Combat.ToolAttribute
 K.GUN_ATTR, K.AMMO_ATTR, K.RELOAD_ATTR = Combat.GunAttribute, Combat.AmmoAttribute, Combat.ReloadAttribute
 K.AIM_ATTR, K.AIMUP_ATTR, K.SWING_ATTR = Combat.AimAttribute, Combat.AimUpAttribute, Combat.SwingAttribute
 K.TICK = 0.25 -- health regeneration; safe zones every other tick; tools every 8th
+K.KILL_DELAY = 0.1 -- seconds from a kill's fall to its death: the body's own device lies it down first (Ragdoll.Fall refuses a dead body)
+K.DEAD = table.freeze({ Dead = true }) -- RagdollService.KnockDown opts for a body that is about to die
 K.ZONE_REFRESH = 30 -- seconds: rebuild the zone cache even if nothing announced a change
 K.MAX_BAGS = 40 -- dropped bags and wallets together
 K.PUNCH_FX_RANGE = 120 -- studs: who is sent punch effects (the "POW!" shows up to 120)
@@ -183,6 +203,9 @@ S.watchedFolders = setmetatable({}, { __mode = "k" })
 S.lastHitAt = {} -- [player] = os.clock() of the last hit they took (regeneration, fleeing)
 S.lastAttacker = {} -- [player] = who hit them last (a mid-fight reset counts as their knockout)
 S.lastHitInfo = {} -- [player] = { cop, civ, wanted, paid, since, gun }: what they were when last hit, and with what
+-- [player] = the body a gun killed (until their next body): nothing more is taken from it, it can't be hit,
+-- it doesn't heal. Weak and never cleared on leaving: a body that goes after its player does still counts.
+S.killed = setmetatable({}, { __mode = "k" })
 S.lastAttack = {} -- [player] = os.clock() they last landed a hit or fired (passive lock)
 S.lastAggroAt = {} -- [player] = os.clock() of their last accepted swing or shot, hit or miss
 S.lastAggroKind = {} -- [player] = "Fists" | "Gun"
@@ -1637,7 +1660,7 @@ local function victimProblem(attacker, victim, gun)
 		return "CopHoldFire"
 	end
 	local hum, root = body(victim)
-	if not hum or hum.SeatPart then
+	if not hum or hum.SeatPart or S.killed[victim] == victim.Character then
 		return false
 	end
 	if isPassive(victim) then
@@ -1890,9 +1913,49 @@ local function payBounty(attacker, victim, paid, wasCitizen, since)
 	return amount, cop and "Bounty" or "Vigilante"
 end
 
--- Health hit 0. gun: the gun that did it (nil for fists). Returns true if they went down.
+-- A gun took their health to 0: they die. The money, heat and bounty go exactly as for a knockout, then
+-- the body falls limp for good and its health goes to 0 K.KILL_DELAY later. After that the death is
+-- ArrestService's (police right there: an arrest on the spot) and RespawnService's (RESPAWN); onFled,
+-- which every death runs, does nothing for this body (S.killed). Returns true.
+local function kill(attacker, victim, hum, root, dir, speed, gun)
+	local char = victim.Character
+	S.killed[victim] = char
+	setDaze(victim, Combat.DazeMax) -- (HEALTH 0 until the new body)
+	S.lastHitAt[victim] = nil
+	S.lastAttacker[victim] = nil
+	S.lastHitInfo[victim] = nil
+	local citizen = victim:GetAttribute("Side") == "Civilian"
+	local bagPos, walletPos = groundSpots(root, flat(-dir)) -- (a little toward the attacker)
+	local dropped = dropBag(victim, bagPos)
+	local wallet = citizen and dropWallet(victim, walletPos) or 0
+	koHeat(attacker, victim, nil, true)
+	local bounty, bountyKind = payBounty(attacker, victim, HeatService.PaidStars(victim), citizen, victim:GetAttribute("WantedSince"))
+	fxRemote:FireClient(victim, "Killed", { By = attacker.DisplayName, Gun = gun.Name, Dropped = dropped, Wallet = wallet })
+	fxRemote:FireClient(attacker, "KOd", { Name = victim.DisplayName, Dropped = dropped, Wallet = wallet, Bounty = bounty,
+		BountyKind = bountyKind, Killed = true })
+	if RagdollService then
+		-- (The same hop as a knockout's fall: ImpactService.)
+		local ok, err = pcall(RagdollService.KnockDown, victim, nil, dir * math.clamp(speed * 0.25, 10, 22) + Vector3.new(0, 14, 0),
+			"shot", K.DEAD)
+		if not ok then
+			warn("[CombatService] ragdoll: " .. tostring(err))
+		end
+	end
+	task.delay(K.KILL_DELAY, function()
+		if hum.Parent and hum.Health > 0 and victim.Character == char then
+			hum.Health = 0
+		end
+	end)
+	return true
+end
+
+-- Health hit 0. gun: the gun that did it (nil for fists: a knockout; a gun kills). Returns true if they
+-- went down.
 local function knockOut(attacker, victim, dir, speed, gun)
 	local hum, root = body(victim)
+	if root and gun then
+		return kill(attacker, victim, hum, root, dir, speed, gun)
+	end
 	-- A swimmer's own device refuses to tip them over (ImpactClient), so don't count it as a knockout.
 	-- (Only in real water: a state faked on land still gets knocked out here.)
 	-- (The last word tells RagdollService what did it: neither a bullet nor a punch is braced for.)
@@ -1923,6 +1986,9 @@ end
 -- when last hit. Getting arrested (jailed and respawned as a prisoner) isn't bailing out: nothing
 -- happens. Safe to run twice for one bail-out: the second time finds nothing to do.
 local function onFled(player, char)
+	if S.killed[player] == char then
+		return -- shot dead: kill already dropped and paid everything
+	end
 	local attacker = S.lastAttacker[player]
 	local snap = S.lastHitInfo[player]
 	local fleeing = (player:GetAttribute("Daze") or 0) > 0 or os.clock() - (S.lastHitAt[player] or -math.huge) < Combat.FleeWindow
@@ -2638,6 +2704,7 @@ end
 local function onCharacter(player, char)
 	player:SetAttribute("SpawnSafeUntil", now() + Combat.SpawnProtection)
 	player:SetAttribute("CombatSafeUntil", nil)
+	S.killed[player] = nil
 	setDaze(player, 0)
 	S.lastHitAt[player] = nil
 	S.lastAttacker[player] = nil
@@ -2832,7 +2899,7 @@ local function tick(dt, n)
 	local t = os.clock()
 	for _, p in ipairs(Players:GetPlayers()) do
 		local daze = p:GetAttribute("Daze") or 0
-		if daze > 0 and t - (S.lastHitAt[p] or 0) >= Combat.DrainDelay then
+		if daze > 0 and t - (S.lastHitAt[p] or 0) >= Combat.DrainDelay and S.killed[p] == nil then
 			setDaze(p, math.max(0, daze - Combat.DrainPerSecond * dt))
 		end
 		if n % 2 == 0 then
@@ -2911,6 +2978,11 @@ end
 function CombatService.IsSafe(player)
 	local _, root = body(player)
 	return isSafe(player, root)
+end
+
+-- Was their current body shot dead (kill)? ArrestService words the arrest on the spot by it.
+function CombatService.ShotDead(player)
+	return player.Character ~= nil and S.killed[player] == player.Character
 end
 
 function CombatService.Init()

@@ -114,11 +114,12 @@ local function titleCamera()
 end
 
 -- While the title screen is up, every other HUD layer is off (checked a few times a second, because
--- most of them are built after this controller starts).
+-- most of them are built after this controller starts). Not the death screen (RespawnClient): it is
+-- only up while we're dead, shows over the title, and turning it back on afterwards would leave it up.
 local function hideHud()
 	while title do
 		for _, g in ipairs(player.PlayerGui:GetChildren()) do
-			if g:IsA("ScreenGui") and g ~= gui and g.Enabled and g.Name ~= "Freecam" then
+			if g:IsA("ScreenGui") and g ~= gui and g.Enabled and g.Name ~= "Freecam" and g.Name ~= "RespawnUI" then
 				hidden[g] = true
 				g.Enabled = false
 			end

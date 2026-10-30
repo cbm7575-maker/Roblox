@@ -1741,7 +1741,8 @@ local function onRagdoll(char, kind, seconds, impulse, brace)
 				seconds = 2.5
 			end
 			attrFall = nil
-			Ragdoll.Fall(char, clamp(seconds, 0.3, 12), typeof(impulse) == "Vector3" and impulse or nil)
+			-- (Up to 30 s: a dying body's fall, RagdollService's DEAD_SECONDS, outlasts the respawn.)
+			Ragdoll.Fall(char, clamp(seconds, 0.3, 30), typeof(impulse) == "Vector3" and impulse or nil)
 		end
 	elseif kind == "Up" and char == player.Character then
 		attrFall = nil

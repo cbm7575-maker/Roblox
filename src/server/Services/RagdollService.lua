@@ -1,6 +1,6 @@
 -- RagdollService (ModuleScript, ServerScriptService.Services.RagdollService)
 -- The one way to knock a player's character limp so that everyone sees it, plus the check on the poses
--- players show each other. Kid-safe: a limp body is only a fall; it always gets back up, unhurt.
+-- players show each other. A limp body is only a fall and gets back up, unless it is dead (opts.Dead).
 --   * RagdollService.KnockDown(player, seconds, impulse, reason, opts?) -> bool
 --       The character falls for `seconds` (0.5-10, default 2.5) and leaves at `impulse` (a velocity in
 --       studs/s, at most 80; nil = it keeps moving as it was). Returns false when it can't fall right
@@ -10,6 +10,10 @@
 --       coming": the body first falls stiff for 0.3 s with the arms over the head (every device plays
 --       PoseClient's "Brace" pose), then goes loose. "car", "fall" and "bail" brace; "punch", "shot",
 --       "ko" and "self" don't. opts.Brace (true / false) overrides the reason.
+--       opts.Dead = true: the body is about to die (CombatService's gun kills: call this, then set its
+--       health to 0). It falls the same way but never gets up: no timers, `seconds` is ignored, its
+--       device lies it down for DEAD_SECONDS (longer than Combat.Death.AutoRespawn) and the joints stay
+--       loose until the body goes (respawn, leaving), not when it dies.
 --     How it works (Shared.Util.Ragdoll has the details):
 --       - Here: the joints go loose (Ragdoll.Start), which every device sees, and the loose parts are
 --         handed to the player's device (network owner) so the fall is smooth for them. The joints lock
@@ -58,6 +62,7 @@ local RagdollService = {}
 
 local DEFAULT_SECONDS = 2.5
 local MIN_SECONDS, MAX_SECONDS = 0.5, 10
+local DEAD_SECONDS = 30 -- a dying body's fall on its own device (PoseClient allows up to 30): it outlasts any respawn
 local LOCK_EARLY = 0.2 -- the joints lock this long before the time is up
 local MAX_PUSH = 80 -- studs/s
 -- "Ragdoll me" without a time, and the longest one. Ragdoll's own numbers: the player's device times
@@ -91,7 +96,7 @@ RagdollService.Reasons = {
 }
 
 -- [player] = { char, hum, token, limp (joints loose now), limpAt / endAt (os.clock), own (the player
--- started it themselves), reason }
+-- started it themselves), reason, dead (opts.Dead: down until the body goes) }
 local active = {}
 local poseToken = {} -- [player] = a count: only the latest timed pose clears the attribute
 local remote
@@ -184,7 +189,8 @@ function RagdollService.KnockDown(player, seconds, impulse, reason, opts)
 	if seconds ~= seconds then
 		seconds = DEFAULT_SECONDS
 	end
-	seconds = math.clamp(seconds, MIN_SECONDS, MAX_SECONDS)
+	local dead = type(opts) == "table" and opts.Dead == true
+	seconds = dead and DEAD_SECONDS or math.clamp(seconds, MIN_SECONDS, MAX_SECONDS)
 	impulse = cleanPush(impulse, MAX_PUSH)
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -204,11 +210,23 @@ function RagdollService.KnockDown(player, seconds, impulse, reason, opts)
 	if rec and rec.char == char then
 		-- Already down: the longer time wins, and their device gets the new shove.
 		rec.own = false
-		local left = rec.endAt - now
-		if seconds > left then
-			arm(player, rec, seconds)
+		if dead or rec.dead then
+			-- Dying, or already dying (a car hit in the moment before the health goes): its timers stop
+			-- and it stays down until the body goes. A body still bracing goes loose now, as
+			-- Ragdoll.Start refuses one that is already dead.
+			rec.dead = true
+			rec.token += 1
+			seconds = DEAD_SECONDS
+			if not rec.limp then
+				rec.limpAt = now
+			end
 		else
-			seconds = math.max(left, 0.1)
+			local left = rec.endAt - now
+			if seconds > left then
+				arm(player, rec, seconds)
+			else
+				seconds = math.max(left, 0.1)
+			end
 		end
 		if not rec.limp and now >= rec.limpAt then
 			goLimp(player, rec) -- (it had just locked, a moment before getting up)
@@ -231,7 +249,7 @@ function RagdollService.KnockDown(player, seconds, impulse, reason, opts)
 	end
 	local braceTime = brace and Ragdoll.BraceTime or 0
 	rec = { char = char, hum = hum, token = 0, limp = false, limpAt = now + braceTime, endAt = now + seconds,
-		own = false, reason = reason }
+		own = false, reason = reason, dead = dead }
 	active[player] = rec
 	if brace then
 		remote:FireAllClients(char, "Down", seconds, impulse, braceTime) -- everyone plays the brace pose
@@ -240,7 +258,9 @@ function RagdollService.KnockDown(player, seconds, impulse, reason, opts)
 		remote:FireClient(player, char, "Down", seconds, impulse, 0)
 		goLimp(player, rec)
 	end
-	arm(player, rec, seconds)
+	if not dead then
+		arm(player, rec, seconds)
+	end
 	return true
 end
 
@@ -344,7 +364,7 @@ local function watch()
 	for player, rec in pairs(active) do
 		local hum = rec.hum
 		if player.Parent ~= Players or player.Character ~= rec.char or not rec.char:IsDescendantOf(Workspace)
-			or not hum.Parent or hum.Health <= 0 or hum.SeatPart then
+			or not hum.Parent or (hum.Health <= 0 and not rec.dead) or hum.SeatPart then
 			finish(player, rec)
 		end
 	end

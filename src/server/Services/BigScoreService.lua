@@ -1582,8 +1582,8 @@ local function tick(dt)
 		return
 	end
 	local changed = false
-	-- Carried bars go back to the pile when their carrier can't carry them on (knocked down counts: in
-	-- this game nobody dies, so a knockout is the fall that loses the bar).
+	-- Carried bars go back to the pile when their carrier can't carry them on (knocked down counts, and
+	-- so does being shot dead: body() is nil for a dead body).
 	local pilePos = W.pile and W.pile.Position
 	for p, c in pairs(S.carry) do
 		local hum, root = body(p)

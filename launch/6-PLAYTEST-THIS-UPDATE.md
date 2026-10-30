@@ -1,4 +1,4 @@
-# 6. Playtest this update (Oct 26: your Theft Miami Coast fixes)
+# 6. Playtest this update (Oct 26: your Theft Miami Coast fixes; Oct 29: real deaths, section F)
 
 This update is built on your own Studio save of THEFT MIAMI COAST (Oct 25, 126 scripts). None of it
 has been run in Roblox yet. It was checked outside Studio: type checks, offline tests of the paint,
@@ -12,12 +12,13 @@ whether everything loaded.
    replaces every script that differs from these files.
 1. Unzip over your project folder (the zip leaves out NeonCoast.rbxl, so your own place file is never
    overwritten), then run `python tools/manifest.py`. It should say
-   **133 scripts**. Don't skip this: without a fresh manifest, DevSync skips scripts it thinks
+   **135 scripts** (133 before the Oct 29 deaths update). Don't skip this: without a fresh manifest, DevSync skips scripts it thinks
    are up to date.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder.
 3. Studio command bar: `print(require(game.ServerStorage.Tools.DevSync).Run())`.
-   - Expect 7 NEW lines: HouseBuilder and the 6 house styles (Loft, Bungalow, Ranch, Penthouse,
-     Villa, Mansion) in a new Services.Houses folder.
+   - Expect 9 NEW lines: HouseBuilder and the 6 house styles (Loft, Bungalow, Ranch, Penthouse,
+     Villa, Mansion) in a new Services.Houses folder, plus RespawnService and RespawnClient (section F).
+     If you already synced the Oct 26 update, only those last 2 are NEW.
    - Many UPD lines are normal.
    - Then save (Ctrl+S).
 
@@ -125,6 +126,45 @@ forward out of the right hand. Send a screenshot of any that doesn't.
 
 In Studio's device emulator (and on your phone if you can), check the goal bar and banners don't run
 under the cash and stars, and that the AIM button doesn't cover the subtitles or the action button.
+
+## F. Real deaths and RESPAWN (Oct 29)
+
+A gun now kills another player; fists still only knock out. Every death (shot, Esc > Reset, a long
+fall) shows a death screen with a RESPAWN button. None of this has been run in Roblox yet: it was
+written and re-read, but not type-checked or played.
+
+**Load it.** Same as above: back up first, `python tools/manifest.py` (it should say **135 scripts**),
+the http server, then DevSync in the command bar. Expect 2 NEW lines (RespawnService, RespawnClient)
+and UPD lines for Combat, CombatService, RagdollService, ArrestService, BigScoreService, CombatClient,
+NotifyController, PhoneUI, PoseClient, TeamUI, ClientMain, Main and DesignDoc. Save (Ctrl+S).
+
+1. **Smoke test.** Press Play. Output shows `[Main] server ready` and no `RespawnService failed to
+   start`. You appear as usual, and the title screen works.
+2. **Reset.** Esc > Reset. Your body falls limp, the picture goes grey, then **YOU DIED** with a
+   RESPAWN button that wakes up after about 2 seconds, and "Respawning in ..." under it.
+   - Press RESPAWN: you're back at a spawn (inside your home if you own one).
+   - Reset again and touch nothing: you come back by yourself after 10 seconds.
+   - Reset again and press Space (or Enter) instead of clicking.
+3. **Shoot someone dead** (Test tab > Clients and Servers, 2 players > Start):
+   - Give Player1 cash (server command bar: `game.Players.Player1:SetAttribute("Cash", 2000000)`) and
+     buy the pistol at Coast Arms (PHONE > GPS).
+   - Make sure PASSIVE is off for both (PHONE > SETTINGS). Walk both players away from spawns, shops
+     and homes (those are safe zones), and wait 8 seconds after either one spawns.
+   - Player1 shoots Player2 until their health runs out (5 pistol hits with no armor).
+   - Player2: the body falls limp and **stays down**, and the screen says YOU DIED,
+     "Shot by Player1 · Coast 9" and anything that dropped. RESPAWN works.
+   - Player1: an **ELIMINATED** banner and a star.
+   - **Look at the body while it lies there.** Arms and legs should rest on the ground, not sink into it
+     or stand stiff. Screenshot it from Player1's window.
+4. **Fists still knock out.** Player1 punches Player2 three times: **KNOCKED OUT**, and Player2 gets back
+   up after 5 seconds. No death screen.
+5. **Shot by a cop.** Give Player2 two stars (server command bar:
+   `require(game.ServerScriptService.Services.HeatService).Add(game.Players.Player2, 2, "debug")`).
+   Player1 goes on duty (PHONE > JOBS) and shoots Player2 with the Service Pistol. Player2 goes straight
+   to prison, with "Shot down with the cops right there: you're under arrest!". There's no death screen,
+   or it shows only for a moment.
+6. **Phone.** In the device emulator, die once. YOU DIED and RESPAWN fit on screen, and RESPAWN can be
+   tapped (it isn't under the jump button).
 
 ## What to send me
 

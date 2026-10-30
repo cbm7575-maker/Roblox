@@ -10,9 +10,9 @@
 --   Arrest: robber loses the bag; cop earns HeatService.Bounty ($500 per paid star + 25% of the bag);
 --          robber goes to prison. Arrest XP needs a paid star, or else counts once per 10 minutes
 --          for the same cop and player (stops friends staging arrests).
---   Giving up: Reset Character is no way out. A wanted player whose body goes down by itself with a
---          cop or an AI patrol within 120 studs is arrested on the spot (GaveUp); with nobody that
---          close the heat stays and the chase carries on against the new body.
+--   Giving up: Reset Character is no way out. A wanted player whose body dies (a reset, or shot dead:
+--          CombatService) with a cop or an AI patrol within 120 studs is arrested on the spot (GaveUp);
+--          with nobody that close the heat stays and the chase carries on against the new body.
 --   Patrol pay: every cop earns $80 per minute on duty.
 
 local Players = game:GetService("Players")
@@ -162,7 +162,11 @@ function ArrestService.GaveUp(target)
 		end
 	end
 	if cop or patrol then
-		notify:FireClient(target, "ResetCuffed")
+		-- (Shot dead with the police right there is the same arrest, told as what it was.)
+		local ok, shot = pcall(function()
+			return require(ServerScriptService.Services.CombatService).ShotDead(target)
+		end)
+		notify:FireClient(target, (ok and shot) and "ShotCuffed" or "ResetCuffed")
 		ArrestService.Arrest(target, cop, true)
 	end
 end

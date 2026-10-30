@@ -1,9 +1,12 @@
 -- Combat (ModuleScript, ReplicatedStorage.Shared.Config.Combat)
 -- Combat numbers, shared by CombatService / PedService (server) and CombatClient / PedClient (client).
--- Fists and guns, kid-safe: nothing gory, and nobody is ever gone for good. Hits fill a
--- server-owned damage meter (player attribute "Daze", 0-100) that every screen shows as HEALTH
--- (100 - Daze) and that heals by itself. At 0 health you are KNOCKED OUT for a few seconds (the same
--- fall and dizzy stars as a car bump), drop part of your robbery bag and a small wallet, and get up.
+-- Fists and guns, nothing gory. Hits fill a server-owned damage meter (player attribute "Daze", 0-100)
+-- that every screen shows as HEALTH (100 - Daze) and that heals by itself. What happens at 0 health
+-- depends on the hit that got you there (owner's call, 2026-10-29):
+--   * a GUN kills you: the body falls limp and stays down, and the death screen (RespawnClient) has a
+--     RESPAWN button (Combat.Death);
+--   * FISTS knock you out for a few seconds (the same fall and dizzy stars as a car bump), and you get up.
+-- Either way you drop part of your robbery bag and a small wallet.
 -- ARMOR (attribute "Armor", 0-100, bought at the shop) soaks up damage before health does.
 --   * Citizens: Fists (free) and the guns in Combat.GunOrder, bought once at Coast Arms.
 --   * Cops: the taser (ArrestService) and a free Service Pistol that only works on wanted citizens.
@@ -92,6 +95,13 @@ Combat.ImmuneAfterKO = 10 -- seconds after getting up before combat can touch yo
 Combat.SpawnProtection = 8 -- seconds after spawning or leaving your home (was 20: a new arrival's punches and shots did nothing for that long)
 Combat.BarRange = 80 -- health bars show over hurt players this close
 Combat.FleeWindow = 8 -- bailing out (Reset, side switch, leaving) this soon after a hit, or while hurt, counts as a knockout
+
+-- Death (a gun took your health to 0, or any other way a body dies: Esc > Reset, a long fall). Roblox's
+-- own 5 s respawn is off; RespawnService brings you back (RespawnClient's death screen).
+Combat.Death = {
+	RespawnAfter = 2, -- seconds dead before RESPAWN can be pressed (the fall plays first)
+	AutoRespawn = 10, -- seconds dead before you come back by yourself (under the 12 s a dead body's fall lasts on its own device: PoseClient)
+}
 
 -- Armor (player attribute "Armor", 0-100, server-owned): takes the damage first, fists included.
 -- Citizens only (saved as data.gear.armor); it shows 0 for cops and prisoners.

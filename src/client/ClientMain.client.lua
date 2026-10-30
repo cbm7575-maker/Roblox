@@ -49,6 +49,7 @@ local ORDER = {
 	"BigScoreClient", -- the crew heist's strip, checklist, marker, prompts and sounds (needs HUDController, GPSClient, NotifyController; SoundClient looked up softly)
 	"PedClient",
 	"CombatClient", -- fists and guns (needs HUD, Notify, Sound, ImpactClient, PedClient)
+	"RespawnClient", -- the death screen and its RESPAWN button (needs HUDController, SoundClient)
 	"WeaponWheel", -- hold Tab / D-pad left: the weapon wheel (needs CombatClient; PhoneUI, SoundClient looked up softly)
 	"LocomotionClient", -- on-foot feel: sprint + stamina, lean, footsteps, landings, shoulder camera (last: it only reads the others)
 }
