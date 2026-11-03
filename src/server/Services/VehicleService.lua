@@ -141,6 +141,17 @@ local function isClear(cf, size, ignore)
 			table.insert(list, folder)
 		end
 	end
+	-- Stunt ramps stand in road lanes (CityGen), and the courier shed and car-meet lot sit by roads; the
+	-- Florida moments (EventService) too. Only their solid parts count: race pads, the drift zone and
+	-- other triggers are walk- and drive-through (CarjackService's check does the same).
+	local soft = {}
+	for _, name in ipairs({ "Activities", "Events" }) do
+		local folder = Workspace:FindFirstChild(name)
+		if folder then
+			table.insert(list, folder)
+			table.insert(soft, folder)
+		end
+	end
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then
 			table.insert(list, p.Character)
@@ -153,7 +164,16 @@ local function isClear(cf, size, ignore)
 	-- posts and signal poles too, tall as they are) doesn't: a car can't get stuck on it any more.
 	local bottom = cf.Y - size.Y / 2
 	for _, p in ipairs(Workspace:GetPartBoundsInBox(cf * CFrame.new(0, 1.5, 0), box, clearParams)) do
-		if p.CollisionGroup ~= PROPS_GROUP then
+		local trigger = false
+		if not p.CanCollide then
+			for _, folder in ipairs(soft) do
+				if p:IsDescendantOf(folder) then
+					trigger = true
+					break
+				end
+			end
+		end
+		if p.CollisionGroup ~= PROPS_GROUP and not trigger then
 			local top = p.Position.Y + p.Size.Y / 2
 			local prop = p.Parent and SOLID_PROPS[p.Parent.Name]
 			if (prop or top > bottom + 0.8 or p.Size.Y > 3) and not (ignore and p:IsDescendantOf(ignore)) then

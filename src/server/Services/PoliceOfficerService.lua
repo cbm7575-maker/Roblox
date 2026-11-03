@@ -15,7 +15,8 @@
 --         after reaching them. A surrender also takes a star off the sentence (ArrestService).
 --       - Standing still (or sitting in a stopped car, or tasered) with no threat: they run up ("POLICE!
 --         HANDS UP!") and cuff them after K.CUFF seconds at arm's length (K.CUFF_CAR from the side of the
---         car: walking straight at the driver shoved it down the road): ArrestService.Arrest, as ever.
+--         car: walking straight at the driver shoved it down the road; within K.CUFF_RISE up or down and
+--         with a clear line, so never through a floor or a wall): ArrestService.Arrest, as ever.
 --         Moving off again breaks it: the cuff timer runs back down, twice as fast as it filled.
 --       - Running: they chase at K.RUN, a little under a sprinting player, and TASER them (owner, Nov 2:
 --         a sprinter simply got away). An officer out of the car for K.TASER_AFTER seconds with a clear
@@ -87,6 +88,7 @@ local K = {
 	RUN = 19.5, -- (players walk 18 and sprint faster: a sprinter gets away, a walker doesn't)
 	CUFF_RANGE = 5.5,
 	CUFF_CAR = 2.5, -- studs from the body of a car the suspect sits in: the cuffing is done from beside it
+	CUFF_RISE = 6, -- studs up or down (the ranges above are flat): no cuffing through a floor (a storey is 14)
 	CUFF = 1.4, -- seconds at arm's length from a suspect who stands still (2.2 was long enough to walk off)
 	SURRENDER_CUFF = 1, -- ...or who has their hands up
 	-- The taser (see the header). A sprinter gains about 10 studs a second on an officer, so these decide
@@ -736,6 +738,9 @@ local function knockDown(o, dir)
 		taserUp(o, false)
 	end
 	o.cuffFor = 0
+	if o.cuffTarget then
+		handsDown(o.cuffTarget) -- (punched out mid-cuff: the hands come down; an officer still at it puts them back up)
+	end
 	stop(o)
 	local ok = pcall(function()
 		require(ReplicatedStorage.Shared.Util.Ragdoll).Start(o.model, dir * 14 + Vector3.new(0, 10, 0), { NoCap = true })
@@ -755,6 +760,9 @@ local function kill(o, dir)
 	end
 	if o.root then
 		HeatService.UnregisterEye(o.root)
+	end
+	if o.cuffTarget then
+		handsDown(o.cuffTarget) -- (shot mid-cuff: with the last one dead, Step only answers "gone" from now on)
 	end
 	pcall(function()
 		require(ReplicatedStorage.Shared.Util.Ragdoll).Start(o.model, dir * 16 + Vector3.new(0, 10, 0), { NoCap = true })
@@ -887,7 +895,11 @@ local function officerStep(crew, o, dt, p, info, t)
 		and not surrender and not stunned and (p:GetAttribute("KnockedUntil") or 0) <= st and not crew.safe
 		and targetSpeed >= K.STILL
 	taserStep(o, p, troot, dist, los, fair, t)
-	if gap > range then
+	-- Arm's length counts only on the same floor and with a clear line (canSee: the officers, the suspect
+	-- and cars never block it): the ranges are flat, so a suspect upstairs or behind a wall was cuffed
+	-- through it. Out of reach that way the officer keeps walking at them, as when too far.
+	local reach = math.abs(troot.Position.Y - root.Position.Y) < K.CUFF_RISE and los
+	if gap > range or not reach then
 		hum.AutoRotate = true
 		-- (Walking the last 12 studs keeps from shoving them; a tasered one is run at until close: the stun
 		-- has to last until the cuffs are on.)
@@ -1073,6 +1085,9 @@ function PoliceOfficerService.Remove(crew)
 		end
 		if o.state ~= "Dead" then
 			dropWalker(o)
+		end
+		if o.cuffTarget then
+			handsDown(o.cuffTarget) -- (taken away mid-cuff: the suspect's hands come down with them)
 		end
 		o.state = "Gone"
 	end

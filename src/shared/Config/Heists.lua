@@ -11,7 +11,8 @@ Heists.Types = {
 	SparkleCo = { Display = "Sparkle & Co.", Tier = 2, CrewMin = 1, Hold = 14, Payout = { 4000, 6000 }, Heat = 2, Cooldown = 240 },
 	ClubNova = { Display = "Club Nova", Tier = 2, CrewMin = 1, Hold = 14, Payout = { 5000, 5000 }, Heat = 2, Cooldown = 240 },
 	CoastalBank = { Display = "Coastal Bank", Tier = 3, CrewMin = 2, Hold = 20, Payout = { 16000, 16000 }, Heat = 3, Cooldown = 900, Event = true, MinRank = 3 },
-	SeaDream = { Display = "Sea Dream", Tier = 3, CrewMin = 2, Hold = 18, Payout = { 14000, 14000 }, Heat = 3, Cooldown = 300 },
+	-- Rank 3 like the bank: solo from minute one it paid about 10x a store run, every 5 minutes.
+	SeaDream = { Display = "Sea Dream", Tier = 3, CrewMin = 2, Hold = 18, Payout = { 14000, 14000 }, Heat = 3, Cooldown = 300, MinRank = 3 },
 }
 
 Heists.OpenCount = 4 -- rotating (non-event) heist types open at once

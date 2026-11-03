@@ -206,12 +206,18 @@ function WorldService.Init()
 	Lighting.EnvironmentSpecularScale = 1
 	local elapsed = secondsAt(START_CLOCK)
 	local lastApply = -1
+	local lastClock = -1
 	local nextStormRoll = elapsed + STORM_CHECK
 	local stormUntil = 0
 	RunService.Heartbeat:Connect(function(dt)
 		elapsed += dt
 		local clock = WorldService.Override.Clock or clockAt(elapsed)
-		Lighting.ClockTime = clock
+		-- 5 times a second, not every frame: each change goes to every player and moves the sun (and its
+		-- shadows) on their device; a step is under half a game minute, too small to see.
+		if elapsed - lastClock >= 0.2 then
+			lastClock = elapsed
+			Lighting.ClockTime = clock
+		end
 		if elapsed - lastApply > 0.5 then
 			lastApply = elapsed
 			local night = nightnessAt(clock) > 0.5

@@ -32,10 +32,11 @@
 --     then by checkpoints passed; then by the distance to the next one) and each player still racing gets
 --     "Position" { Pos, Of } whenever theirs changes.
 --   * Pay by place, players only (RaceRules.Pay): 1st Reward (+ ParBonus at or under par), 2nd 60%,
---     3rd 35%, later PayRest. A finish faster than the route could be driven at 1.3 x the car's top
---     speed is rejected ("Cancelled" Invalid). Personal bests (data.races; a multi-lap race keeps its own,
---     "<Id>x<laps>"), the server leaderboard (top 5, ReplicatedStorage attribute "RaceBoard_<Id>") and
---     ProgressService "RaceFinish" for every player who finishes; RacesWon only for a win.
+--     3rd 35%, later PayRest. A finish faster than the route could be driven at K.FASTEST (1.3) x the
+--     car's top speed, or after VehicleGuard flagged the car during the race, is rejected ("Cancelled"
+--     Invalid). Personal bests (data.races; a multi-lap race keeps its own, "<Id>x<laps>"), the server
+--     leaderboard (top 5, ReplicatedStorage attribute "RaceBoard_<Id>") and ProgressService "RaceFinish"
+--     for every player who finishes; RacesWon only for a win.
 --   * "Finished" { Id, Run, Time, Par, Reward, Bonus, NewBest, Best, Place, Of } to the finisher, then
 --     "Standings" { Id, Run, Rows, Final } to every player who has finished, whenever somebody finishes
 --     and once more at the end (Final): everyone in order, NPCs too, with their times (DNF for drop-outs).
@@ -96,6 +97,10 @@ local K = {
 	CHECK_RADIUS = Activities.CheckRadius or 32,
 	COUNTDOWN = 3,
 	MAX_STEP = 80, -- studs between two checks; more than that is a teleport, not driving
+	-- A finish sooner than the route's straight lines at this x the car's top speed is refused (finishRacer).
+	-- Kept well above nitro's 1.2: a winner wrongly refused is worse than the rare cheat, and a car that
+	-- hopped checkpoints is caught by VehicleGuard.RecentlyFlagged instead.
+	FASTEST = 1.3,
 	-- How far from the pad's centre a car may be when "Race" is pressed: the prompt only shows with the
 	-- driver within 30 studs of it; a long car's own middle and lag take the rest.
 	START_REACH = 60,
@@ -464,11 +469,12 @@ end
 local function finishRacer(sess, r, t)
 	local time = t - sess.startAt
 	if r.player then
-		-- Sanity check (street races and challenges alike): nobody drives the route faster than 1.3 x
-		-- their car's top speed.
-		local fastest = sess.lengthStuds / ((r.car:GetAttribute("MaxSpeed") or 150) * 1.3)
-		if time < fastest then
-			warn(string.format("[RaceService] rejected %s on %s: %.2fs < %.2fs", r.player.Name, sess.race.Id, time, fastest))
+		-- Sanity check (street races and challenges alike): nobody drives the route faster than
+		-- K.FASTEST x their car's top speed, and nobody whose car VehicleGuard flagged (a teleport or
+		-- impossible speed: it was put back, but the checkpoints it reached had counted) since GO.
+		local fastest = sess.lengthStuds / ((r.car:GetAttribute("MaxSpeed") or 150) * K.FASTEST)
+		if time < fastest or VehicleGuard.RecentlyFlagged(r.player, time) then
+			warn(string.format("[RaceService] rejected %s on %s: %.2fs (at least %.2fs, or flagged)", r.player.Name, sess.race.Id, time, fastest))
 			dropRacer(r, "Invalid")
 			return
 		end

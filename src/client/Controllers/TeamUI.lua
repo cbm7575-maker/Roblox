@@ -49,6 +49,7 @@ local START_KEYS = { -- keys that press PLAY on the title screen
 	[Enum.KeyCode.ButtonA] = true, [Enum.KeyCode.ButtonStart] = true,
 }
 local HOME_ORBIT = 9 -- studs: the title camera's circle inside a home (pulled in front of any wall)
+local STREET_ORBIT = 70 -- studs: its circle round the spawn street (pulled in front of any building)
 
 local gui, overlay, badge, logo, play
 local logoInk = {} -- the logo's outlines and drop shadows: { stroke = UIStroke } / { drop = label, x, y }
@@ -84,11 +85,16 @@ end
 -- The title camera: a slow circle round the spawn street, a little above head height, looking across it.
 -- It follows the character, so a returning owner whom HousingService has moved to their front door sees
 -- their home. Inside a home (InHome: the inside is a room far off the map) it circles close instead and
--- is pulled in front of any wall, so it never shows the room from outside.
+-- is pulled in front of any wall, so it never shows the room from outside. On the street it's pulled in
+-- front of any building in the way too, still looking the same way (so a camera pulled in close never
+-- tips up at the sky).
 local function titleCamera()
 	local t0 = os.clock()
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
+	local streetParams = RaycastParams.new()
+	streetParams.FilterType = Enum.RaycastFilterType.Exclude
+	streetParams.RespectCanCollide = true -- see-through triggers and decorations don't pull it in
 	RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 2, function()
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 		local camera = Workspace.CurrentCamera
@@ -108,8 +114,24 @@ local function titleCamera()
 			return
 		end
 		local centre = root.Position + Vector3.new(0, 16, 0)
-		local eye = centre + Vector3.new(math.cos(a) * 70, 14 + math.sin(a * 0.7) * 5, math.sin(a) * 70)
-		camera.CFrame = CFrame.lookAt(eye, centre + Vector3.new(0, 6, 0))
+		local want = Vector3.new(math.cos(a) * STREET_ORBIT, 14 + math.sin(a * 0.7) * 5, math.sin(a) * STREET_ORBIT)
+		-- Only buildings and walls pull it in: lamp posts, palm trunks, street furniture (PropService's
+		-- "Props") and people are looked past, or the camera would jump in and out as each one swept by.
+		local skip = { player.Character }
+		local hit
+		for _ = 1, 4 do
+			streetParams.FilterDescendantsInstances = skip
+			hit = Workspace:Raycast(centre, want, streetParams)
+			local part = hit and hit.Instance
+			if not (part and (part.CollisionGroup == "Props" or math.max(part.Size.X, part.Size.Z) < 4)) then
+				break
+			end
+			table.insert(skip, part)
+			hit = nil
+		end
+		-- How far out it may go, as a share of the full distance; the point it looks at moves in by as much.
+		local share = hit and math.max(hit.Distance - 0.6, 0.5) / want.Magnitude or 1
+		camera.CFrame = CFrame.lookAt(centre + want * share, centre + Vector3.new(0, 6, 0) * share)
 	end)
 end
 

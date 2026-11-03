@@ -4,7 +4,9 @@
 --   * A passenger waits beside a road 250-800 studs away. Stop inside their ring (within 32 studs, under
 --     6 studs/s) and they hop in.
 --   * Drive them to their stop (500-1400 studs away) and stop there: paid $150 + 35 cents a stud, and a
---     $100 tip if you beat the estimate. The next fare comes automatically.
+--     $100 tip if you beat the estimate. The next fare comes automatically. A stop reached sooner than any
+--     car could drive there (FAST_SLACK), or after VehicleGuard flagged the car on the way, pays nothing
+--     and ends the shift (reason "Invalid": the client just says "Shift over.").
 --   * The shift ends if you leave your car for 10 s, become wanted, change sides, or press END SHIFT.
 -- Courier shifts (Courier Depot at Marina Row, built here if missing) use the same flow with packages:
 -- pick one up from a shop, deliver it: $120 + 40 cents a stud, +$120 for a fast delivery.
@@ -37,6 +39,7 @@ local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local RateLimit = require(ReplicatedStorage.Shared.Util.RateLimit)
 local EconomyService = require(ServerScriptService.Services.EconomyService)
+local VehicleGuard = require(ServerScriptService.Services.VehicleGuard)
 
 local JobService = {}
 
@@ -47,6 +50,9 @@ local DROP_MIN, DROP_MAX = 500, 1400
 -- counted and nothing said why. (The next spot is always 250+ studs off, so the wider ring can't fire early.)
 local STOP_RADIUS, DROP_RADIUS = 32, 32
 local STOP_SPEED = 6
+-- A drop-off reached sooner than the straight line from the pickup at the car's nitro top speed x this
+-- was a teleport, not a drive (no fare is ever that straight or that fast: see tick).
+local FAST_SLACK = 1.15
 local LEAVE_GRACE = 10
 local NAMES = { "Rosa", "Marcus", "Priya", "Tony", "Lena", "Jamal", "Sofia", "Ben", "Aisha", "Carlos", "Mia", "Dev" }
 local SHOPS = { "Sunny Side Donuts", "Palmetto Pets", "Taco Wave", "Coco's Coconuts", "Shell Shocked Seafood",
@@ -75,6 +81,11 @@ local function ownCar(player)
 		return car
 	end
 	return nil
+end
+
+-- The car's top speed on nitro (Config.Vehicles and its tune, copied onto the car; as VehicleGuard reads it).
+local function topSpeed(car)
+	return (car:GetAttribute("MaxSpeed") or 150) * (car:GetAttribute("NitroSpeed") or 1.2)
 end
 
 -- Is there solid, dry ground at this kerbside spot? (Not water, not the road, not on top of something.)
@@ -350,7 +361,9 @@ local function tick()
 						end
 						local drop = roadsideSpot(chassis.Position, DROP_MIN, DROP_MAX)
 						if not drop then
-							return endShift(player, "NoFares")
+							-- (On to the next shift: a `return` here skipped everyone else's this tick.)
+							endShift(player, "NoFares")
+							continue
 						end
 						local path = RoadGraph.Path(chassis.Position, drop)
 						local length = 0
@@ -365,12 +378,26 @@ local function tick()
 						s.drop = drop
 						s.length = length
 						s.pickedAt = t
+						s.pickedFrom = chassis.Position
+						s.top = topSpeed(car)
 						s.est = length / 80 + 10
 						jobEvent:FireClient(player, "Dropoff", { Pos = drop, Name = s.name, Est = s.est, Kind = s.kind })
 					end
 				elseif s.stage == "dropoff" then
 					if (flat(chassis.Position) - flat(s.drop)).Magnitude < DROP_RADIUS and speed < STOP_SPEED then
 						local took = t - s.pickedAt
+						-- Too soon to have driven it: the straight line from the pickup (to the ring's edge)
+						-- at the car's top speed on nitro x FAST_SLACK, the faster of this car and the one
+						-- the fare got into. Or VehicleGuard flagged the car (a teleport or impossible speed)
+						-- on the way. Either way it wasn't driven: the fare is off unpaid, and the shift with
+						-- it (the client says "Shift over.").
+						local gap = math.max(0, (flat(s.drop) - flat(s.pickedFrom)).Magnitude - DROP_RADIUS)
+						local fastest = gap / (math.max(s.top, topSpeed(car)) * FAST_SLACK)
+						if took < fastest or VehicleGuard.RecentlyFlagged(player, took) then
+							warn(string.format("[JobService] refused %s's fare: %.2fs (at least %.2fs)", player.Name, took, fastest))
+							endShift(player, "Invalid")
+							continue
+						end
 						local courier = s.kind == "Courier"
 						local tip = took <= s.est and (courier and 120 or 100) or 0
 						local pay = math.floor((courier and 120 or 150) + s.length * (courier and 0.4 or 0.35)) + tip

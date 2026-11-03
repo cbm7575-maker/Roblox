@@ -1,7 +1,8 @@
 -- AIPoliceService (ModuleScript, ServerScriptService.Services.AIPoliceService)
 -- AI patrol cars keep crime exciting when few players are cops.
---   * Only while fewer than 2 player cops are online. Per wanted player: 1 car at 1-2 stars (only if
---     there are no player cops at all), heat - 1 cars at 3+ stars (max 3). At most 6 in the server.
+--   * Only while fewer than 2 player cops are online and patrolling (a cop away from the keys doesn't
+--     count: ArrestService.IsActiveCop). Per wanted player: 1 car at 1-2 stars (only if there are no
+--     such player cops at all), heat - 1 cars at 3+ stars (max 3). At most 6 in the server.
 --   * Head start: no patrol comes until the player has been wanted (WantedSince, set by HeatService)
 --     for 20 s at 1 star, 14 s at 2, 8 s at 3, 4 s at 4+ (well inside HeatService's 30 + 10 x heat s
 --     escape timer, so patrols get time to search). While waiting, the player attribute
@@ -13,8 +14,8 @@
 --   * They never go faster than 95% of the target's car, so a good driver can always escape.
 --   * Stuck (slow for 2 s) -> reverse and turn; upside down -> flipped back.
 --   * They are cop "eyes" for HeatService, and arrest a wanted player who stays stopped (car under
---     8 studs/s, or on foot under 10) within 22 studs for about 3 seconds. They park a car length
---     away instead of shoving the target.
+--     8 studs/s, or on foot under 10) within 22 studs (and under ARREST_RISE above or below: not
+--     through a floor) for about 3 seconds. They park a car length away instead of shoving the target.
 --   * They leave when the target is no longer wanted, leaves, or they fall 900+ studs behind for 15 s.
 --   * Reset Character is no way out: a target whose body goes down by itself with a patrol close by is
 --     arrested (ArrestService.GaveUp). Further away the patrols leave and new ones find the new body.
@@ -51,6 +52,7 @@ local GRACE = { 20, 14, 8, 4, 4 } -- head start in seconds, by stars (owner: "mo
 local LOS_TRIES = 10 -- raycasts spent looking for a spawn the target can't see
 local DIRECT_RANGE = 140
 local ARREST_RANGE = 22
+local ARREST_RISE = 6 -- studs up or down: a target on the floor above (a storey is 14) is out of reach
 local ARREST_SECONDS = 3
 local LOST_RANGE = 900
 local LOST_SECONDS = 15
@@ -66,10 +68,13 @@ local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 losParams.IgnoreWater = true
 
+-- Player cops who are really patrolling (ArrestService.IsActiveCop): two cops away from the keys used to
+-- keep every AI patrol off the whole server. (Looked up when needed, as drive does.)
 local function copCount()
+	local arrestService = require(ServerScriptService.Services.ArrestService)
 	local n = 0
 	for _, p in ipairs(Players:GetPlayers()) do
-		if p:GetAttribute("Side") == "Cop" then
+		if p:GetAttribute("Side") == "Cop" and arrestService.IsActiveCop(p) then
 			n += 1
 		end
 	end
@@ -374,16 +379,17 @@ local function drive(u, dt, now)
 	-- Arrest a target who stays (nearly) stopped right next to us. Brief wiggles don't reset the
 	-- timer, they only slow it down; driving off properly does. (A car with officers leaves that to them.)
 	local slow = info.inCar and info.vel.Magnitude < 8 or (not info.inCar and info.vel.Magnitude < 10)
+	local close = dist < ARREST_RANGE and math.abs(toTarget.Y) < ARREST_RISE -- (dist is flat: not through a floor)
 	if u.crew then
 		u.arrestFor = 0
-	elseif dist < ARREST_RANGE and slow then
+	elseif close and slow then
 		u.arrestFor += dt
 		if u.arrestFor >= ARREST_SECONDS then
 			u.arrestFor = 0
 			require(ServerScriptService.Services.ArrestService).Arrest(p, nil)
 		end
 	else
-		u.arrestFor = math.max(0, u.arrestFor - dt * (dist < ARREST_RANGE and 0.5 or 2))
+		u.arrestFor = math.max(0, u.arrestFor - dt * (close and 0.5 or 2))
 	end
 end
 

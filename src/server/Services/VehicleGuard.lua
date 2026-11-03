@@ -10,6 +10,8 @@
 -- A fast sample never moves the reference point, so one lag burst can't double-count.
 -- In Studio it only logs, unless Workspace attribute GuardEnforceInStudio = true.
 -- Server-side moves (future teleports) must call VehicleGuard.Allow(car) first.
+-- VehicleGuard.RecentlyFlagged(player, seconds) -> bool: their car was flagged that recently (JobService
+-- and RaceService refuse a fare or a finish then).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -34,6 +36,7 @@ local FLAG_WINDOW = 300
 local last = setmetatable({}, { __mode = "k" }) -- [car] = { cf, t, strikes, spins }
 local allowUntil = setmetatable({}, { __mode = "k" })
 local flags = {} -- [userId] = { times }
+local lastFlagAt = {} -- [userId] = os.clock() of their car's last flag (kept when a removal clears `flags`)
 
 VehicleGuard.Log = {}
 
@@ -52,6 +55,13 @@ end
 function VehicleGuard.Allow(car, seconds)
 	allowUntil[car] = os.clock() + (seconds or 2)
 	last[car] = nil
+end
+
+-- Was this player's car flagged in the last `seconds` seconds? JobService and RaceService pay nothing
+-- for a fare or a race finish then. Never in Studio unless enforcing, like the snap-back.
+function VehicleGuard.RecentlyFlagged(player, seconds)
+	local at = lastFlagAt[player.UserId]
+	return at ~= nil and enforcing() and os.clock() - at <= seconds
 end
 
 -- Take physics away from the client, put the car back, then return control to its driver.
@@ -83,6 +93,7 @@ local function flag(car, player, reason)
 	local list = flags[userId] or {}
 	flags[userId] = list
 	table.insert(list, now)
+	lastFlagAt[userId] = now
 	while list[1] and now - list[1] > FLAG_WINDOW do
 		table.remove(list, 1)
 	end
@@ -187,6 +198,7 @@ function VehicleGuard.Init()
 	end)
 	Players.PlayerRemoving:Connect(function(player)
 		flags[player.UserId] = nil
+		lastFlagAt[player.UserId] = nil
 	end)
 end
 

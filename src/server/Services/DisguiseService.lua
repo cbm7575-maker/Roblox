@@ -2,7 +2,8 @@
 -- Shaking the cops:
 --   * Wardrobe (on foot, inside a hideout or your own home): RequestDisguise(hatId, maskId) puts on a
 --     hat and mask built from parts. Only at a hideout: if you're wanted and no cop can see you, a new
---     look drops 1 star and wipes the outfit clue from your Suspect Card. At home (HousingService's
+--     look drops 1 star and wipes the outfit clue from your Suspect Card (once per wanted spell,
+--     WantedSince: later changes in the same chase are just clothes). At home (HousingService's
 --     InHome, with a closet inside) it's just a change of clothes: homes turn wanted players away.
 --   * Spray & Go (drive onto the pad while unseen): $500 repaints your car a new colour, drops 1 star
 --     and wipes the car clue. 30-second cooldown per car.
@@ -33,6 +34,7 @@ local PAINTS = {
 
 local notify
 local sprayedAt = setmetatable({}, { __mode = "k" }) -- [car] = os.clock()
+local disguisedIn = setmetatable({}, { __mode = "k" }) -- [player] = the WantedSince whose disguise star is spent
 local lastWarn = {}
 local rng = Random.new()
 
@@ -124,8 +126,13 @@ local function onDisguise(player, hatId, maskId)
 	player:SetAttribute("LookHat", hatId)
 	player:SetAttribute("LookMask", maskId)
 	apply(player)
-	-- The star drop is the hideout's alone (a look changed at home never touches heat).
-	if atHideout and changed and HeatService.GetHeat(player) > 0 and not player:GetAttribute("HeatSpotted") then
+	-- The star drop is the hideout's alone (a look changed at home never touches heat), and one per wanted
+	-- spell (WantedSince, HeatService): swapping hats over and over at the hideout wiped every star in
+	-- seconds. After that a new look is only clothes until the chase ends (Spray & Go still works).
+	local spell = player:GetAttribute("WantedSince")
+	local spent = spell ~= nil and disguisedIn[player] == spell
+	if atHideout and changed and not spent and HeatService.GetHeat(player) > 0 and not player:GetAttribute("HeatSpotted") then
+		disguisedIn[player] = spell
 		player:SetAttribute("SuspectOutfit", nil)
 		HeatService.Reduce(player, 1, "disguise")
 		notify:FireClient(player, "Disguised")

@@ -11,14 +11,18 @@
 --     amount, dim (banked cash toward a buy "$6,400 / $10,000", XP toward a rank, or a count), and draws
 --     a thin gold bar along the strip's bottom edge (green once there's enough cash).
 --   * a GUIDE step (Tutorial): console-style help in the SUBTITLE zone, bottom centre: the step's key
---     cap (Theme.Key: F, E or P on a keyboard, X on a gamepad; none on touch, where the words name the
---     button), white words with the key words in gold and a dim "2/4", then SHOW ME and the X at the
---     right end (on phones the left end is where the thumbstick starts). HELP below words each step
---     for the input in use; a step Id it doesn't know shows its Config text.
+--     cap (Theme.Key: F, E or P on a keyboard, X or D-PAD DOWN on a gamepad; none on touch, where the
+--     words name the button), white words with the key words in gold and a dim "2/4", then SHOW ME and
+--     the X at the right end (on phones the left end is where the thumbstick starts). HELP below words
+--     each step for the input in use; a step Id it doesn't know shows its Config text. The bank step
+--     with an empty bag and no cops (an arrest, a rejoin) shows the rob step again until there's a bag.
 -- SHOW ME routes the GPS there (OPEN when it's a phone app); its key cap shows the shortcut, J on a
--- keyboard and L3 on a gamepad (SHOW_KEYS). While a buy goal is still short of cash the button reads
--- EARN and points at the nearest store to rob instead. The X skips the guide (forfeiting the welcome
--- bonus) or hides the goals; either takes a second, separate tap (a quick double-tap doesn't count).
+-- keyboard and L3 on a gamepad (SHOW_KEYS). The first time a guide step shows, the GPS is routed for
+-- the player the same way (never the phone's apps), and the first time any step or goal shows with
+-- words too long for its two lines (small phones), a toast says them whole. While a buy goal is still
+-- short of cash the button reads EARN and points at the nearest store to rob instead. The X skips the
+-- guide (forfeiting the welcome bonus) or hides the goals; either takes a second, separate tap (a quick
+-- double-tap doesn't count).
 -- Watches for the guide steps it can see and tells the server (TutorialService checks them); goals are
 -- counted on the server only. The guide's last step (open the phone) lands on GARAGE: the phone is
 -- switched to it as it opens. Stamps for a finished guide or goal (cinematic, HUDController.Stamp, in
@@ -76,12 +80,13 @@ local SKIP_MIN_GAP = 0.6 -- a second tap sooner than this is a double-tap, not a
 -- The guide's steps as console help, per input ("keyboard", "gamepad", "touch", or "all"): key = the
 -- cap shown before the words (nil: none), text = the words, {braces} = key words, in gold. The keys
 -- are the game's own: F / gamepad X gets in (InteractClient), E / X holds a Rob prompt (HeistService),
--- P opens the phone (PhoneUI). A step Id missing here shows its Config text as it is.
+-- P / gamepad D-pad down opens the phone (PhoneUI), the HUD's CAR tile brings your car (HUDController;
+-- no gamepad button is bound to it). A step Id missing here shows its Config text as it is.
 local HELP = {
 	car = {
-		keyboard = { key = "F", text = "Get in your {car}: walk up to it" },
+		keyboard = { key = "F", text = "Get in your {car}: walk up to it (no car? click {CAR})" },
 		gamepad = { key = "X", text = "Get in your {car}: walk up to it" },
-		touch = { text = "Walk up to your {car} and tap {GET IN}" },
+		touch = { text = "Walk up to your {car} and tap {GET IN} (no car? tap {CAR})" },
 	},
 	rob = {
 		keyboard = { key = "E", text = "Hold to rob a {store} with an OPEN sign" },
@@ -93,7 +98,7 @@ local HELP = {
 	},
 	phone = {
 		keyboard = { key = "P", text = "Open your {PHONE}: your cars live in {GARAGE}" },
-		gamepad = { text = "Open your {PHONE}: your cars live in {GARAGE}" },
+		gamepad = { key = "D-PAD DOWN", text = "Open your {PHONE}: your cars live in {GARAGE}" },
 		touch = { text = "Tap {PHONE}: your cars live in {GARAGE}" },
 	},
 }
@@ -104,6 +109,7 @@ local lastMode -- the input mode the key caps were drawn for
 local lastSent = 0
 local skipArmedAt = -math.huge
 local Objective -- ObjectiveClient, once found (loaded without blocking Init)
+local introduced = {} -- [def] = true: steps and goals already routed / told in a toast this session
 
 local money = HUDController.Money
 
@@ -151,6 +157,14 @@ local function textWidth(text, size)
 	return math.ceil(TextService:GetTextSize(text, size, Enum.Font.GothamBold, Vector2.new(1000, 100)).X)
 end
 
+-- Are the frame's words taller than its lines have room for (cut off with "...")? Measured in the bold
+-- UI face like textWidth: a little wider than the words' own, so a near miss counts as cut off.
+local function cutOff()
+	local room = textLabel.AbsoluteSize
+	local box = Vector2.new(math.max(room.X, 1), 1000)
+	return TextService:GetTextSize(textLabel.ContentText, textLabel.TextSize, Enum.Font.GothamBold, box).Y > room.Y
+end
+
 -- A key cap, as wide as its characters (Theme.Key counts bytes, so "↓"-style keys would be too wide).
 local function sizeKey(key, text)
 	key.Text = text
@@ -162,6 +176,14 @@ end
 local TIER_BY_NAME = {}
 for _, def in pairs(Heists.Types) do
 	TIER_BY_NAME[def.Display] = def.Tier
+end
+
+-- The guide's rob step (its number in Config.Tutorial), shown again while the bank step has no bag.
+local ROB_STEP
+for i, def in ipairs(Tutorial.Steps) do
+	if def.Id == "rob" then
+		ROB_STEP = i
+	end
 end
 
 local function places()
@@ -286,8 +308,8 @@ local function showMe(def)
 	end
 end
 
--- What to show now: { def, tag, step = the guide step's number } for the guide, or
--- { def, tag, chain = "civ" / "cop" } for a goal; nil for nothing.
+-- What to show now: { def, tag, step = the guide step's number, again = true for the rob step shown
+-- again } for the guide, or { def, tag, chain = "civ" / "cop" } for a goal; nil for nothing.
 local function currentGoal()
 	local side = player:GetAttribute("Side")
 	if side == "Civilian" then
@@ -296,8 +318,16 @@ local function currentGoal()
 			return nil
 		end
 		if done < #Tutorial.Steps then
-			return { def = Tutorial.Steps[done + 1], tag = string.format("%d/%d", done + 1, #Tutorial.Steps),
-				step = done + 1 }
+			-- The bank step with nothing in the bag and no cops to lose would wait forever (an arrest
+			-- empties the bag, and so does rejoining): show the rob step again until there's a bag to bank.
+			-- The server still has the guide at the bank step and finishes it when that bag is banked.
+			local step = done + 1
+			if Tutorial.Steps[step].Id == "bank" and ROB_STEP and (player:GetAttribute("Carried") or 0) <= 0
+				and (player:GetAttribute("Heat") or 0) <= 0 then
+				step = ROB_STEP
+			end
+			return { def = Tutorial.Steps[step], tag = string.format("%d/%d", step, #Tutorial.Steps),
+				step = step, again = step ~= done + 1 }
 		end
 		local j = player:GetAttribute("JourneyStep")
 		local def = type(j) == "number" and Journey.Civ[j + 1]
@@ -564,6 +594,7 @@ local function refresh()
 	local fill, amount = barFor(goal)
 	local hasBar = fill ~= nil
 	local capW
+	local whole -- the words in full, for the toast when they're cut off
 	if look == "goal" then
 		guideKey.Visible = false
 		-- Tag, reward, words, amount: a goal too long for two lines on a phone loses its last words (or
@@ -571,6 +602,7 @@ local function refresh()
 		local reward = (def.Reward or 0) > 0 and (colorText(C.Gold, "+" .. money(def.Reward)) .. "  ") or ""
 		textLabel.Text = tagText(C.Gold, goal.tag, textSize + 2) .. "  " .. reward .. escape(def.Text)
 			.. (hasBar and ("  " .. colorText(C.Dim, amount)) or "")
+		whole = goal.tag .. ": " .. def.Text
 	else
 		local help = HELP[def.Id]
 		local h = help and (help[mode] or help.all)
@@ -580,6 +612,7 @@ local function refresh()
 		end
 		local counter = "   " .. colorText(C.Dim, goal.tag)
 		textLabel.Text = (h and helpText(h.text) or escape(def.Text)) .. counter
+		whole = h and (string.gsub(h.text, "[{}]", "")) or def.Text
 	end
 	bar.Visible = hasBar
 	if hasBar then
@@ -599,6 +632,20 @@ local function refresh()
 		and stampTop < pill.AbsolutePosition.Y - gui.AbsolutePosition.Y + pill.AbsoluteSize.Y
 	pill.Visible = player:GetAttribute("HasPicked") == true and not busy and not objective and not covered
 		and not (look == "guide" and knockCaptionUp()) and not exitHintOver()
+
+	-- The first time a step or goal is on screen, not under the phone (once a session): words cut off by
+	-- the two lines (small phones) are said whole in a toast, and a guide step routes the GPS the way
+	-- SHOW ME does, so a new player has a route without finding the button (never the phone's apps:
+	-- opening it is the step). Not the rob step shown again (it can blink up as a bag is banked).
+	if pill.Visible and not goal.again and not introduced[def] and not PhoneUI.IsOpen() then
+		introduced[def] = true
+		if cutOff() then
+			NotifyController.Show(whole, C.Gold, "info")
+		end
+		if goal.step and def.Show and def.Show ~= "Garage" and def.Show ~= "Goals" then
+			showMe(def)
+		end
+	end
 end
 
 -- Is this guide step complete, as far as this device can tell?

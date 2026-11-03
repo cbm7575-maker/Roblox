@@ -16,7 +16,7 @@
 --   * Taser zap beams (remote TaserFx: from a player cop's body, or from the hand of an AI officer on foot,
 --     PoliceOfficerService; a miss, target false, ends where the server says the wire went), the "ZAPPED!"
 --     toast for whoever is hit, and while tasered (StunnedUntil, server time) the body is held down here
---     (PlatformStand: every update, and at once when the attribute changes).
+--     (PlatformStand: every update, at once when the attribute changes, and again the moment it runs out).
 --   * Being cuffed by an AI officer on foot (player attribute CuffProgress, 0..1, PoliceOfficerService):
 --     a small panel, frame "Cuffing", centred in the Stamp zone (where CUFFED lands next) but below the
 --     Banner zone's escape line, or just under a stamp's band while one shows (HUDController.StampTop):
@@ -830,7 +830,6 @@ local function updateUI()
 	else
 		prisonLabel.Visible = false
 	end
-	holdStunned()
 	updateCuff()
 end
 
@@ -880,6 +879,12 @@ function LawClient.Init()
 	build()
 	task.spawn(function()
 		while true do
+			-- The stun hold first and on its own: inside the pcall below, an error in the prompts or markers
+			-- skipped it, and a tasered body could stay lying down after the stun was over.
+			local stunOk, stunErr = pcall(holdStunned)
+			if not stunOk then
+				warn("[LawClient] " .. tostring(stunErr))
+			end
 			local ok, err = pcall(function()
 				updatePrompts()
 				updateMarkers()
@@ -906,7 +911,15 @@ function LawClient.Init()
 	for _, name in ipairs({ "CuffProgress", "Surrender" }) do
 		player:GetAttributeChangedSignal(name):Connect(updateCuff)
 	end
-	player:GetAttributeChangedSignal("StunnedUntil"):Connect(holdStunned)
+	-- ...and the moment the stun runs out, get up: nothing changes the attribute then, so it doesn't wait
+	-- on the loop either. (A later stun or an arrest changes it and brings its own check.)
+	player:GetAttributeChangedSignal("StunnedUntil"):Connect(function()
+		holdStunned()
+		local untilAt = player:GetAttribute("StunnedUntil")
+		if type(untilAt) == "number" then
+			task.delay(math.max(0, untilAt - now()) + 0.05, holdStunned)
+		end
+	end)
 	Remotes.OnClient("BountyEarned", function(info)
 		if (tonumber(info.Amount) or 0) > 0 then
 			HUDController.Stamp("BOUNTY", "+" .. HUDController.Money(info.Amount) .. " for catching " .. info.Name, C.Cash)

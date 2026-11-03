@@ -5,10 +5,12 @@
 -- the protections (safe zones, spawn protection, passive mode and crewmates for a player's car).
 --   * ImpactHit (driver's device -> server): "my car just hit this player on foot, this fast". The
 --     driver's device owns its car's physics, so it spots the hit (ImpactClient). We check it: rate
---     limit, the hitter really is driving, the car is right next to the victim, the victim is on foot.
---     The speed for the damage is the device's, but never more than what we saw the car doing before
---     the bump slowed it (the device takes a quarter off the moment it hits). Someone already down is
---     only hurt (run over again: Combat.CarHit.Downed of the damage). Anyone else is knocked over:
+--     limit, the hitter really is driving, the victim is on foot and touching the car's box (its path a
+--     moment ahead) with nothing solid between. The speed for the damage is the device's, but never more
+--     than what we saw the car doing before the bump slowed it (the device takes a quarter off the moment
+--     it hits). Someone already down is only hurt (run over again: Combat.CarHit.Downed of the damage).
+--     Nobody CarHit protects from that driver's car (safe zone, spawn protection, passive, crewmates, a
+--     cop's car and someone not wanted) is knocked over (shielded). Anyone else is knocked over:
 --       - "Knockdown" (direction, speed, seconds) goes to the victim's device, which owns their
 --         character and does the fall, the dizzy stars and getting up (ImpactClient).
 --       - Player attribute KnockedUntil (server time) lets every device show the dizzy stars.
@@ -232,6 +234,37 @@ local function hurt(victim, speed, dir, driver, car, downAlready, selfReported)
 	end
 end
 
+-- Is `victim` out of reach of `driver`'s car? The protections CombatService.CarHit gives against the
+-- damage keep them on their feet too: a safe zone, home or prisoner (CombatService.IsSafe), not a citizen
+-- or a cop, spawn protection, passive mode on either side, crewmates, and a cop's car against anyone but a
+-- wanted citizen. (Without this a driver could knock new players over at a spawn again and again.)
+local function shielded(victim, driver)
+	local side = victim:GetAttribute("Side")
+	if side ~= "Civilian" and side ~= "Cop" then
+		return true
+	end
+	local spawnSafe = victim:GetAttribute("SpawnSafeUntil")
+	if type(spawnSafe) == "number" and spawnSafe > Workspace:GetServerTimeNow() then
+		return true
+	end
+	if victim:GetAttribute("Passive") == true or driver:GetAttribute("Passive") == true then
+		return true
+	end
+	local crew = driver:GetAttribute("Crew")
+	if crew ~= nil and crew == victim:GetAttribute("Crew") then
+		return true
+	end
+	if driver:GetAttribute("Side") == "Cop" and (side ~= "Civilian" or (victim:GetAttribute("Heat") or 0) < 1) then
+		return true
+	end
+	local cs = combat()
+	if cs and type(cs.IsSafe) == "function" then
+		local ok, safe = pcall(cs.IsSafe, victim)
+		return ok and safe == true
+	end
+	return false
+end
+
 local function isDown(p)
 	local t = Workspace:GetServerTimeNow()
 	return (downUntil[p] or 0) > os.clock() or (p:GetAttribute("KnockedUntil") or 0) > t or (p:GetAttribute("StunnedUntil") or 0) > t
@@ -305,12 +338,10 @@ local function onHit(player, victim, reported)
 	end
 	local dir = pushDir(chassis, root, flatVel)
 	local wasDown = isDown(victim)
-	if not wasDown then
-		knockDown(victim, dir, speed)
-	end
-	-- The damage needs real contact, not just "near": the victim inside the car's box (plus what the two
-	-- devices' lag can account for), and nothing solid between the car and them. A report from a
-	-- tampered device about someone round a corner knocks nobody out of a building.
+	-- The knock-down and the damage both need real contact, not just "near": the victim inside the car's
+	-- box (plus what the two devices' lag can account for), and nothing solid between the car and them. A
+	-- report from a tampered device about someone round a corner knocks nobody out of a building. (The
+	-- knock-down used to come before these checks, so anyone within 30 studs went down.)
 	local rel = chassis.CFrame:PointToObjectSpace(root.Position)
 	local half = chassis.Size / 2
 	local slack = CONTACT_SLACK + speed * CONTACT_LAG
@@ -331,6 +362,9 @@ local function onHit(player, victim, reported)
 	local from = chassis.Position + Vector3.new(0, 1, 0)
 	if Workspace:Raycast(from, root.Position - from, contactParams) then
 		return
+	end
+	if not wasDown and not shielded(victim, player) then
+		knockDown(victim, dir, speed)
 	end
 	hurt(victim, hitSpeed, dir, player, car, wasDown)
 end

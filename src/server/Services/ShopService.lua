@@ -1,12 +1,14 @@
 -- ShopService (ModuleScript, ServerScriptService.Services.ShopService)
 -- Game passes and cash packs (Config.Shop).
---   * Passes: checked on join (UserOwnsGamePassAsync, retried) and after an in-game purchase; owning
+--   * Passes: checked on join (UserOwnsGamePassAsync, retried, and asked again each minute up to 5 times
+--     if Roblox doesn't answer) and after an in-game purchase; owning
 --     one sets the player attribute "Pass_<Key>". Perks read that attribute (HeistService, ArrestService,
 --     EconomyService, GarageService).
 --   * Cash packs: MarketplaceService.ProcessReceipt, idempotent. Each PurchaseId is recorded in the
 --     buyer's saved profile (data.receipts) in the same save as the cash, and we only answer
 --     PurchaseGranted after that save succeeds. A repeat delivery of a recorded PurchaseId is
---     acknowledged without paying again. Buyer not in this server or profile not loaded ->
+--     acknowledged without paying again (once a save with it has succeeded). Buyer not in this server
+--     or profile not loaded ->
 --     NotProcessedYet (Roblox retries later).
 --   * Free for testing and for the game's owner (player attribute "ShopFree" = "Studio" | "Owner", set
 --     here; it tells the phone's SHOP and OfferClient to show FREE buttons):
@@ -21,7 +23,8 @@
 --     fires CashPackGranted. A pack is only paid once the save has loaded (cash before that would be
 --     overwritten by the load). In Studio, passes last for that play session. Saves are real there when
 --     Studio has API access (DataService), so a free cash pack is then given to the owner only.
---   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") also grants passes on join.
+--   * Studio: Workspace attribute "TestPasses" (e.g. "VIP,Hypercar") also grants passes on join, and
+--     "RealPrompts" = true turns the FREE buttons off for Roblox's own (test, never charged) prompts.
 --   * Offer analytics: remote OfferEvent(action, key) from OfferClient, action "Shown" | "Tapped" |
 --     "Hidden", key a Config.Shop.Offers key or "Showroom_<PassKey>" (only for a pass that an AutoNeon
 --     pass car sells, e.g. Showroom_Hypercar: that car's dealer card). Logged as Telemetry.Custom
@@ -51,6 +54,9 @@ local OFFER_BUY_WINDOW = 600 -- seconds: a pass bought this soon after tapping a
 
 local offerTaps = {} -- [player] = { key = offer key, pass = pass key, t = os.clock() } (the last BUY tapped)
 local owners = {} -- [player] = true: the game's owner (checked on join: the server's own record)
+local unsaved = {} -- [PurchaseId] = true: paid in this server, but no save with it has succeeded yet
+local PASS_RECHECK = 60 -- seconds before asking Roblox again about passes it couldn't answer on join
+local PASS_RECHECKS = 5
 
 -- The pass an offer key sells: a Shop.Offers key, or "Showroom_<PassKey>". nil for anything else.
 local function offerPass(key)
@@ -131,7 +137,12 @@ end
 
 local function checkPasses(player)
 	if RunService:IsStudio() then
-		player:SetAttribute("ShopFree", "Studio")
+		-- Workspace attribute RealPrompts = true: no FREE buttons, so BUY opens Roblox's own purchase prompt,
+		-- which Studio runs as a test purchase (never charged). That tries the real ProcessReceipt and pass
+		-- paths without spending Robux (it needs the real Ids in Config.Shop).
+		if Workspace:GetAttribute("RealPrompts") ~= true then
+			player:SetAttribute("ShopFree", "Studio")
+		end
 		-- (Free cash in Studio is kept only for the owner while saves are on: see onFree.)
 		task.spawn(function()
 			if isOwner(player) and player.Parent == Players then
@@ -149,20 +160,42 @@ local function checkPasses(player)
 		end
 		return
 	end
-	for _, pass in ipairs(Shop.Passes) do
-		if pass.Id ~= 0 then
+	local function check(passes, round)
+		local unanswered = {}
+		for _, pass in ipairs(passes) do
+			local answered = false
 			for attempt = 1, 3 do
 				local ok, owns = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, player.UserId, pass.Id)
 				if ok then
 					if owns then
 						grantPass(player, pass)
 					end
+					answered = true
 					break
 				end
 				task.wait(attempt)
 			end
+			if not answered then
+				table.insert(unanswered, pass)
+			end
+		end
+		-- Roblox didn't answer (a web call that kept failing): ask again later, so a paying player doesn't
+		-- go without their pass for the whole session.
+		if #unanswered > 0 and round < PASS_RECHECKS then
+			task.delay(PASS_RECHECK, function()
+				if player.Parent == Players then
+					check(unanswered, round + 1)
+				end
+			end)
 		end
 	end
+	local sold = {}
+	for _, pass in ipairs(Shop.Passes) do
+		if pass.Id ~= 0 then
+			table.insert(sold, pass)
+		end
+	end
+	check(sold, 1)
 	if RunService:IsStudio() then
 		for key in string.gmatch(Workspace:GetAttribute("TestPasses") or "", "[^,%s]+") do
 			for _, pass in ipairs(Shop.Passes) do
@@ -197,7 +230,15 @@ local function processReceipt(info)
 	data.receipts = data.receipts or {}
 	local id = tostring(info.PurchaseId)
 	if data.receipts[id] then
-		return Enum.ProductPurchaseDecision.PurchaseGranted -- already paid out
+		-- Already paid out. If no save with it has gone through yet, save before saying so: once Roblox
+		-- hears PurchaseGranted it never sends this receipt again.
+		if unsaved[id] then
+			if not DataService.SaveNow(player) then
+				return Enum.ProductPurchaseDecision.NotProcessedYet
+			end
+			unsaved[id] = nil
+		end
+		return Enum.ProductPurchaseDecision.PurchaseGranted
 	end
 	payPack(player, product, false)
 	data.receipts[id] = os.time()
@@ -217,6 +258,7 @@ local function processReceipt(info)
 	if not DataService.SaveNow(player) then
 		-- Cash and receipt are in memory, so a retry in this session won't double-pay; if the server
 		-- dies before a save, neither was saved and the retry pays correctly.
+		unsaved[id] = true
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 	Remotes.Event("CashPackGranted"):FireClient(player, product.Cash)

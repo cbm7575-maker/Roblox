@@ -126,10 +126,17 @@ function RoadGraph.Publish()
 	ReplicatedStorage:SetAttribute("RoadGraph", HttpService:JSONEncode({ n = nodes, e = edges, w = widths }))
 end
 
+-- The JSON last parsed: four client controllers each load the graph at start-up, and parsing it is a
+-- hitch on older phones, so the same text is only parsed once (a newly published graph still is).
+local loadedRaw
+
 function RoadGraph.LoadPublished()
 	local raw = ReplicatedStorage:GetAttribute("RoadGraph")
 	if not raw then
 		return false
+	end
+	if raw == loadedRaw and #RoadGraph.Nodes > 0 then
+		return true
 	end
 	local data = HttpService:JSONDecode(raw)
 	RoadGraph.Nodes, RoadGraph.Edges, RoadGraph.Widths = {}, {}, {}
@@ -144,6 +151,7 @@ function RoadGraph.LoadPublished()
 			RoadGraph.Widths[i][j] = data.w and data.w[i] and data.w[i][k] or 30
 		end
 	end
+	loadedRaw = raw
 	return true
 end
 

@@ -36,6 +36,10 @@ local SLIDE_SIN = 0.2 -- sideways share of the speed: about 12 degrees off the n
 local TYRE_HALF = 0.45 -- half the width of a skid mark
 
 local spin = setmetatable({}, { __mode = "k" }) -- [car] = angle
+-- [car] = where its chassis stood when its wheels were last placed while it stood still: a parked car's
+-- wheels stay where they are, so it skips its four rays until it moves (on a phone, a street of parked
+-- cars was ~2,400 rays a second).
+local parkedAt = setmetatable({}, { __mode = "k" })
 local accum = 0
 
 local skids = {} -- [car] = { on, last, RL = { a, b, trail, smoke }, RR = {...} }
@@ -281,6 +285,15 @@ local function animate(car, dt, camPos, downed)
 			updateSkid(car, chassis, cf, lat, down, true)
 		end
 		return
+	end
+	if lat == 0 and not skids[car] and chassis.AssemblyLinearVelocity.Magnitude < 0.5 then
+		local at = parkedAt[car]
+		if at and (at - cf.Position).Magnitude < 0.05 then
+			return
+		end
+		parkedAt[car] = cf.Position -- place the wheels once more below, then rest
+	else
+		parkedAt[car] = nil
 	end
 	local fwd = chassis.AssemblyLinearVelocity:Dot(cf.LookVector)
 	local a = ((spin[car] or 0) + fwd / radius * dt) % (math.pi * 2)

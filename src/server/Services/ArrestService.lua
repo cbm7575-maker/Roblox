@@ -13,7 +13,8 @@
 --   Giving up: Reset Character is no way out. A wanted player whose body dies (a reset, or shot dead:
 --          CombatService) with a cop or an AI patrol within 120 studs is arrested on the spot (GaveUp);
 --          with nobody that close the heat stays and the chase carries on against the new body.
---   Patrol pay: every cop earns $80 per minute on duty.
+--   Patrol pay: every cop earns $80 per minute on duty, while really patrolling (IsActiveCop: moved
+--          ACTIVE_MOVE studs, or used the taser, spikes or cuffs, in the last ACTIVE_FOR seconds).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -39,11 +40,17 @@ local FLAT_SECONDS = 12
 local PATROL_PAY = 80
 local FREE_ARREST_GAP = 600 -- seconds: see freeArrestRewarded
 local GIVE_UP_RANGE = 120 -- studs: police this close when a wanted player resets = an arrest (about a second behind a fast car)
+-- A cop away from the keys: no patrol pay, and AIPoliceService doesn't count them (two AFK cops used to
+-- switch every AI patrol off for the whole server). Moving ACTIVE_MOVE studs (FriendsService's MOVE_MIN
+-- idea) or using a police tool counts as playing.
+local ACTIVE_FOR = 120 -- seconds
+local ACTIVE_MOVE = 20 -- studs
 
 local notify, feed, caught, bountyEarned, taserFx
 local spikes = {} -- { part, owner, hit = {[car]=true} }
 local stunRestore = {} -- [humanoid] = { WalkSpeed, JumpHeight }
 local lastFreeArrest = {} -- ["copId:targetId"] = os.clock()
+local copMark = setmetatable({}, { __mode = "k" }) -- [cop] = { pos = where they last counted as moving, at = os.clock() then }
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -68,6 +75,42 @@ end
 
 local function prison()
 	return require(ServerScriptService.Services.PrisonService)
+end
+
+-- Every few seconds (Init): has each cop moved ACTIVE_MOVE studs from where they last counted as moving?
+-- A cop seen for the first time (just joined, or just put the uniform on) starts as patrolling.
+local function trackCops()
+	local t = os.clock()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if isCop(p) then
+			local root = aliveRoot(p)
+			local mark = copMark[p]
+			if not mark then
+				copMark[p] = { pos = root and root.Position, at = t }
+			elseif root and (not mark.pos or (root.Position - mark.pos).Magnitude >= ACTIVE_MOVE) then
+				mark.pos, mark.at = root.Position, t
+			end
+		else
+			copMark[p] = nil
+		end
+	end
+end
+
+-- A cop used the taser, a spike strip or the cuffs: that's playing too, moved or not.
+local function copActed(cop)
+	local mark = copMark[cop]
+	if mark then
+		mark.at = os.clock()
+	end
+end
+
+-- Is this player a cop who is really patrolling (see ACTIVE_FOR)? AIPoliceService counts only these.
+function ArrestService.IsActiveCop(player)
+	if not isCop(player) then
+		return false
+	end
+	local mark = copMark[player]
+	return mark == nil or os.clock() - mark.at <= ACTIVE_FOR
 end
 
 -- An arrest with no paid stars (only fight, breakout or hot-car stars) is easy for friends to stage,
@@ -234,20 +277,30 @@ local function addCuffPrompt(parent, name, objectText)
 end
 
 -- The server times the cuff hold itself (a hacked client could skip it). Returns a check for
--- Triggered: did this cop really start holding at least CUFF_HOLD seconds ago?
+-- Triggered: did this cop really start holding at least CUFF_HOLD seconds ago (and not much longer)?
 local function timeHolds(prompt)
 	local began = {} -- [userId] = os.clock()
 	prompt.PromptButtonHoldBegan:Connect(function(cop)
 		began[cop.UserId] = os.clock()
 	end)
+	-- Let go early: that hold is void (as CarBoostService's pick-lock). A hold started out of reach and
+	-- kept used to make a later cuff instant. A finished hold still counts, whichever event arrives first.
+	prompt.PromptButtonHoldEnded:Connect(function(cop)
+		local t = began[cop.UserId]
+		if t and os.clock() - t < CUFF_HOLD - 0.4 then
+			began[cop.UserId] = nil
+		end
+	end)
 	return function(cop)
 		local t = began[cop.UserId]
 		began[cop.UserId] = nil
-		return t ~= nil and os.clock() - t >= CUFF_HOLD - 0.4
+		local held = t and os.clock() - t
+		return held ~= nil and held >= CUFF_HOLD - 0.4 and held <= CUFF_HOLD + 3
 	end
 end
 
 local function tryCuff(cop, target)
+	copActed(cop)
 	local ok, why = canCuff(cop, target)
 	if ok then
 		ArrestService.Arrest(target, cop)
@@ -374,6 +427,7 @@ local function onTaser(cop, target)
 		return
 	end
 	stun(target)
+	copActed(cop)
 	taserFx:FireAllClients(cop, target)
 	require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "TaserHit")
 end
@@ -408,6 +462,7 @@ local function onSpike(cop)
 		return
 	end
 	cop:SetAttribute("SpikeCharges", charges - 1)
+	copActed(cop)
 	local folder = Workspace:FindFirstChild("Spikes") or Instance.new("Folder")
 	folder.Name = "Spikes"
 	folder.Parent = Workspace
@@ -532,20 +587,37 @@ function ArrestService.Init()
 			end
 		end
 	end)
-	-- Spike recharge and patrol pay.
+	-- Who is really patrolling (IsActiveCop).
+	task.spawn(function()
+		while true do
+			task.wait(2)
+			local ok, err = pcall(trackCops)
+			if not ok then
+				warn("[ArrestService] " .. tostring(err))
+			end
+		end
+	end)
+	-- Spike recharge and patrol pay (patrol pay only for a cop who is really patrolling: IsActiveCop).
 	task.spawn(function()
 		local minute = 0
 		while true do
 			task.wait(SPIKE_RECHARGE)
 			minute += SPIKE_RECHARGE
 			for _, p in ipairs(Players:GetPlayers()) do
-				if isCop(p) then
-					local max = p:GetAttribute("SpikeMax") or 2
-					p:SetAttribute("SpikeCharges", math.min(max, (p:GetAttribute("SpikeCharges") or 0) + 1))
-					if minute >= 60 then
-						EconomyService.AddCash(p, PATROL_PAY, "patrol")
-						require(game:GetService("ServerScriptService").Services.ProgressService).Event(p, "PatrolMinute")
+				-- Each cop in a pcall of their own: one cop's error (halfway out of the server, say) must not
+				-- end this loop, or nobody's spikes or patrol pay would ever come again.
+				local ok, err = pcall(function()
+					if isCop(p) then
+						local max = p:GetAttribute("SpikeMax") or 2
+						p:SetAttribute("SpikeCharges", math.min(max, (p:GetAttribute("SpikeCharges") or 0) + 1))
+						if minute >= 60 and ArrestService.IsActiveCop(p) then
+							EconomyService.AddCash(p, PATROL_PAY, "patrol")
+							require(game:GetService("ServerScriptService").Services.ProgressService).Event(p, "PatrolMinute")
+						end
 					end
+				end)
+				if not ok then
+					warn("[ArrestService] " .. tostring(err))
 				end
 			end
 			if minute >= 60 then

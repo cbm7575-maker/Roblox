@@ -3134,7 +3134,7 @@ function CombatService.CarHit(victim, speed, dir, driver, what, downAlready, sel
 		if isPassive(victim) or isPassive(driver) or (crew ~= nil and crew == victim:GetAttribute("Crew")) then
 			return 0
 		end
-		-- A cop's car hurts only wanted citizens, like a cop's gun (the knock-down still happens).
+		-- A cop's car hurts only wanted citizens, like a cop's gun (ImpactService then skips the knock-down too).
 		if driver:GetAttribute("Side") == "Cop" and (side ~= "Civilian" or HeatService.GetHeat(victim) < 1) then
 			return 0
 		end

@@ -40,5 +40,12 @@ DevSync stamps in Studio.
 
 `launch/` holds the step-by-step launch kit, in order: private publish and phone test, Creator Hub
 passes and cash packs (with icons in `launch/icons/`), the friends test plan, store page copy,
-maturity questionnaire answers with the steps for going public, and the playtest lists for the latest
-updates (6 and 7).
+maturity questionnaire answers with the steps for going public, the playtest lists for the latest
+updates (6 and 7), and the Nov 3 pre-ads audit (8: Creator Hub fixes, five test passes, publishing).
+
+## Logic tests
+
+`tools/logic-tests/` checks DataService's save locking and retries and ShopService's receipts and pass
+checks against stand-in Roblox services with a virtual clock (no Studio needed). It needs the Luau CLI
+(github.com/luau-lang/luau releases): `LUAU=path/to/luau.exe bash tools/logic-tests/datastore.sh`, and
+the same for `shop.sh`. Every line should read PASS. They don't replace a play test.

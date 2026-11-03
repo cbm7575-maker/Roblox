@@ -2635,7 +2635,9 @@ local function guideSections()
 
 	local rank = { "Robberies, races and jobs give XP.", "Ranks (up to " .. Progression.MaxRank .. ") unlock rewards." }
 	if bank and bank.MinRank then
-		table.insert(rank, "The Coastal Bank needs rank " .. bank.MinRank .. ".")
+		local yacht = Heists.Types.SeaDream
+		table.insert(rank, "The Coastal Bank" .. ((yacht and yacht.MinRank == bank.MinRank) and " and the Sea Dream need" or " needs")
+			.. " rank " .. bank.MinRank .. ".")
 	end
 	table.insert(rank, "Daily [GOALS]: " .. money(reward.Cash) .. " + " .. reward.XP .. " XP each.")
 

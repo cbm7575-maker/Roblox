@@ -32,9 +32,10 @@
 --   * Carjacked (server -> thief): { Kind, Value, Alarm, Parked, Sellable }. ObjectiveClient stamps it and
 --     may suggest the Chop Shop on the GPS; TrafficClient sends the driver running and drops the traffic
 --     car it handed over. CarjackRefused (server -> thief, no arguments): the jack didn't happen.
--- Notify keys: JackCooldown (too soon after the last one), JackBlocked (no room for the car there, or
--- something between the thief and the car), GetOutFirst (a jack or a finished Break in hold from someone
--- sitting in a car: at most one every 3 s, shared with CarBoostService and ImpactService).
+-- Notify keys: JackCooldown (too soon after the last one, or within BLOCKED_GAP s of a JackBlocked for
+-- room), JackBlocked (no room for the car there, or something between the thief and the car; the room is
+-- checked for the smallest street car before one is built), GetOutFirst (a jack or a finished Break in
+-- hold from someone sitting in a car: at most one every 3 s, shared with CarBoostService and ImpactService).
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -60,6 +61,12 @@ local KINDS = {
 	Pickup = { Car = "StreetPickup", Value = 450 },
 }
 local COOLDOWN = 8 -- seconds between two jacks by the same player
+-- Seconds before someone refused for room (JackBlocked) may try again: each try can make us build a car
+-- (RateLimit alone let a client have one built and thrown away every second).
+local BLOCKED_GAP = 2
+-- The smallest box (X, Z) a street car can have: CarBuilder fits its chassis to the traffic body, never
+-- under 4.5 x 8 studs. No room even for that: refused before anything is built (spawnJacked).
+local MIN_SIZE = Vector3.new(4.5, 0, 8)
 local REACH = 20 -- studs from the thief to a traffic car's spot (TrafficClient offers JACK within 16; our copy of them lags)
 local ROAD_SLACK = 6 -- studs beyond a road graph edge's width a traffic car's spot may be (lane changes at junctions)
 local ROAD_SNAP = 3 -- a traffic car's spot must be this close above or below a City.Roads surface
@@ -76,6 +83,7 @@ local DEFAULT_PAINT = Color3.fromRGB(190, 190, 196)
 local SOLID_PROPS = { Hydrant = true, TrashCan = true, Bench = true, NewsBox = true }
 
 local lastJack = {} -- [player] = os.clock() of their last jack
+local blockedAt = {} -- [player] = os.clock() of their last jack refused for room
 local jackedCar = {} -- [player] = their current jacked car
 local parked = {} -- list of { model, kind, home (its CarPark), ground (bottom centre CFrame), size, paint, spot, hiddenAt }
 local awayFolder -- ServerStorage folder holding the parked cars that were taken
@@ -137,10 +145,12 @@ local function getOutFirst(player)
 	end
 end
 
--- One jack every COOLDOWN seconds (a toast says so when it's too soon).
+-- One jack every COOLDOWN seconds, and none within BLOCKED_GAP of one refused for room (a toast says so
+-- when it's too soon).
 local function ready(player)
 	local last = lastJack[player]
-	if last and os.clock() - last < COOLDOWN then
+	local t = os.clock()
+	if (last and t - last < COOLDOWN) or t - (blockedAt[player] or -math.huge) < BLOCKED_GAP then
 		notify:FireClient(player, "JackCooldown")
 		return false
 	end
@@ -290,17 +300,27 @@ end
 -- thief in it. `body`: a parked car's copy to wear (nil: a fresh traffic body painted `paint`).
 -- Returns the car, or nil and a Notify key for the thief (nil key: nothing worth saying).
 local function spawnJacked(player, hum, info, ground, paint, body, solid)
+	local old = jackedCar[player]
+	if old and not old.Parent then
+		old = nil
+	end
+	-- Room first for the smallest car there can be (MIN_SIZE), so a spot with no room never gets a car
+	-- built and thrown away; then for the real one. Either refusal holds the next try back BLOCKED_GAP s.
+	if not roomFor(ground, MIN_SIZE, player, old, solid) then
+		if body then
+			body:Destroy()
+		end
+		blockedAt[player] = os.clock()
+		return nil, "JackBlocked"
+	end
 	local ok, car = pcall(CarBuilder.Build, info.Car, { Paint = paint, Body = body })
 	if not ok or not car or not car.PrimaryPart then
 		warn("[CarjackService] couldn't build " .. info.Car .. ": " .. tostring(car))
 		return nil
 	end
-	local old = jackedCar[player]
-	if old and not old.Parent then
-		old = nil
-	end
 	if not roomFor(ground, car.PrimaryPart.Size, player, old, solid) then
 		car:Destroy()
+		blockedAt[player] = os.clock()
 		return nil, "JackBlocked"
 	end
 	if old then
@@ -537,6 +557,7 @@ function CarjackService.Init()
 	awayFolder.Parent = ServerStorage
 	Players.PlayerRemoving:Connect(function(p)
 		lastJack[p] = nil
+		blockedAt[p] = nil
 		jackedCar[p] = nil -- (CarBoostService removes the car itself when its thief leaves)
 	end)
 	task.spawn(function()

@@ -35,6 +35,14 @@ function EconomyService.GetCarried(player)
 	return player:GetAttribute("Carried") or 0
 end
 
+-- A whole, finite number of dollars, or nil (NaN and infinity would stick in the save forever).
+local function dollars(amount)
+	if type(amount) == "number" and amount == amount and math.abs(amount) ~= math.huge then
+		return math.floor(amount)
+	end
+	return nil
+end
+
 local function setCash(player, value)
 	player:SetAttribute("Cash", value)
 	local ls = player:FindFirstChild("leaderstats")
@@ -46,12 +54,12 @@ end
 
 -- Loading a save (DataService): set cash directly, no reason logged.
 function EconomyService.SetCash(player, value)
-	setCash(player, math.max(0, math.floor(value)))
+	setCash(player, math.max(0, dollars(value) or 0))
 end
 
 function EconomyService.AddCash(player, amount, reason)
-	amount = math.floor(amount)
-	if amount <= 0 then
+	amount = dollars(amount)
+	if not amount or amount <= 0 then
 		return 0
 	end
 	setCash(player, EconomyService.GetCash(player) + amount)
@@ -61,8 +69,8 @@ end
 
 -- Returns true if the player had enough and it was spent.
 function EconomyService.Spend(player, amount, reason)
-	amount = math.floor(amount)
-	if amount < 0 or EconomyService.GetCash(player) < amount then
+	amount = dollars(amount)
+	if not amount or amount < 0 or EconomyService.GetCash(player) < amount then
 		return false
 	end
 	setCash(player, EconomyService.GetCash(player) - amount)
@@ -78,9 +86,15 @@ end
 
 -- Put money in the bag, up to the carry limit. Returns how much actually fit.
 function EconomyService.AddCarried(player, amount, reason)
-	amount = math.floor(amount)
+	local whole = dollars(amount)
+	if not whole then
+		return 0
+	end
+	if whole <= 0 then
+		return 0 -- (a negative amount would also make the clamp below throw)
+	end
 	local current = EconomyService.GetCarried(player)
-	local fits = math.clamp(EconomyService.CarryLimit(player) - current, 0, amount)
+	local fits = math.clamp(EconomyService.CarryLimit(player) - current, 0, whole)
 	player:SetAttribute("Carried", current + fits)
 	record(player, "bag+", fits, reason)
 	return fits

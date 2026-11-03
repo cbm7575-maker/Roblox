@@ -112,10 +112,19 @@ local function hookVent()
 	prompt.PromptButtonHoldBegan:Connect(function(p)
 		holdStart[p] = os.clock()
 	end)
+	-- Let go early: that hold is void (as CarBoostService's pick-lock), so a hold can't be started once
+	-- and kept for an instant breakout later. A finished hold still counts, whichever event arrives first.
+	prompt.PromptButtonHoldEnded:Connect(function(p)
+		local b = holdStart[p]
+		if b and os.clock() - b < VENT_HOLD - 0.4 then
+			holdStart[p] = nil
+		end
+	end)
 	prompt.Triggered:Connect(function(p)
 		local began = holdStart[p]
 		holdStart[p] = nil
-		if p:GetAttribute("Side") ~= "Prisoner" or not began or os.clock() - began < VENT_HOLD - 0.4 then
+		local held = began and os.clock() - began
+		if p:GetAttribute("Side") ~= "Prisoner" or not held or held < VENT_HOLD - 0.4 or held > VENT_HOLD + 3 then
 			return
 		end
 		local t = os.clock()
@@ -173,18 +182,25 @@ function PrisonService.Init()
 			task.wait(1)
 			local t = now()
 			for _, p in ipairs(Players:GetPlayers()) do
-				if p:GetAttribute("Side") == "Prisoner" then
-					local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-					local releaseAt = p:GetAttribute("ReleaseAt") or 0
-					if t >= releaseAt then
-						seenOnIsland[p] = nil
-						PrisonService.Release(p)
-					elseif root and onIsland(root.Position) then
-						seenOnIsland[p] = true
-					elseif root and seenOnIsland[p] then
-						seenOnIsland[p] = nil
-						breakout(p)
+				-- Each prisoner in a pcall of their own: a release's respawn can throw for someone halfway out
+				-- of the server, and that used to end this loop, so nobody was ever let out again.
+				local ok, err = pcall(function()
+					if p:GetAttribute("Side") == "Prisoner" then
+						local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+						local releaseAt = p:GetAttribute("ReleaseAt") or 0
+						if t >= releaseAt then
+							seenOnIsland[p] = nil
+							PrisonService.Release(p)
+						elseif root and onIsland(root.Position) then
+							seenOnIsland[p] = true
+						elseif root and seenOnIsland[p] then
+							seenOnIsland[p] = nil
+							breakout(p)
+						end
 					end
+				end)
+				if not ok then
+					warn("[PrisonService] " .. tostring(err))
 				end
 			end
 		end
