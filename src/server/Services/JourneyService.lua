@@ -19,7 +19,9 @@
 --     Heist (a big heist in BigHeists, which crewmates who helped get too) and the police actions that
 --     need a wanted robber (TaserHit, SpikeHit, Arrest: remembered in `seen` when they happen early).
 --     Checked on load, after every event, and when the rank, owned cars, car styles, guns, home, big
---     heists or tutorial step change.
+--     heists or tutorial step change. Any other one-off goal (a jack, a Chop Shop sale, a stunt, a race, a
+--     taxi fare) is remembered in `seen` too, so one done during the tutorial or ahead of its turn isn't
+--     asked for a second time: it completes, and pays, as soon as it comes up.
 --   * A finished goal pays its Reward (EconomyService.AddCash, reason "journey:<Id>"), is logged
 --     (free roam: onboarding funnel step 7 on, after TutorialService's 1-6; police: custom event
 --     JourneyCop_<Id>) and fires JourneyDone { Cop, Index, Total, Reward } to the player for the stamp.
@@ -60,9 +62,11 @@ local CHAINS = {
 
 local RANK_KINDS = { CivRank = true, CopRank = true }
 
--- Police actions that need a wanted robber (there are no AI robbers): one that happens before its goal
--- comes up is remembered, and the goal completes as soon as it's reached.
-local REMEMBER = { TaserHit = true, SpikeHit = true, Arrest = true }
+-- One-off goals: one that happens before its goal comes up (a street car jacked during the tutorial) is
+-- remembered, and the goal completes as soon as it's reached. Also the police actions that need a wanted
+-- robber (there are no AI robbers).
+local REMEMBER = { TaserHit = true, SpikeHit = true, Arrest = true, Carjack = true, ChopSale = true, Stunt = true,
+	RaceFinish = true, TaxiFare = true }
 
 -- Player attributes whose change can finish a goal without an event (see stateDone). "Custom_<car>"
 -- (a car's paint, glow and rims, GarageService) is matched by its prefix.

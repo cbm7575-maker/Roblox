@@ -38,8 +38,9 @@
 --           Coast Arms). Paint, BuyCar and BuyHome also count
 --           as done when the save already shows one (a painted car, a bought car, a home), a Heist goal
 --           when the player has a big heist (BigHeists: robbed, or helped their crew rob, the Coastal
---           Bank or Sea Dream), and TaserHit / SpikeHit / Arrest when they happened before the goal
---           came up (they need a wanted robber, so none is lost).
+--           Bank or Sea Dream), and TaserHit / SpikeHit / Arrest (they need a wanted robber, so none is
+--           lost), Carjack, ChopSale, Stunt, RaceFinish and TaxiFare when they happened before the goal
+--           came up (a car jacked during the tutorial is never asked for again).
 --   Goal    how many events it takes (or points, with Sum; or the rank, for the rank kinds)
 --   Min     only events whose amount is at least this count (the heist's tier)
 --   Sum     add each event's amount instead of 1 (drift points)

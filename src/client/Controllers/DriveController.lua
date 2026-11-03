@@ -521,7 +521,7 @@ local function mySeat()
 		return hum, hum.SeatPart, false
 	end
 	local root = char:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
+	if root and root:IsA("BasePart") and root:IsDescendantOf(Workspace) then
 		for _, j in ipairs(root:GetJoints()) do
 			if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
 				local other = j.Part0 == root and j.Part1 or j.Part0

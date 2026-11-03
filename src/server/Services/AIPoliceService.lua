@@ -23,7 +23,10 @@
 --     on foot, and the car waits with its brakes on; they get back in when the suspect drives off. A car
 --     whose officers are all down or dead stays put for GONE_WAIT seconds, then goes (a new one comes).
 --     Without officers (their looks not built yet) the car arrests by itself, as it always did.
--- Server-owned physics (CarPhysics) so VehicleGuard never checks them.
+-- Server-owned physics (CarPhysics) so VehicleGuard never checks them. They have to stay server-owned:
+-- welding a rider in or out puts a car back on automatic ownership, the nearest player's device takes it
+-- over, and the server's suspension forces reach it late, so it bounces and flips down the road (drive
+-- takes it back every frame).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -235,6 +238,9 @@ local function drive(u, dt, now)
 	local chassis = car.PrimaryPart
 	if not chassis or not car.Parent then
 		return despawn(u)
+	end
+	if chassis:GetNetworkOwnershipAuto() then
+		chassis:SetNetworkOwner(nil) -- (an officer got in or out: see the header)
 	end
 	local p = u.target
 	if not wanted(p) then

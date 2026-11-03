@@ -380,8 +380,8 @@ local function seatOf(character, hum)
 		return seat, nil
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") then
-		return nil, nil
+	if not root or not root:IsA("BasePart") or not root:IsDescendantOf(Workspace) then
+		return nil, nil -- (GetJoints warns for a body that has left the world: an arrest, a respawn)
 	end
 	for _, j in ipairs(root:GetJoints()) do
 		if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
@@ -411,7 +411,7 @@ local function unweld(seat, character)
 		end
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
+	if root and root:IsA("BasePart") and root:IsDescendantOf(Workspace) then
 		for _, j in ipairs(root:GetJoints()) do
 			if (j:IsA("JointInstance") or j:IsA("WeldConstraint")) and (j.Part0 == seat or j.Part1 == seat) then
 				j:Destroy()

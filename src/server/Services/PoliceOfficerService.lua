@@ -14,7 +14,8 @@
 --         RequestSurrender, handled here): they hold fire, walk up and cuff them K.SURRENDER_CUFF seconds
 --         after reaching them. A surrender also takes a star off the sentence (ArrestService).
 --       - Standing still (or sitting in a stopped car) with no threat: they run up ("POLICE! HANDS
---         UP!") and cuff them after K.CUFF seconds at arm's length: ArrestService.Arrest, as ever.
+--         UP!") and cuff them after K.CUFF seconds at arm's length (K.CUFF_CAR from the side of the
+--         car: walking straight at the driver shoved it down the road): ArrestService.Arrest, as ever.
 --       - Running: they chase at K.RUN, a little under a sprinting player.
 --       - Hostile (hostileTo): a gun out at 2+ stars, a gun fired in the last K.FIRED_MEMORY seconds, an
 --         officer shot or punched by them in the last K.ASSAULT_MEMORY seconds, or 4+ stars. They draw
@@ -61,6 +62,7 @@ local K = {
 	WALK = 9,
 	RUN = 19.5, -- (players walk 18 and sprint faster: a sprinter gets away, a walker doesn't)
 	CUFF_RANGE = 5.5,
+	CUFF_CAR = 2.5, -- studs from the body of a car the suspect sits in: the cuffing is done from beside it
 	CUFF = 2.2, -- seconds at arm's length from a suspect who stands still
 	SURRENDER_CUFF = 1, -- ...or who has their hands up
 	STILL = 7, -- studs/s: slower counts as standing still (a car: under 5)
@@ -657,6 +659,25 @@ local function kill(o, dir)
 	end)
 end
 
+-- How far `pos` is from the body of a car (flat, 0 = over it), and where to walk: the door beside the
+-- suspect's seat, round the corner on that side first from in front of the car or behind it (straight at
+-- the nearest point, an officer behind the car squeezed in between it and the patrol car and stuck there).
+local function besideCar(chassis, seat, pos)
+	local cf = chassis.CFrame
+	local p = cf:PointToObjectSpace(pos)
+	local half = chassis.Size / 2
+	local near = Vector3.new(math.clamp(p.X, -half.X, half.X), p.Y, math.clamp(p.Z, -half.Z, half.Z))
+	local gap = Vector3.new(p.X - near.X, 0, p.Z - near.Z).Magnitude
+	local s = cf:PointToObjectSpace(seat.Position)
+	local side = s.X < 0 and -1 or 1
+	local out = K.CUFF_CAR - 0.5
+	local goal = Vector3.new(side * (half.X + out), p.Y, s.Z)
+	if side * p.X < half.X and math.abs(p.Z) > half.Z then
+		goal = Vector3.new(side * (half.X + out), p.Y, math.sign(p.Z) * (half.Z + out))
+	end
+	return gap, cf:PointToWorldSpace(goal)
+end
+
 local function officerStep(crew, o, dt, p, info, t)
 	if o.state == "Down" then
 		if t >= o.downUntil then
@@ -726,9 +747,18 @@ local function officerStep(crew, o, dt, p, info, t)
 	-- Not shooting: arrest them.
 	local gunOut = armed(p)
 	draw(o, gunOut and not info.inCar)
-	if dist > K.CUFF_RANGE then
+	-- How far there is to go: to the suspect, or to the side of the car they're in.
+	local gap, goal, range = dist, troot.Position, K.CUFF_RANGE
+	local thum = tchar:FindFirstChildOfClass("Humanoid")
+	local seat = info.inCar and thum and thum.SeatPart
+	local chassis = seat and seat.Parent and seat.Parent.PrimaryPart
+	if chassis then
+		gap, goal = besideCar(chassis, seat, root.Position)
+		range = K.CUFF_CAR
+	end
+	if gap > range then
 		hum.AutoRotate = true
-		moveTo(o, troot.Position, dist > 12 and K.RUN or K.WALK)
+		moveTo(o, goal, gap > 12 and K.RUN or K.WALK)
 		o.cuffFor = math.max(0, o.cuffFor - dt)
 		say(o, surrender and "STAY RIGHT THERE!" or (gunOut and "DROP THE WEAPON!") or "POLICE! HANDS UP!")
 		return

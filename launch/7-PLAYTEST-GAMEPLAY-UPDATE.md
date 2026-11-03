@@ -146,6 +146,17 @@ Go inside the Flamingo Beach Mansion and up to the great room on level 2. The si
 BAR**, in one line that fits the wall. The shelf behind the counter has four juice dispensers below and
 four fruit bowls above, and no bottles anywhere. Nothing floats, and you can still walk behind the counter.
 
+## J. Fixes from the Nov 2 test run
+
+1. **Patrol cars drive flat.** They used to bounce, flip and land on their side from the moment they
+   spawned (the officer in the seat handed the car to your device). Get 1 star: the patrol comes down
+   the road on its wheels.
+2. **Arrest in a stopped car.** Sit still in a car with a star. The officer walks round to your door and
+   cuffs you within a few seconds. He used to walk into the car and push it down the road forever.
+3. **One jack, not two.** On a new save, jack a street car during the tutorial. When the tutorial ends,
+   goal 1 ("Grab a street car") completes at once with its $200, and goal 2 comes up. A stunt, race,
+   Chop Shop sale or taxi fare done early counts the same way.
+
 ## What to send me
 
 For anything that fails: the section and step (e.g. E2), what you saw, any red Output or F9 console
