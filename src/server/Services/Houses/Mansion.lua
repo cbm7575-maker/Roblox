@@ -8,7 +8,7 @@
 -- neon flamingo and the name. Out back, toward the sea: a pool deck at level 2 with an infinity pool, a spa
 -- and a pool bar under a pergola, over a shaded beach cabana with a lounge and an outdoor bar, and a
 -- stair down to the sand. Inside: a foyer with a koi pond, a home cinema, a stair core up through all
--- three floors to the roof; on level 2 one great room (living, dining, kitchen, a neon bar) with glass
+-- three floors to the roof; on level 2 one great room (living, dining, kitchen, a neon juice bar) with glass
 -- walls onto the pool and a game room (arcade, pool table); on level 3 the master suite (wardrobe, a
 -- tub by the window) and two guest rooms; on the roof a raised spa, loungers and a DJ booth.
 -- Drawn by HouseBuilder (lot space: front = -Z; the beach and the sea are behind, +Z).
@@ -388,7 +388,7 @@ return function(K, home)
 		end
 	end
 
-	-- Level 2: the great room (living, dining, kitchen, the bar) and the game room.
+	-- Level 2: the great room (living, dining, kitchen, the juice bar) and the game room.
 	local up = K:Sub(0, L2, 0, 0)
 	local U = K:In("Decor"):Sub(0, L2, 0, 0)
 	U:Rug(-28, 0, 0, 0, 22, 16, rgb(236, 226, 216))
@@ -401,7 +401,7 @@ return function(K, home)
 	U:Fridge(24, 0, Z1 - 2.4, 0, P.Steel)
 	U:Island(14, 0, 10, 0, 14, dark, marble, pink, 4)
 	U:Counter(-4, 0, 14, 0, 12, teak, marble, pink)
-	local barSign = U:Letters(-4, 11, 19.6, 10, 2, "FLAMINGO BAR", pink, Enum.NormalId.Front)
+	local barSign = U:Letters(-4, 11, 19.6, 12, 2, "FLAMINGO JUICE BAR", pink, Enum.NormalId.Front)
 	barSign.Name = "BarSign"
 	R:WallZ(30, C2Z0 + 0.6, Z1 - 0.6, L2, L3 - 1.2, 0.5, plaster, M.Plaster, { { -2, 6, L2, L2 + 10, "door" } }, { out = "+X" })
 	for i, c in ipairs({ pink, theme, P.Gold }) do

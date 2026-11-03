@@ -1502,8 +1502,9 @@ function Kit:PoolTable(x, y, z, yaw, felt)
 	f:Lamp("PoolLamp", -1.2, 1.2, 9.5, 10.2, -3.5, 3.5, P.Warm, 16, 0.5)
 end
 
--- A bar counter w long (the bartender's side at +Z) with stools on -Z and a lit shelf of bottles behind
--- it at +Z + 3 (o.back = false: no back shelf).
+-- A juice bar counter w long (the server's side at +Z) with stools on -Z and a lit back shelf behind it
+-- at +Z + 3 (o.back = false: none): juice dispensers below, fruit bowls above, as in the towers' juice
+-- bars. Never bottles: Roblox keeps a game that shows alcohol to 18+ players (launch/5).
 function Kit:Counter(x, y, z, yaw, w, wood, top, neon, o)
 	if not self.inside then
 		return
@@ -1524,11 +1525,15 @@ function Kit:Counter(x, y, z, yaw, w, wood, top, neon, o)
 	if o.back ~= false then
 		f:Deco("BackShelf", -w / 2, w / 2, 4, 4.3, 3, 4.2, wood, M.Wood)
 		f:Deco("BackShelf", -w / 2, w / 2, 6.4, 6.7, 3, 4.2, wood, M.Wood)
-		local colors = { rgb(120, 60, 30), rgb(40, 110, 60), rgb(200, 180, 120), rgb(80, 40, 90) }
-		for i = 0, math.floor(w / 1.2) - 1 do
-			local bx = -w / 2 + 0.6 + i * 1.2
-			for _, yy in ipairs({ 4.3, 6.7 }) do
-				f:Cyl("Bottle", bx, 3.6, yy, yy + 1.6, 0.5, colors[(i + math.floor(yy)) % #colors + 1], M.Glass, DETAIL)
+		local juices = { rgb(255, 150, 40), rgb(150, 214, 60), rgb(240, 110, 150) } -- orange, lime, berry
+		local fruit = { rgb(255, 150, 40), rgb(244, 214, 70), rgb(196, 52, 64) }
+		local stock = math.max(3, math.floor(w / 3))
+		for i = 1, stock do
+			local bx = -w / 2 + w * (i - 0.5) / stock
+			f:Cyl("Dispenser", bx, 3.6, 4.3, 6.1, 1.2, juices[(i - 1) % #juices + 1], M.Glass, merge(DETAIL, { Transparency = 0.15 }))
+			f:Cyl("FruitBowl", bx, 3.6, 6.7, 7.1, 1.4, P.White, M.SmoothPlastic, DETAIL)
+			for k, c in ipairs(fruit) do
+				f:Ball("Fruit", bx - 0.6 + k * 0.3, 7.2, 3.4 + (k % 2) * 0.4, 0.5, c, M.SmoothPlastic, DETAIL)
 			end
 		end
 		if neon then
