@@ -1,4 +1,6 @@
 *.lua text eol=lf
 *.py text eol=lf
 *.md text eol=lf
+*.luau text eol=lf
+*.sh text eol=lf
 *.rbxl binary
