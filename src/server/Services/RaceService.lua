@@ -43,7 +43,8 @@
 --   * Police: heat no longer calls a running street race off (it still keeps you from starting one).
 --     With chance SpotChance a race is "spotted": at a random moment SpotFrom..SpotTo of the way through
 --     (by par) every player still racing gets a star (HeatService.Add 1, "street_race") and the toast
---     RaceSpotted. The AI police then come as for anyone wanted. Never on the water.
+--     RaceSpotted. The AI police then come as for anyone wanted. Never on the water. Off for now: the
+--     owner doesn't want a race to make you wanted (Config.Activities SpotChance = 0).
 --   * A player drops out ("Cancelled" { Reason }) if they get out or lose the car, die, are arrested or
 --     take longer than 2.5 x par.
 -- RACE CHALLENGES: a friendly race between two drivers, anywhere on the roads

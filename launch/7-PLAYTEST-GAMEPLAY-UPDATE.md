@@ -122,8 +122,8 @@ One player:
 3. Highway 1 Loop is now 2 laps: LAP 1/2, "Final lap!", checkpoints start over each lap. (It pays
    more now, $2,000 + $1,600 under par, and its best times are kept apart from the old 1-lap ones.)
 4. Surf Sprint (boats): no AI racers, no POS: the same time trial as before.
-5. Race a few times: about one race in three, "the cops spotted the race" and every racer gets a
-   star. The race carries on; lose the cops after.
+5. Race a few times: a race never gives you a star (the "cops spotted the race" event is off since
+   Nov 2).
 6. Get out of the car mid-race: cancelled with a toast; the AI cars are gone within about 20 s.
 
 Two players (Test tab > Clients and Servers, 2 players):
@@ -156,6 +156,9 @@ four fruit bowls above, and no bottles anywhere. Nothing floats, and you can sti
 3. **One jack, not two.** On a new save, jack a street car during the tutorial. When the tutorial ends,
    goal 1 ("Grab a street car") completes at once with its $200, and goal 2 comes up. A stunt, race,
    Chop Shop sale or taxi fare done early counts the same way.
+4. **Running a player over hurts again (D3).** It only knocked them down: the server's "anything solid
+   between the car and them?" check hit the driver's own hand, and it looked for them where the car was
+   a moment ago. Found in the two-player test on Nov 2: a fast hit on Player2 now takes about 30.
 
 ## What to send me
 

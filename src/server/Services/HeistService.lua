@@ -14,6 +14,10 @@
 --     is protected from other crews for PREP_LOCK seconds (time to walk to the vault); after that
 --     anyone may redo it. Nobody can refresh their own live prep, so no one can hold the panel
 --     forever. Tapping a locked panel says why (HeistClient relabels it "Done" / "Taken").
+--     Until the player's crew has a live prep, HeistClient shows the vault's Rob prompt locked on that
+--     player's device ("Cut the power first", no hold, the panel marked in gold), from the attributes
+--     below. A tap on it still lands here: the check below stays the real one, and its answer
+--     (NeedPrep_<type>) goes through prepRefused, so mashing E on the locked prompt can't stack toasts.
 --   * Big heists (Heists.BigTier: Coastal Bank, Sea Dream) are crew work. The helpers are the robber's
 --     Civilian crewmates within Heists.BigCrewRange studs when the robbery pays (cops and prisoners
 --     don't count). Each of them and the robber add 1 to the saved stat "BigHeists" (player attribute,
@@ -101,7 +105,8 @@ local function prepIsMine(site, player)
 	return mine and (site:GetAttribute("PrepUntil") or 0) >= now()
 end
 
--- Why a prep panel said no; at most one toast every 3 s, so tapping the panel can't stack them.
+-- Why a prep panel (or a vault still waiting for its prep) said no; at most one toast every 3 s, so
+-- tapping the panel or the locked vault can't stack them.
 local function prepRefused(player, key)
 	local t = os.clock()
 	if t - (prepToastAt[player.UserId] or -math.huge) >= 3 then
@@ -726,10 +731,11 @@ local function hookSite(site)
 			return
 		end
 		-- The hold only has to start inside the prep window, so what was true then counts (for a hold
-		-- that really just ran its length), or a prep a crewmate finished during the hold.
+		-- that really just ran its length), or a prep a crewmate finished during the hold. (Before the
+		-- prep, HeistClient makes this prompt a tap that brings this answer: at most one every 3 s.)
 		local prepAtStart = began ~= nil and began.prepOk and os.clock() - began.t < def.Hold + 5
 		if def.Prep and not prepAtStart and not prepIsMine(site, player) then
-			notify:FireClient(player, "NeedPrep_" .. typeId)
+			prepRefused(player, "NeedPrep_" .. typeId)
 			return
 		end
 		local char = player.Character

@@ -82,11 +82,22 @@
 --         Direct children Ammo / Fire / Aim / Reload / Weapon keep their names: LawClient and
 --         AmbienceClient look them up.
 --       - Crosshair; a small health bar over hurt players within 80 studs (green, thin blue armor line).
---   * Coast Arms: the counter prompt ("Browse") opens the shop panel: every gun with damage / fire rate
---     / range bars and a price, OWNED or rank lock, and body armor. BUY sends ("GunShopBuy", itemId); the
---     server checks distance, cash, rank and ownership, and what you bought is confirmed on the panel's
---     bottom line. The panel closes on X / B, when you walk away, sit, get knocked out, change sides or
---     respawn.
+--   * Coast Arms: the counter prompt ("Browse") opens the shop panel (ScreenGui "GunShop"; owner's
+--     play-test, Nov 2: show the gun itself, its numbers, and armor where the guns are). Under the title
+--     "COAST ARMS / GUNS & BODY ARMOR":
+--       - Left, a list of cards: every gun (name, class, magazine) and, under its own blue ARMOR
+--         heading, Body Armor (what you wear now, x / 100, with a blue bar). Each card has its BUY
+--         button: the price (red: not enough cash), OWNED, RANK n (gold) or FULL. The list scrolls only
+--         when the screen is too short for the whole panel at K.SHOP_MIN_SCALE.
+--       - Right, the item you point at (mouse over a card, a tap on it, the gamepad's selection; a thin
+--         pink line marks its card): its real 3D model turning slowly in a ViewportFrame, framed so all
+--         of it stays in view (a copy of your own Tool of that gun, else of the same gun hung on the
+--         shop's back wall; the wall's vest for armor), its name, what its BUY says, and its numbers:
+--         damage per shot, fire rate (shots a second) and range, each with a bar, magazine and reload
+--         time; for armor what you have, what it stops and that it is saved.
+--     BUY sends ("GunShopBuy", itemId); the server checks distance, cash, rank and ownership, and what
+--     you bought is confirmed on the panel's bottom line. The panel closes on X / B, when you walk away,
+--     sit, get knocked out, change sides or respawn.
 --   * Tools are put away when you sit in a car, go into your home, get knocked over or get tasered.
 --   * The Roblox backpack (hotbar) shows only for citizens and cops on foot with a keyboard or gamepad,
 --     outside homes, the title screen and the shop panel, so it never covers the speed gauge, LEAVE HOME
@@ -144,6 +155,7 @@ K.GUN_ORDER = Combat.GunOrder or {}
 K.AIM = Combat.Aim or {}
 K.SHOP = Combat.Shop or {}
 K.ARMOR_ITEM = Combat.ArmorItem or {}
+K.ARMOR_ID = K.ARMOR_ITEM.Id or "Armor" -- what the shop's BUY sends for it
 K.ARMOR_MAX = Combat.ArmorMax or 100
 K.DAZE_MAX = Combat.DazeMax or 100
 
@@ -171,8 +183,21 @@ K.DRAW_TIME = Combat.DrawTime or 0.2 -- seconds after pulling a gun out before i
 K.RELOAD_GRACE = 0.6 -- seconds we wait for the server to start a reload we asked for
 K.AMMO_SETTLE = 0.4 -- seconds (plus the ping) after our last shot before the server's count replaces our guess
 K.SHOP_PROMPT = K.SHOP.Prompt or "GunShopBrowse"
-K.SHOP_W, K.SHOP_TOP, K.SHOP_ROW = 430, 48, 56 -- shop panel: design width, header height, row height
+-- The shop panel, in design pixels (fitShop's UIScale shrinks it to the screen). 640 wide: the list and
+-- the big picture side by side still fit a small landscape phone at 0.9 or so.
+K.SHOP_W, K.SHOP_TOP, K.SHOP_ROW = 640, 48, 56 -- panel width, header height, card height
 K.SHOP_NOTE = 26 -- ...and the line at its bottom that confirms a purchase
+K.SHOP_LIST_W = 300 -- the list of cards on the left (the item you point at gets the rest)
+K.SHOP_HEAD = 16 -- the ARMOR heading over the armor card
+K.SHOP_STAT = 22 -- one line of numbers under the picture (five of them)
+K.SHOP_MIN_SCALE = 0.75 -- never drawn smaller: a shorter screen gets a shorter panel, and the list scrolls
+-- The picture's camera: degrees of view (narrow, like a product photo), degrees it looks down, and room
+-- left around the item (1 = touching the edges at the widest point of its turn).
+K.SHOP_FOV, K.SHOP_TILT, K.SHOP_PAD = 30, 10, 1.1
+K.SHOP_TURN = 10 -- seconds for one full turn...
+K.SHOP_LINGER = 0.35 -- ...slowed past the two best sides, sped past the ends (under 0.5, or it would turn back)
+K.SHOP_BACKDROP = 0.4 -- transparency of the picture's grey (Dim) backdrop: a black gun would vanish on the dark panel
+K.SHOP_VEST = { Vest = true, VestStrap = true, VestPlate = true } -- the vest on the shop's back wall (CombatService.buildShop)
 K.VITALS_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Linear)
 K.SWING_TIME = 0.32 -- seconds a punch's arm is out
 K.REACT_GAP = 0.3 -- seconds between two flinches on one body (automatic fire lands a dozen hits a second)
@@ -202,7 +227,9 @@ fx.params = RaycastParams.new() -- what bullets and the aim ray are cast with
 fx.params.FilterType = Enum.RaycastFilterType.Exclude
 fx.params.IgnoreWater = true
 local bars = {} -- [Player] = { gui, fill, armor }
-local shop = { open = false, rows = {}, lastBuy = 0 }
+-- The shop panel. shown = the id on its right side, look = that item's picture (lookOf), looks = every
+-- picture made so far, by id (made once, kept while the game runs), spin = how far round it has turned.
+local shop = { open = false, rows = {}, lastBuy = 0, looks = {}, shown = nil, look = nil, spin = 0 }
 
 -- The gun in hand.
 local gunTool, gun -- the Tool and its Config.Combat.Guns table (nil: no gun in hand)
@@ -2718,7 +2745,229 @@ local function buy(id)
 	end)
 end
 
--- Prices, OWNED, rank locks and the armor bar, from our own attributes (Guns, Armor, Cash, CivRank).
+-- The picture of one shop item: copies of its parts in a Model, moved so the middle of its box sits at
+-- (0, 0, 0) and its own axes are the model's (a gun: +Y up, the barrel along Z, as CombatService builds
+-- every gun; the vest: its front toward -Z). The parts come from what this device already has:
+--   a gun   our own Tool of it (Backpack or hand: exactly the gun we hold), else the same gun on the
+--           shop's back wall (Workspace.Shops.GunShop.Display<id>: CombatService hangs the place's own
+--           mesh there, or the part-built gun when the place has none). ServerStorage.GunModels itself
+--           never reaches a device, so an unowned gun can only be copied from the wall.
+--   armor   the vest on that wall (its parts Vest, VestStrap, VestPlate)
+-- Returns { model, half = half its box's size, face = the turn that puts its best side toward the
+-- camera }, or nil while none of that is here (not streamed in yet: the next showItem tries again).
+local function lookOf(id)
+	local cached = shop.looks[id]
+	if cached then
+		return cached
+	end
+	local store = Workspace:FindFirstChild("Shops")
+	local building = store and store:FindFirstChild(K.SHOP.Model or "GunShop")
+	local parts, origin, face = {}, nil, nil
+	if Combat.Gun(id) then
+		face = CFrame.Angles(0, -math.pi / 2, 0) -- its right side (+X) to the camera: the side view
+		local own = false
+		for _, tool in ipairs((combatTools())) do
+			if tool:GetAttribute(K.GUN_ATTR) == id then
+				own = tool
+			end
+		end
+		for _, source in ipairs({ own, building and building:FindFirstChild("Display" .. id) or false }) do
+			if source and not origin then
+				table.clear(parts)
+				-- Its axes are the gun part's: the Handle (the mesh, or the part-built gun's grip), else the biggest.
+				local handle, biggest = nil, nil
+				for _, p in ipairs(source:GetDescendants()) do
+					if p:IsA("BasePart") then
+						table.insert(parts, p)
+						if p.Name == "Handle" and not handle then
+							handle = p
+						end
+						if not biggest or p.Size.Magnitude > biggest.Size.Magnitude then
+							biggest = p
+						end
+					end
+				end
+				origin = handle or biggest
+			end
+		end
+	else
+		face = CFrame.Angles(0, math.pi, 0) -- its front (-Z, toward the counter) to the camera
+		for _, p in ipairs(building and building:GetChildren() or {}) do
+			if p:IsA("BasePart") and K.SHOP_VEST[p.Name] then
+				table.insert(parts, p)
+				if p.Name == "Vest" then
+					origin = p
+				end
+			end
+		end
+	end
+	if not origin then
+		return nil
+	end
+	local model = Instance.new("Model")
+	model.Name = "Picture" .. id
+	local toItem = origin.CFrame:Inverse()
+	local copies, lo, hi = {}, nil, nil
+	for _, p in ipairs(parts) do
+		local ok, copy = pcall(p.Clone, p) -- (nil when it can't be copied: Archivable off)
+		if ok and copy then
+			-- Only what it looks like stays: no welds, scripts, sounds, the muzzle's flash and light.
+			for _, c in ipairs(copy:GetChildren()) do
+				if not (c:IsA("DataModelMesh") or c:IsA("SurfaceAppearance") or c:IsA("Decal")) then
+					c:Destroy()
+				end
+			end
+			copy.Anchored = true
+			copy.CFrame = toItem * p.CFrame
+			local half = copy.Size / 2
+			for sx = -1, 1, 2 do
+				for sy = -1, 1, 2 do
+					for sz = -1, 1, 2 do
+						local v = copy.CFrame * Vector3.new(sx * half.X, sy * half.Y, sz * half.Z)
+						lo = lo and Vector3.new(math.min(lo.X, v.X), math.min(lo.Y, v.Y), math.min(lo.Z, v.Z)) or v
+						hi = hi and Vector3.new(math.max(hi.X, v.X), math.max(hi.Y, v.Y), math.max(hi.Z, v.Z)) or v
+					end
+				end
+			end
+			table.insert(copies, copy)
+		end
+	end
+	if not lo then
+		model:Destroy()
+		return nil
+	end
+	local mid = (lo + hi) / 2
+	for _, copy in ipairs(copies) do
+		copy.CFrame = CFrame.new(-mid) * copy.CFrame
+		copy.Parent = model
+	end
+	model.WorldPivot = CFrame.new() -- (turnPreview turns it about its middle)
+	local look = { model = model, half = (hi - lo) / 2, face = face }
+	shop.looks[id] = look
+	return look
+end
+
+-- Show one item on the panel's right side (id: a gun id or K.ARMOR_ID): its picture in the
+-- ViewportFrame, its name, what its card's BUY button says, one line about it and its numbers. The
+-- same id again only brings the words up to date (cash, rank, armor changed) and frames the picture
+-- again (the panel changed size).
+local function showItem(id)
+	local d = shop.detail
+	local g = Combat.Gun(id)
+	if not d or (not g and id ~= K.ARMOR_ID) then
+		return
+	end
+	local rec = nil
+	for _, row in ipairs(shop.rows) do
+		local on = row.id == id
+		row.accent.Visible = on
+		row.card.BackgroundTransparency = on and 0.2 or 0.45
+		if on then
+			rec = row
+		end
+	end
+	if shop.shown ~= id then
+		shop.shown = id
+		shop.spin = 0
+		if shop.look then
+			shop.look.model.Parent = nil
+		end
+		shop.look = nil
+	end
+	if not shop.look then
+		shop.look = lookOf(id)
+		if shop.look then
+			shop.look.model:PivotTo(shop.look.face)
+			shop.look.model.Parent = d.view
+		end
+	end
+	local look = shop.look
+	d.empty.Visible = look == nil
+	d.empty.Text = string.upper(g and (g.Class or "Gun") or "Armor")
+	if look then
+		-- Far enough back that every corner of its box stays in view at every point of its turn, measured
+		-- at 16 steps round (K.SHOP_PAD covers the angles between): no part of it ever leaves the picture.
+		local size = d.view.AbsoluteSize
+		local aspect = (size.X > 1 and size.Y > 1) and size.X / size.Y or 2
+		local tanV = math.tan(math.rad(K.SHOP_FOV / 2))
+		local tanH = tanV * aspect
+		local tilt = math.rad(K.SHOP_TILT)
+		local fwd = Vector3.new(0, -math.sin(tilt), -math.cos(tilt)) -- where the camera looks (its right is +X)
+		local up = Vector3.new(0, math.cos(tilt), -math.sin(tilt))
+		local h = look.half
+		local need = 0.1
+		for step = 0, 15 do
+			local turn = CFrame.Angles(0, step * math.pi / 8, 0) * look.face
+			for sx = -1, 1, 2 do
+				for sy = -1, 1, 2 do
+					for sz = -1, 1, 2 do
+						local w = turn * Vector3.new(sx * h.X, sy * h.Y, sz * h.Z)
+						local ahead = w:Dot(fwd) -- (a corner nearer the camera looks bigger)
+						need = math.max(need, math.abs(w.X) / tanH - ahead, math.abs(w:Dot(up)) / tanV - ahead)
+					end
+				end
+			end
+		end
+		d.cam.CFrame = CFrame.lookAt(-fwd * need * K.SHOP_PAD, Vector3.zero)
+	end
+	-- The words: the same price / OWNED / RANK / FULL as its card's button, in its colour.
+	local kind = rec and rec.kind or "off"
+	d.name.Text = string.upper(g and g.Name or K.ARMOR_ITEM.Name or "Body Armor")
+	d.state.Text = rec and rec.button.Text or ""
+	d.state.TextColor3 = (kind == "buy" and C.Cash) or (kind == "poor" and C.Danger) or (kind == "locked" and C.Gold) or C.Dim
+	local lines -- { tag, bar (0..1, or nil for none), value, bar colour }
+	if g then
+		local pellets = g.Pellets or 1
+		local damage, rate, range = Combat.Stats(g)
+		d.sub.Text = string.upper(g.Class or "Gun") .. (g.Auto and " · FULL AUTO" or " · SEMI-AUTO")
+			.. (pellets > 1 and (" · " .. pellets .. " PELLETS") or "")
+			.. (kind == "locked" and (" · NEEDS FREE-ROAM RANK " .. tostring(g.Rank or 1)) or "")
+		lines = {
+			{ "DAMAGE", damage, (pellets > 1 and (pellets .. " × ") or "") .. tostring(g.Damage) .. " per shot" },
+			{ "FIRE RATE", rate, string.format("%.1f shots/s", 1 / g.Interval) },
+			{ "RANGE", range, tostring(g.Range) .. " studs" },
+			{ "MAGAZINE", nil, tostring(g.Mag) .. " rounds" },
+			{ "RELOAD", nil, string.format("%.1f s", g.Reload) },
+		}
+	else
+		local armor = math.floor(Combat.ArmorOf(player) + 0.5)
+		local share = Combat.CarHit and Combat.CarHit.ArmorShare
+		d.sub.Text = "TAKES THE HITS BEFORE YOUR HEALTH DOES"
+		lines = {
+			{ "YOU HAVE", armor / K.ARMOR_MAX, armor .. " / " .. K.ARMOR_MAX, C.Armor },
+			{ "TAKES FIRST", nil, "shots and punches" },
+			{ "CAR HITS", nil, share and ("up to " .. math.floor(share * 100 + 0.5) .. "%") or "partly" },
+			{ "ONE BUY", nil, "fills it to " .. K.ARMOR_MAX },
+			{ "SAVED", nil, "when you leave" },
+		}
+	end
+	for i, line in ipairs(d.lines) do
+		local data = lines[i]
+		line.tag.Text = data and data[1] or ""
+		line.value.Text = data and data[3] or ""
+		line.bar.Visible = data ~= nil and data[2] ~= nil
+		if data and data[2] then
+			line.fill.Size = UDim2.fromScale(math.clamp(data[2], 0, 1), 1)
+			line.fill.BackgroundColor3 = data[4] or C.Text
+		end
+	end
+end
+
+-- Every frame while the panel is open: the picture turns, slowly past the item's two best sides (a
+-- gun's left and right, the vest's front and back) and quickly past its ends (a gun seen end-on is only
+-- a muzzle). One small ViewportFrame redrawing a handful of parts.
+local function turnPreview(dt)
+	local look = shop.look
+	if not look then
+		return
+	end
+	shop.spin = (shop.spin + dt * 2 * math.pi / K.SHOP_TURN) % (2 * math.pi)
+	local yaw = shop.spin - K.SHOP_LINGER * math.sin(2 * shop.spin)
+	look.model:PivotTo(CFrame.Angles(0, yaw, 0) * look.face)
+end
+
+-- Prices, OWNED, rank locks and the armor card, from our own attributes (Guns, Armor, Cash, CivRank);
+-- then the right side, so it says the same.
 local function refreshShop()
 	if not shop.gui then
 		return
@@ -2737,6 +2986,7 @@ local function refreshShop()
 		else
 			local armor = Combat.ArmorOf(player)
 			row.fill.Size = UDim2.fromScale(armor / K.ARMOR_MAX, 1)
+			row.sub.Text = "YOU HAVE " .. math.floor(armor + 0.5) .. " / " .. K.ARMOR_MAX
 			if armor >= K.ARMOR_MAX then
 				text, kind = "FULL", "off"
 			end
@@ -2758,17 +3008,25 @@ local function refreshShop()
 		b.AutoButtonColor = kind ~= "off"
 		b.Selectable = kind ~= "off"
 		if kind == "off" and GuiService.SelectedObject == b then
-			GuiService.SelectedObject = shop.close -- (a gamepad just bought this one)
+			GuiService.SelectedObject = row.card -- (a gamepad just bought this one: it stays on the item)
 		end
+	end
+	if shop.shown then
+		showItem(shop.shown)
 	end
 end
 
+-- Shrink the panel to the screen, but never past K.SHOP_MIN_SCALE (the words would get too small to
+-- read): below that it gets shorter instead, the list on the left scrolls and the picture shrinks.
 local function fitShop()
 	if not shop.gui then
 		return
 	end
 	local vp = Workspace.CurrentCamera.ViewportSize
-	shop.scale.Scale = math.min(1, (vp.X - 16) / K.SHOP_W, (vp.Y - 16) / shop.height)
+	local scale = math.min(1, (vp.X - 16) / K.SHOP_W, math.max((vp.Y - 16) / shop.height, K.SHOP_MIN_SCALE))
+	shop.scale.Scale = scale
+	local h = math.clamp(math.floor((vp.Y - 16) / scale), math.min(shop.minHeight, shop.height), shop.height)
+	shop.panel.Size = UDim2.fromOffset(K.SHOP_W, h)
 end
 
 local function buildShop()
@@ -2788,7 +3046,11 @@ local function buildShop()
 			table.insert(guns, g)
 		end
 	end
-	local height = K.SHOP_TOP + (#guns + 1) * (K.SHOP_ROW + 4) + K.SHOP_NOTE
+	-- Tall enough for the whole list (every gun, the ARMOR heading, the armor card, 4 px between them):
+	-- with nothing below a fold, armor is always on screen next to the guns.
+	local height = K.SHOP_TOP + (#guns + 1) * (K.SHOP_ROW + 4) + K.SHOP_HEAD + K.SHOP_NOTE
+	local statsH = 5 * K.SHOP_STAT
+	local pictureTop = 46 -- (under the item's name and its one line)
 
 	local panel = Instance.new("Frame")
 	panel.Name = "Panel"
@@ -2802,9 +3064,15 @@ local function buildShop()
 	scale.Parent = panel
 
 	local title = label(panel, "Title", 22, "Display", string.upper(K.SHOP.Name or "Coast Arms"))
-	title.Position = UDim2.fromOffset(14, 0)
-	title.Size = UDim2.fromOffset(200, K.SHOP_TOP)
+	title.Position = UDim2.fromOffset(14, 4)
+	title.Size = UDim2.fromOffset(260, 26)
 	title.TextXAlignment = Enum.TextXAlignment.Left
+	-- What it sells, right under its name: armor is said up front, not only at the bottom of the list.
+	local kindLabel = label(panel, "Kind", 11, "Bold", string.upper(K.SHOP.Kind or "Guns & body armor"))
+	kindLabel.Position = UDim2.fromOffset(14, 29)
+	kindLabel.Size = UDim2.fromOffset(260, 14)
+	kindLabel.TextXAlignment = Enum.TextXAlignment.Left
+	kindLabel.TextColor3 = C.Dim
 	local cash = label(panel, "Cash", 18, "Display", "")
 	cash.AnchorPoint = Vector2.new(1, 0)
 	cash.Position = UDim2.new(1, -58, 0, 0)
@@ -2825,26 +3093,58 @@ local function buildShop()
 		closeShop()
 	end)
 
+	-- Left: the list of cards. It only scrolls when fitShop had to make the panel shorter than the list.
+	local list = Instance.new("ScrollingFrame")
+	list.Name = "List"
+	list.Position = UDim2.fromOffset(8, K.SHOP_TOP)
+	list.Size = UDim2.new(0, K.SHOP_LIST_W, 1, -(K.SHOP_TOP + K.SHOP_NOTE))
+	list.BackgroundTransparency = 1
+	list.BorderSizePixel = 0
+	list.Selectable = false -- (the gamepad stops on the cards and BUY buttons, never on the list itself)
+	list.ScrollingDirection = Enum.ScrollingDirection.Y
+	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	list.CanvasSize = UDim2.new()
+	list.ScrollBarThickness = 4
+	list.ScrollBarImageColor3 = C.Dim
+	list.Parent = panel
+	local layout = Instance.new("UIListLayout")
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 4)
+	layout.Parent = list
+
 	local rows = {}
-	-- One row: the name and a small line under it on the left, bars in the middle, the BUY button on the right.
+	-- One card: the name and a small line under it on the left, the BUY button on the right. Pointing at
+	-- it (the mouse over it or its button, a tap on it, the gamepad's selection) shows it on the right;
+	-- only BUY buys.
 	local function addRow(index, id, name, sub, price, g)
-		local row = Instance.new("Frame")
-		row.Name = id
-		row.Position = UDim2.fromOffset(8, K.SHOP_TOP + (index - 1) * (K.SHOP_ROW + 4))
-		row.Size = UDim2.new(1, -16, 0, K.SHOP_ROW)
-		row.BackgroundColor3 = C.PanelLight
-		row.BackgroundTransparency = 0.45
-		row.BorderSizePixel = 0
-		Theme.Corners(row)
-		row.Parent = panel
-		local nameLabel = label(row, "Name", 18, "Display", string.upper(name))
+		local card = Instance.new("TextButton")
+		card.Name = id
+		card.LayoutOrder = index + (g and 0 or 1) -- (armor comes after its heading)
+		card.Size = UDim2.new(1, -6, 0, K.SHOP_ROW) -- (6 px: room for the scroll bar)
+		card.Text = ""
+		card.AutoButtonColor = false
+		card.BackgroundColor3 = C.PanelLight
+		card.BackgroundTransparency = 0.45
+		card.BorderSizePixel = 0
+		Theme.Corners(card)
+		card.Parent = list
+		-- A thin brand-pink line at its left edge while the right side shows this one.
+		local accent = Instance.new("Frame")
+		accent.Name = "Shown"
+		accent.Position = UDim2.fromOffset(0, 8)
+		accent.Size = UDim2.new(0, 3, 1, -16)
+		accent.BackgroundColor3 = C.Brand
+		accent.BorderSizePixel = 0
+		accent.Visible = false
+		accent.Parent = card
+		local nameLabel = label(card, "Name", 18, "Display", string.upper(name))
 		nameLabel.Position = UDim2.fromOffset(10, 6)
-		nameLabel.Size = UDim2.fromOffset(150, 22)
+		nameLabel.Size = UDim2.fromOffset(170, 22)
 		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
 		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
-		local subLabel = label(row, "Sub", 11, "Body", sub)
-		subLabel.Position = UDim2.fromOffset(10, 30)
-		subLabel.Size = UDim2.fromOffset(150, 16)
+		local subLabel = label(card, "Sub", 12, "Body", sub)
+		subLabel.Position = UDim2.fromOffset(10, 29)
+		subLabel.Size = UDim2.fromOffset(170, 16)
 		subLabel.TextXAlignment = Enum.TextXAlignment.Left
 		subLabel.TextTruncate = Enum.TextTruncate.AtEnd
 		subLabel.TextColor3 = C.Dim
@@ -2855,40 +3155,127 @@ local function buildShop()
 		b.Size = UDim2.fromOffset(100, K.SHOP_ROW - 8) -- 48 px: a full touch target even on a short phone
 		b.TextSize = 17
 		b.Text = ""
-		b.Parent = row
-		local rec = { id = id, gun = g, price = price, button = b, kind = "off" }
+		b.Parent = card
+		local rec = { id = id, gun = g, price = price, button = b, card = card, accent = accent, sub = subLabel, kind = "off" }
+		local function point()
+			if shop.shown ~= id or not shop.look then -- (no picture yet: try again)
+				showItem(id)
+			end
+		end
+		card.MouseEnter:Connect(point)
+		card.Activated:Connect(point)
+		card.SelectionGained:Connect(point)
+		b.MouseEnter:Connect(point)
+		b.SelectionGained:Connect(point)
 		b.Activated:Connect(function()
+			point()
 			if rec.kind ~= "off" then
 				buy(id)
 			end
 		end)
 		rows[index] = rec
-		return row, rec
-	end
-	local function statBar(row, line, tag, value, color)
-		local y = 9 + (line - 1) * 15
-		local tagLabel = label(row, "Tag" .. line, 10, "Body", tag)
-		tagLabel.Position = UDim2.fromOffset(168, y - 4)
-		tagLabel.Size = UDim2.fromOffset(40, 12)
-		tagLabel.TextXAlignment = Enum.TextXAlignment.Left
-		tagLabel.TextColor3 = C.Dim
-		local bar, fill = Theme.Bar(row, color)
-		bar.Position = UDim2.fromOffset(210, y)
-		bar.Size = UDim2.fromOffset(92, 5)
-		fill.Size = UDim2.fromScale(math.clamp(value, 0, 1), 1)
-		return fill
+		return card, rec
 	end
 	for i, g in ipairs(guns) do
 		local sub = string.upper(g.Class or "GUN") .. (g.Auto and " · AUTO" or "") .. " · MAG " .. tostring(g.Mag)
-		local row = addRow(i, g.Id, g.Name, sub, g.Price or 0, g)
-		local damage, rate, range = Combat.Stats(g)
-		statBar(row, 1, "DMG", damage, C.Text)
-		statBar(row, 2, "RATE", rate, C.Text)
-		statBar(row, 3, "RANGE", range, C.Text)
+		addRow(i, g.Id, g.Name, sub, g.Price or 0, g)
 	end
-	local armorRow, armorRec = addRow(#guns + 1, K.ARMOR_ITEM.Id or "Armor", K.ARMOR_ITEM.Name or "Body Armor", "TAKES THE HITS FIRST",
+	-- Armor under its own heading, in armor blue: its own kind of item, not a fifth gun.
+	local heading = label(list, "ArmorHeading", 11, "Bold", "ARMOR · TAKES THE HITS FIRST")
+	heading.LayoutOrder = #guns + 1
+	heading.Size = UDim2.new(1, -6, 0, K.SHOP_HEAD)
+	heading.TextXAlignment = Enum.TextXAlignment.Left
+	heading.TextYAlignment = Enum.TextYAlignment.Bottom
+	heading.TextColor3 = C.Armor
+	local inset = Instance.new("UIPadding")
+	inset.PaddingLeft = UDim.new(0, 10)
+	inset.Parent = heading
+	local armorCard, armorRec = addRow(#guns + 1, K.ARMOR_ID, K.ARMOR_ITEM.Name or "Body Armor", "",
 		K.ARMOR_ITEM.Price or 1500, nil)
-	armorRec.fill = statBar(armorRow, 2, "ARMOR", 0, C.Armor)
+	armorRec.sub.TextColor3 = C.Armor -- ("YOU HAVE x / 100": refreshShop)
+	local armorBar, armorFill = Theme.Bar(armorCard, C.Armor)
+	armorBar.Position = UDim2.fromOffset(10, 47)
+	armorBar.Size = UDim2.fromOffset(170, 4)
+	armorRec.fill = armorFill
+
+	-- Right: the item you point at (showItem fills it). Its name and what its BUY says on top, one line
+	-- about it, the turning picture, and five lines of numbers at the bottom.
+	local detail = Instance.new("Frame")
+	detail.Name = "Detail"
+	detail.Position = UDim2.fromOffset(K.SHOP_LIST_W + 16, K.SHOP_TOP)
+	detail.Size = UDim2.new(1, -(K.SHOP_LIST_W + 24), 1, -(K.SHOP_TOP + K.SHOP_NOTE))
+	detail.BackgroundTransparency = 1
+	detail.Parent = panel
+	local dName = label(detail, "Name", 22, "Display", "")
+	dName.Size = UDim2.new(1, -112, 0, 26)
+	dName.TextXAlignment = Enum.TextXAlignment.Left
+	dName.TextTruncate = Enum.TextTruncate.AtEnd
+	local dState = label(detail, "State", 18, "Display", "")
+	dState.AnchorPoint = Vector2.new(1, 0)
+	dState.Position = UDim2.fromScale(1, 0)
+	dState.Size = UDim2.fromOffset(110, 26)
+	dState.TextXAlignment = Enum.TextXAlignment.Right
+	local dSub = label(detail, "Sub", 12, "Body", "")
+	dSub.Position = UDim2.fromOffset(0, 26)
+	dSub.Size = UDim2.new(1, 0, 0, 16)
+	dSub.TextXAlignment = Enum.TextXAlignment.Left
+	dSub.TextTruncate = Enum.TextTruncate.AtEnd
+	dSub.TextColor3 = C.Dim
+	-- The picture: lit from the front, above and to the right, on a light grey so a black gun shows.
+	local view = Instance.new("ViewportFrame")
+	view.Name = "Picture"
+	view.Position = UDim2.fromOffset(0, pictureTop)
+	view.Size = UDim2.new(1, 0, 1, -(pictureTop + 6 + statsH))
+	view.BackgroundColor3 = C.Dim
+	view.BackgroundTransparency = K.SHOP_BACKDROP
+	view.BorderSizePixel = 0
+	view.Ambient = Color3.fromRGB(170, 170, 176)
+	view.LightColor = Color3.fromRGB(255, 255, 255)
+	view.LightDirection = Vector3.new(-0.6, -1, -0.8)
+	Theme.Corners(view)
+	view.Parent = detail
+	local cam = Instance.new("Camera")
+	cam.FieldOfView = K.SHOP_FOV
+	cam.Parent = view
+	view.CurrentCamera = cam
+	-- (Only while there is no picture: the gun's class in big letters.)
+	local empty = label(detail, "NoPicture", 24, "Display", "")
+	empty.Position = view.Position
+	empty.Size = view.Size
+	empty.ZIndex = 2
+	empty.TextTransparency = 0.3
+	empty.Visible = false
+	view:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if shop.shown then
+			showItem(shop.shown) -- (frame it again for the new shape)
+		end
+	end)
+	local stats = Instance.new("Frame")
+	stats.Name = "Numbers"
+	stats.AnchorPoint = Vector2.new(0, 1)
+	stats.Position = UDim2.fromScale(0, 1)
+	stats.Size = UDim2.new(1, 0, 0, statsH)
+	stats.BackgroundTransparency = 1
+	stats.Parent = detail
+	local lines = {}
+	for i = 1, 5 do
+		-- One line: what it is (left), a bar (middle, only some lines), the number (right).
+		local y = (i - 1) * K.SHOP_STAT
+		local tag = label(stats, "Tag" .. i, 12, "Bold", "")
+		tag.Position = UDim2.fromOffset(0, y)
+		tag.Size = UDim2.fromOffset(90, K.SHOP_STAT)
+		tag.TextXAlignment = Enum.TextXAlignment.Left
+		tag.TextColor3 = C.Dim
+		local bar, fill = Theme.Bar(stats, C.Text)
+		bar.Position = UDim2.fromOffset(92, y + 8)
+		bar.Size = UDim2.new(1, -(92 + 120), 0, 6)
+		local value = label(stats, "Value" .. i, 16, "Display", "")
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.Position = UDim2.new(1, 0, 0, y)
+		value.Size = UDim2.fromOffset(114, K.SHOP_STAT)
+		value.TextXAlignment = Enum.TextXAlignment.Right
+		lines[i] = { tag = tag, bar = bar, fill = fill, value = value }
+	end
 
 	-- The bottom line: what you just bought and how to get at it. (A stamp would sit behind this panel.)
 	local note = label(panel, "Note", 13, "Bold", "")
@@ -2901,6 +3288,8 @@ local function buildShop()
 
 	shop.gui, shop.panel, shop.scale, shop.cash, shop.close = sg, panel, scale, cash, close
 	shop.rows, shop.height = rows, height
+	shop.minHeight = K.SHOP_TOP + pictureTop + 6 + statsH + 60 + K.SHOP_NOTE -- (a picture 60 px tall at least)
+	shop.detail = { name = dName, state = dState, sub = dSub, view = view, cam = cam, empty = empty, lines = lines }
 end
 
 -- Too far from the counter, sitting, down, not a citizen any more, or the phone came out: it closes.
@@ -2965,11 +3354,13 @@ local function openShop(prompt)
 	fitShop()
 	refreshShop()
 	shop.gui.Enabled = true
+	-- The right side starts on what it showed last time (the first gun the first time).
+	showItem(shop.shown or (shop.rows[1] and shop.rows[1].id))
 	SoundClient.Play("Click")
 	updateBackpack()
 	refreshTouch()
 	if mode == "gamepad" then
-		-- Start on the first thing that can be bought (A buys, B closes).
+		-- Start on the first thing that can be bought (A buys, B closes; the right side follows the selection).
 		local first = shop.close
 		for _, row in ipairs(shop.rows) do
 			if row.kind ~= "off" then
@@ -3693,8 +4084,11 @@ function CombatClient.Init()
 			end
 		end
 	end)
-	RunService.RenderStepped:Connect(function()
+	RunService.RenderStepped:Connect(function(dt)
 		updateTracers()
+		if shop.open then
+			turnPreview(dt) -- (the shop panel's picture)
+		end
 		-- Ten times a second: other players' arms (their aim, their punches).
 		local t = os.clock()
 		if t - S.othersAt >= 0.1 then

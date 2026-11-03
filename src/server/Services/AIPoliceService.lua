@@ -89,7 +89,7 @@ local function targetInfo(p)
 	end
 	local seat = hum.SeatPart
 	local car = seat and seat.Parent
-	local chassis = car and car.PrimaryPart
+	local chassis = car and car:IsA("Model") and car.PrimaryPart -- (a home's chair sits in a Folder)
 	if chassis then
 		return { pos = chassis.Position, vel = chassis.AssemblyLinearVelocity, maxSpeed = car:GetAttribute("MaxSpeed") or 120, inCar = true,
 			boat = car:GetAttribute("Boat") == true }

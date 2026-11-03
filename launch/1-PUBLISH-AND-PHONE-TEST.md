@@ -32,6 +32,13 @@ so leaving it on is harmless; turn it off if you prefer.
 
 ## Publish
 
+**Done Nov 2, 2026 (closed, not released):** THEFT MIAMI COAST, owner NightShift_Dev, place
+121416734424826 (https://www.roblox.com/games/121416734424826), universe 10774451152. Team Create and
+Data Sharing (Gen AI training) were switched off; Computer, Phone, Tablet and VR are on. Studio now has
+the published place open: Ctrl+S saves it to Roblox, so use File > Save to File As > `NeonCoast.rbxl` to
+keep the local file (and git) in step, and File > Publish to update the game. From the old local file,
+publish with **Update existing experience** so you don't make a second game.
+
 File > **Publish**. In the Game details window, enter the name **THEFT MIAMI COAST**, the genre and the
 description (launch/4), add the icon, then click **Save**. This first publish doesn't release the game.
 (If you already published it under another name, rename it in the Creator Hub instead.)

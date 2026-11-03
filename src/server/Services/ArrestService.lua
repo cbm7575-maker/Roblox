@@ -399,7 +399,8 @@ local function onSpike(cop)
 	if not root then
 		return
 	end
-	local basis = hum.SeatPart and hum.SeatPart.Parent.PrimaryPart or root
+	local holder = hum.SeatPart and hum.SeatPart.Parent
+	local basis = (holder and holder:IsA("Model") and holder.PrimaryPart) or root
 	local look = basis.CFrame.LookVector * Vector3.new(1, 0, 1)
 	look = look.Magnitude > 0.1 and look.Unit or Vector3.new(0, 0, -1)
 	local hit = groundBelow(basis.Position + look * SPIKE_AHEAD)

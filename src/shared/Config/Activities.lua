@@ -114,7 +114,8 @@ Activities.RaceRules = {
 	NPCCatchUp = 0.05, -- NPCs ease off this much while they lead every player, push this much while they trail all
 	Pay = { 1, 0.6, 0.35 }, -- share of Reward by place (1st also gets ParBonus at or under par)...
 	PayRest = 0.15, -- ...and for every later place
-	SpotChance = 0.35, -- chance the police spot a race (not on the water): +1 star for everyone still racing...
+	SpotChance = 0, -- chance the police spot a race (not on the water): +1 star for everyone still racing...
+	-- (0 since Nov 2: owner, "after you do a street race, it should not give you a star"; was 0.35)
 	SpotFrom = 0.25, -- ...at a random moment between these shares of par after GO
 	SpotTo = 0.6,
 }

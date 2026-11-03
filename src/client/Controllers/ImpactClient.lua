@@ -2,13 +2,24 @@
 -- Bumps you can feel, kid-friendly (nobody ever gets hurt or loses health):
 --   * Driving: your device owns your car's physics, so every frame it looks for the first touch with
 --     another car (Workspace.Vehicles) or another player on foot (1 s cooldown per thing hit).
---       - Another car, closing faster than 20 studs/s: if you drove into it you keep only 40-55% of
---         your speed (less the more head-on). Crash sound and a little camera shake either way.
+--       - Another car, closing faster than 20 studs/s, that you drove into: a real bump. Along the face
+--         you hit, your car loses (1 + K.RESTITUTION) x the other car's mass / both masses of the closing
+--         speed (all of it plus the bounce against a car that can't move: held for a race start, or a
+--         wall right behind it), and a little of the sideways rub (K.FRICTION). So nudging a race rival
+--         going nearly your speed costs you nearly nothing, and a parked car your weight takes about 60%
+--         of the hit off you. (It used to cost 45-60% of ALL your speed whatever the other car was doing:
+--         tapping a rival at 110 dropped you to about 50, "like my car broke".) Then the server is asked
+--         to push that car the other way (CarBump; ImpactService checks it and caps it), except a
+--         player's car clearly driving into you too (faster than K.MUTUAL): their device does their side.
+--         Crash sound and a little camera shake either way (also when it drove into you). For
+--         K.STEADY_TIME after the bump (and after a pass-through below ends) the contact can't tip your
+--         car over or throw it up: pitch and roll spin, yaw spin and the climb are held under K.TILT_MAX,
+--         K.SPIN_MAX and K.LIFT_MAX.
 --         Someone else's device (or the server) simulates that car, so on yours it's an immovable wall
---         that would still stop you dead or bounce you back, and it only moves on your screen once
---         your car's shove has reached its owner and come back (about 0.15-0.5 s). So for 0.35 s your
---         car keeps at least 70% of the speed it kept (never more than that; it lets go if you brake
---         or a wall stops you), and:
+--         that would still stop you dead or bounce you back, and it only moves on your screen once the
+--         push has reached whoever runs it and come back (about 0.15-0.5 s). So for 0.35 s your car
+--         keeps at least 70% of the speed it kept (never more than that; it lets go if you brake or a
+--         wall stops you; nothing to keep when the bump stopped you or threw you back), and:
 --           . Fairly straight into a car that isn't driving at you (parked, slower, crossing) and has
 --             room to be shoved (no wall right behind it, not held for a race start): that car and
 --             anyone in it turn pass-through on this device only. You sink into it only as deep as
@@ -22,7 +33,16 @@
 --           . A side-swipe, head-on into a car driving at you too, or a car that can't be shoved: no
 --             pass-through. You slide along it (your heading minus the part going into it), or glance
 --             off to your side of it.
---           . AI patrol cars (AIPolice) stay solid walls with no push.
+--           . AI patrol cars (AIPolice) stay solid walls here (no pass-through, no slide), but the
+--             server still pushes them.
+--       - Shoved (server "CarShove": someone else drove into a car this device runs, the one you drive
+--         or yours you just got out of): its speed along the push is topped up to what the server asks
+--         (never more than the push itself, so a shove our own physics already gave counts), plus a
+--         little yaw; on the car you drive the tyres let go for a moment by how much of it came from the
+--         side (DriveController.Skid, K.SKID), so a T-bone slides you instead of the grip cancelling it in
+--         one step, the contact can't tip you (as above), and the crash sound and shake play once (not
+--         again when that car's touch shows here). Not when we drove into that same car ourselves within
+--         K.SELF_SKIP s: our side of that crash is done already.
 --       - A person on foot: your car loses about 25% of its speed and the server is told (ImpactHit,
 --         with how fast we hit them); ImpactService checks it, knocks them over and CombatService.CarHit
 --         takes health by the speed. Someone already lying in the road is hit too (run over again: no
@@ -73,10 +93,13 @@ local ImpactClient = {}
 
 local HIT_COOLDOWN = 1 -- seconds before the same car or person can count as a new hit
 local CAR_HIT_SPEED = 20 -- closing speed (studs/s) that counts as a crash
-local CAR_KEEP_GLANCING, CAR_KEEP_HEADON = 0.55, 0.4 -- share of your speed kept after hitting a car
 local PERSON_HIT_SPEED = 20
 local PERSON_KEEP = 0.75
 local PERSON_MARGIN = 1.5 -- studs around the chassis that count as touching someone
+-- The hit tests reach a frame ahead (speed x frame time). A stutter frame (a phone hitch, a streaming
+-- pause) would make that reach huge: a "hit" from 30 studs out that the server turns down, and the
+-- cooldown it starts swallowing the real hit a moment later. So a frame counts as this long at most.
+local MAX_REACH_DT = 1 / 15
 local KNOCK_TIME = 2.5
 local KO_SECONDS = tonumber(Combat.KOSeconds) or 5 -- a knock this long is a combat knockout (CombatClient's stamp)
 local IMMUNE_AFTER = 2 -- after getting up, local knocks (traffic) wait this long
@@ -106,9 +129,34 @@ local REACT_EXTRA, REACT_MIN, REACT_MAX = 0.15, 0.15, 0.5
 local BACK_OUT = 5 -- studs/s at most that we ease back out of a car whose pass-through is ending
 local CLEAR_GAP = 0.3 -- studs apart we ease out to; collisions come back from 0.1 apart
 
+-- Car-to-car bumps (see the header).
+local K = {
+	-- Share of the closing speed the two cars spring apart with (1 would be a perfect bounce): well under
+	-- 1, cars crumple. The same number as ImpactService's K.RESTITUTION (the other car's side of the bump).
+	RESTITUTION = 0.25,
+	FRICTION = 0.25, -- sideways rub lost in a bump, as a share of the speed it takes off along the face
+	MIN_CLOSING = 12, -- studs/s into the other car below which the server isn't asked (its own minimum)
+	-- A player's car coming at us faster than this (studs/s) does its own side of the bump: its device
+	-- counts "drove into it" from 8, so between 8 and this both sides may ask, and the receiving device
+	-- skips a shove from a car it drove into itself (SELF_SKIP). Never neither.
+	MUTUAL = 12,
+	MAX_PUSH = 70, -- studs/s: the most the server ever pushes a car (ImpactService's K.MAX_PUSH)
+	MAX_SPIN = 1.5, -- rad/s of yaw a shove may give (ImpactService's K.MAX_SPIN)
+	SELF_SKIP = 0.6, -- seconds
+	SKID = 0.8, -- how far our tyres let go (CarPhysics' Slide, 0-1) when shoved square from the side...
+	SKID_FULL = 25, -- ...by this many studs/s or more (less: less)
+	STEADY_TIME = 0.5, -- seconds after a bump that the contact can't tip our car or throw it up...
+	TILT_MAX = 1.5, -- ...rad/s of pitch and roll spin it may have then
+	SPIN_MAX = 4, -- ...rad/s of yaw (a hit on a corner still turns it; VehicleGuard's limit is 25)
+	LIFT_MAX = 10, -- ...studs/s up
+}
+
 local lastHit = setmetatable({}, { __mode = "k" }) -- [car model or Player] = os.clock()
+local bumped = setmetatable({}, { __mode = "k" }) -- [car model] = os.clock() we last drove into it ourselves
 local hitRemote
 local trafficRemote -- TrafficHit: a traffic car (this device only) knocked us over
+local bumpRemote -- CarBump: we drove into another car, the server pushes it
+local steadyCar, steadyUntil = nil, 0 -- the car held steady after a bump, and until when (os.clock())
 local shakeUntil, shakeAmp = 0, 0
 local knocked = nil -- { hum, endAt = os.clock() to get up, timers } while this character is on the ground
 local safeUntil = 0
@@ -661,6 +709,11 @@ local function keepGhost(car, g, now)
 		and boxesTouch(a.CFrame, a.Size / 2, b.CFrame, b.Size / 2, 0.1)
 end
 
+-- Hold `car` steady for K.STEADY_TIME from now (holdSteady, run by checkHits while we drive it).
+local function steady(car)
+	steadyCar, steadyUntil = car, os.clock() + K.STEADY_TIME
+end
+
 local function unghostCars()
 	local now = os.clock()
 	for car, g in pairs(carGhosts) do
@@ -668,6 +721,10 @@ local function unghostCars()
 		if not ok or not keep then
 			carGhosts[car] = nil
 			restoreCar(g)
+			-- (collisions are back: if the cars still touch, the push apart mustn't tip ours over either)
+			if g.by then
+				steady(g.by)
+			end
 		end
 	end
 end
@@ -767,20 +824,26 @@ local function sinkBudget(chassis, oc, n)
 	return math.clamp(math.min(budget, extent(ocf, ohalf, n) - 1), 0, MAX_SINK)
 end
 
--- We drove into `other` (oc = its chassis) at myFlat and kept `keep` of it: set up the push (see the
--- header), making `other` pass-through if we're about to shove it rather than meet it head-on.
-local function startPush(chassis, car, other, oc, myFlat, dir, keep)
-	local kept = myFlat.Magnitude * keep
+-- We drove into `other` (oc = its chassis) at myFlat, on face n (flat, toward it), and the bump left us
+-- moving at `after` (flat); free: it has room to be shoved. Set up the push (see the header), making
+-- `other` pass-through if we're about to shove it rather than meet it head-on.
+local function startPush(chassis, car, other, oc, myFlat, dir, n, after, free)
+	local kept = after.Magnitude
 	local u = myFlat.Unit
-	local n = boxGap(chassis.CFrame, chassis.Size / 2, oc.CFrame, oc.Size / 2) or dir -- the face we hit
 	local into = u:Dot(n)
 	local oncoming = flat(oc.AssemblyLinearVelocity):Dot(dir) < -ONCOMING
 	local pushDir, share
-	if into > GHOST_DIRECT and not oncoming and roomBehind(oc, n, 1) > 0.5 then
-		-- Parked, slower or crossing, with room to be shoved: its own device (or the server) shoves it
-		-- once we're in (limitSink paces how fast we go in).
+	if into > GHOST_DIRECT and not oncoming and free then
+		-- Parked, slower or crossing, with room to be shoved: whoever runs it pushes it once the server
+		-- has our CarBump (limitSink paces how fast we go in until it moves here).
 		ghostCar(other, car, n, reactTime(other))
-		pushDir, share = u, 1
+		-- On along our heading by as much of it as the bump left us (nothing if we bounced back off a
+		-- much heavier car: then there's no keeping us rolling into it).
+		local along = after:Dot(u)
+		if along <= 1 or kept < 1 then
+			return
+		end
+		pushDir, share = u, along / kept
 	else
 		-- Slide along it: our heading minus the part going into it. (Also a car that can't be shoved:
 		-- pinned against a wall, or anchored for a race start.)
@@ -802,6 +865,9 @@ local function startPush(chassis, car, other, oc, myFlat, dir, keep)
 			end
 			pushDir, share = side.Unit, GLANCE_MIN
 		end
+	end
+	if kept < 1 then
+		return -- (stopped by the bump: a cap of nothing would hold the car still)
 	end
 	push = { car = car, untilT = os.clock() + PUSH_TIME, dir = pushDir, speed = kept * PUSH_FLOOR * share, cap = kept }
 end
@@ -904,22 +970,134 @@ local function slowTo(chassis, before, keep)
 	end
 end
 
+-- Our car's ground velocity right after a bump: `before` (ours, flat) into a car moving at v2 (flat, as
+-- this device sees it) on face n (flat unit, toward it); masses m1 (ours) and m2 (math.huge: it can't
+-- move). Along n we lose (1 + K.RESTITUTION) x m2 / (m1 + m2) of the closing speed, which is what a real
+-- bump does: the other car takes the rest (the server gives it that, CarBump). Across n a little of the
+-- rub comes off. Never faster than before.
+local function bounceOff(before, m1, v2, m2, n)
+	local rel = before - v2
+	local closing = rel:Dot(n)
+	if closing <= 0 then
+		return before
+	end
+	local share = 1
+	if m2 < math.huge and m1 > 0 then
+		m2 = m2 > 0 and m2 or m1 -- (an odd mass reading: count it as our own)
+		share = m2 / (m1 + m2)
+	end
+	local lost = (1 + K.RESTITUTION) * share * closing
+	local after = before - n * lost
+	local rub = rel - n * closing
+	if rub.Magnitude > 0.01 then
+		after -= rub.Unit * math.min(rub.Magnitude, K.FRICTION * lost)
+	end
+	if after.Magnitude > before.Magnitude then
+		after = after.Unit * before.Magnitude
+	end
+	return after
+end
+
 local function hitCar(chassis, car, other, oc, before, closing, toOther)
 	local myFlat = flat(before)
 	local dir = toOther.Unit
 	if myFlat:Dot(dir) > 8 then
-		-- We drove into it: lose a big chunk of speed (more when it's head-on), but never stop dead.
-		-- (If it drove into us, we only feel it: sound and shake.)
-		push = nil -- only a push this hit starts may follow it (an older one would undo this slow-down)
-		local headOn = myFlat.Magnitude > 1 and math.clamp(myFlat.Unit:Dot(dir), 0, 1) or 0
-		local keep = CAR_KEEP_GLANCING - (CAR_KEEP_GLANCING - CAR_KEEP_HEADON) * headOn
-		slowTo(chassis, before, keep)
+		-- We drove into it: a real bump (see the header). If it drove into us, we only feel it here (sound
+		-- and shake): whoever runs it did the bump, and its shove reaches us like any other.
+		push = nil -- only a push this hit starts may follow it (an older one would undo this bump)
+		local n = boxGap(chassis.CFrame, chassis.Size / 2, oc.CFrame, oc.Size / 2) or dir -- the face we hit
+		local otherFlat = flat(oc.AssemblyLinearVelocity)
+		local free = roomBehind(oc, n, 1) > 0.5 -- not held for a race start, no wall right behind it
+		local after = bounceOff(myFlat, chassis.AssemblyMass, otherFlat, free and oc.AssemblyMass or math.huge, n)
+		-- (from `before`: if the physics already stopped us dead against it this step, that was a wall
+		-- that should have given way)
+		local vel = chassis.AssemblyLinearVelocity
+		chassis.AssemblyLinearVelocity = Vector3.new(after.X, vel.Y, after.Z)
+		bumped[other] = os.clock()
+		steady(car)
 		if not other:GetAttribute("AIPolice") then
-			startPush(chassis, car, other, oc, myFlat, dir, keep)
+			startPush(chassis, car, other, oc, myFlat, dir, n, after, free)
+		end
+		-- The other car's side: whoever runs it pushes it (ImpactService checks everything and caps it).
+		local into = (myFlat - otherFlat):Dot(n)
+		local coming = -otherFlat:Dot(n)
+		local mutual = other:GetAttribute("DriverUserId") ~= nil and coming > K.MUTUAL
+		if bumpRemote and free and into > K.MIN_CLOSING and not mutual then
+			bumpRemote:FireServer(other, into, n)
 		end
 	end
 	SoundClient.Play("Crash", chassis.Position)
 	shake(0.35 + 0.45 * math.clamp(closing / 100, 0, 1))
+end
+
+-- While steady (K.STEADY_TIME after a bump): no flip and no launch from the contact. Only spin past
+-- K.TILT_MAX / K.SPIN_MAX and a climb past K.LIFT_MAX are taken off; anything gentler is left alone.
+local function holdSteady(chassis)
+	local w = chassis.AssemblyAngularVelocity
+	local up = chassis.CFrame.UpVector
+	local yaw = w:Dot(up)
+	local tilt = w - up * yaw
+	if tilt.Magnitude > K.TILT_MAX or math.abs(yaw) > K.SPIN_MAX then
+		if tilt.Magnitude > K.TILT_MAX then
+			tilt = tilt.Unit * K.TILT_MAX
+		end
+		chassis.AssemblyAngularVelocity = tilt + up * math.clamp(yaw, -K.SPIN_MAX, K.SPIN_MAX)
+	end
+	local v = chassis.AssemblyLinearVelocity
+	if v.Y > K.LIFT_MAX then
+		chassis.AssemblyLinearVelocity = Vector3.new(v.X, K.LIFT_MAX, v.Z)
+	end
+end
+
+-- The server: someone drove into `car`, a car this device runs (see the header). push: the flat velocity
+-- change; spin: yaw (rad/s); want: its speed along the push the server is after; by: the hitter's car.
+local function onShove(car, pushV, spin, want, by)
+	local folder = Workspace:FindFirstChild("Vehicles")
+	if typeof(car) ~= "Instance" or not car:IsA("Model") or not folder or car.Parent ~= folder or typeof(pushV) ~= "Vector3" then
+		return
+	end
+	local chassis = car.PrimaryPart
+	if not chassis or chassis.Anchored or not chassis:IsDescendantOf(Workspace) then
+		return
+	end
+	local p = flat(pushV)
+	local size = p.Magnitude
+	if size ~= size or size < 0.5 or size > K.MAX_PUSH + 1 then
+		return
+	end
+	if typeof(by) == "Instance" and os.clock() - (bumped[by] or -math.huge) < K.SELF_SKIP then
+		return -- we drove into that car ourselves just now: hitCar did our side of this crash
+	end
+	local dir = p / size
+	local vel = chassis.AssemblyLinearVelocity
+	local add = size
+	want = tonumber(want)
+	if want and want == want then
+		add = math.clamp(want - vel:Dot(dir), 0, size)
+	end
+	if add > 0.05 then
+		chassis.AssemblyLinearVelocity = vel + dir * add
+	end
+	spin = tonumber(spin)
+	if spin and spin == spin then
+		chassis.AssemblyAngularVelocity += Vector3.new(0, math.clamp(spin, -K.MAX_SPIN, K.MAX_SPIN), 0)
+	end
+	local status = DriveController.Status
+	if status.Driving and status.Car == car then
+		steady(car)
+		local side = math.abs(dir:Dot(flat(chassis.CFrame.RightVector))) * add
+		if side > 1 and type(DriveController.Skid) == "function" then
+			DriveController.Skid(math.clamp(side / K.SKID_FULL, 0, 1) * K.SKID)
+		end
+		-- The crash, unless checkHits already heard this car touch ours. (Pushed away first, the hitter's car
+		-- may never touch ours on this screen.) Marked as heard, so its touch now won't crash twice.
+		local now = os.clock()
+		if typeof(by) == "Instance" and now - (lastHit[by] or 0) > HIT_COOLDOWN then
+			lastHit[by] = now
+			SoundClient.Play("Crash", chassis.Position)
+			shake(0.25 + 0.35 * math.clamp(size / 60, 0, 1))
+		end
+	end
 end
 
 -- speed: how fast we went into them (studs/s; the server takes it, within what it saw, for the damage).
@@ -971,7 +1149,7 @@ local function checkHits(dt)
 				if toOther.Magnitude < half.Magnitude + oc.Size.Magnitude / 2 + 8 and toOther.Magnitude > 0.1 then
 					local closing = (myFlat - flat(oc.AssemblyLinearVelocity)):Dot(toOther.Unit)
 					-- Look a frame ahead so we catch it just before the bodies meet.
-					local margin = 0.75 + math.max(closing, 0) * dt * 1.5
+					local margin = 0.75 + math.max(closing, 0) * math.min(dt, MAX_REACH_DT) * 1.5
 					if closing > CAR_HIT_SPEED and boxesTouch(cf, half, oc.CFrame, oc.Size / 2, margin) then
 						lastHit[other] = now
 						hitCar(chassis, car, other, oc, before, closing, toOther)
@@ -996,7 +1174,7 @@ local function checkHits(dt)
 			if not boat and now - (lastHit[p] or 0) > HIT_COOLDOWN then
 				local rel = cf:PointToObjectSpace(root.Position)
 				local speed = (myFlat - flat(root.AssemblyLinearVelocity)).Magnitude
-				local margin = PERSON_MARGIN + speed * dt
+				local margin = PERSON_MARGIN + speed * math.min(dt, MAX_REACH_DT)
 				if speed > PERSON_HIT_SPEED and math.abs(rel.X) < half.X + margin and math.abs(rel.Z) < half.Z + margin
 					and rel.Y > -half.Y - 3 and rel.Y < half.Y + 5 then
 					local toThem = flat(root.Position - cf.Position)
@@ -1024,6 +1202,9 @@ local function checkHits(dt)
 	if v ~= flat(vel) then
 		chassis.AssemblyLinearVelocity = Vector3.new(v.X, vel.Y, v.Z)
 	end
+	if steadyCar == car and now < steadyUntil then
+		holdSteady(chassis)
+	end
 	prevChassis, prevVel = chassis, chassis.AssemblyLinearVelocity
 end
 
@@ -1048,6 +1229,15 @@ function ImpactClient.Init()
 	end)
 	task.spawn(function()
 		trafficRemote = Remotes.Event("TrafficHit")
+	end)
+	task.spawn(function()
+		bumpRemote = Remotes.Event("CarBump")
+	end)
+	Remotes.OnClient("CarShove", function(...)
+		local ok, err = pcall(onShove, ...)
+		if not ok then
+			warn("[ImpactClient] shove: " .. tostring(err))
+		end
 	end)
 	Remotes.OnClient("Knockdown", function(dir, speed, seconds)
 		if typeof(dir) ~= "Vector3" or dir.X ~= dir.X or dir.Z ~= dir.Z then

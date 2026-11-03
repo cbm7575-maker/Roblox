@@ -146,7 +146,8 @@ local function sprayTick()
 		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		local seat = hum and hum.SeatPart
 		local car = seat and seat.Parent
-		local chassis = car and car.PrimaryPart
+		-- (a home's chairs and sofas are seats in a Folder, not a car Model)
+		local chassis = car and car:IsA("Model") and car.PrimaryPart
 		if chassis and car:GetAttribute("NCVehicle") and HeatService.GetHeat(player) > 0 then
 			local rel = pad.CFrame:PointToObjectSpace(chassis.Position)
 			if math.abs(rel.X) <= pad.Size.X / 2 and math.abs(rel.Z) <= pad.Size.Z / 2 and rel.Y < 12 then

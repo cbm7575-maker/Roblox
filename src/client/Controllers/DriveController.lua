@@ -36,6 +36,13 @@
 --     stopped working" explains itself.
 --   * A car can reach this device in pieces (the server may sit you in a car it spawned a moment ago):
 --     driving starts as soon as everything CarPhysics needs has arrived, and keeps trying until then.
+--     Driving that stops while you still sit at the wheel is started again a moment later (watchCharacter's
+--     safety net), and the Output says why it stopped: the reason, the car and how long before (one from
+--     long before is left over from an earlier drive, not why this one stopped).
+--   * DriveController.Skid(share): another car shoved this one (ImpactClient, the server's CarShove): the
+--     tyres let go by `share` (0-1) for a moment, the way they do when a slide ends (CarPhysics eases the
+--     grip back over about 0.2 s), so a push from the side slides the car instead of the grip cancelling it
+--     in a single step.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -285,9 +292,12 @@ local function physicsStep(dt)
 	end
 	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	if not s.Chassis:IsDescendantOf(Workspace) or not hum or hum.SeatPart ~= s.Seat then
-		-- (why, for the Output window: when the seat is still ours, watchCharacter's safety net starts again)
-		DriveController.LastStop = not hum and "no humanoid"
-			or (hum.SeatPart ~= s.Seat and ("seat is now " .. tostring(hum.SeatPart)) or "chassis left the Workspace")
+		-- (why, for the Output window: when the seat is still ours, watchCharacter's safety net starts again.
+		-- The car and the time go with it, so a reason left over from an earlier car can't pass for this one.)
+		DriveController.LastStop = (not hum and "no humanoid"
+			or (hum.SeatPart ~= s.Seat and ("seat is now " .. tostring(hum.SeatPart)) or "chassis left the Workspace"))
+			.. " (" .. tostring(s.Car.Name) .. ")"
+		DriveController.LastStopAt = os.clock()
 		DriveController.Stop()
 		return
 	end
@@ -604,6 +614,16 @@ function DriveController.Exit()
 	return true
 end
 
+-- Another car shoved ours (see the header): the tyres let go by `share` (0-1). Only ever loosens them, and
+-- only for a moment: no handbrake is held, so CarPhysics brings the grip back at once (SLIDE_OUT).
+function DriveController.Skid(share)
+	local s = state
+	share = tonumber(share)
+	if s and s.Phys and share and share == share then
+		s.Phys.Slide = math.max(s.Phys.Slide or 0, math.clamp(share, 0, 1))
+	end
+end
+
 -- Put an upside-down or stuck car back on its wheels.
 function DriveController.Flip()
 	local s = state
@@ -838,9 +858,11 @@ local function watchCharacter(character)
 					local ok, err = pcall(DriveController.Start, seat)
 					if not said then
 						said = true
+						local at = DriveController.LastStopAt
 						warn("[DriveController] driving was off at the wheel of " .. seat.Parent.Name .. ": started again"
 							.. (ok and "" or (" (failed: " .. tostring(err) .. ")"))
-							.. " | last stop: " .. tostring(DriveController.LastStop or "not by the physics step"))
+							.. " | last stop: " .. tostring(DriveController.LastStop or "not by the physics step")
+							.. (at and string.format(", %.1f s ago", os.clock() - at) or ""))
 					end
 				end
 			end

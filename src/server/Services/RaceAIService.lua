@@ -15,6 +15,11 @@
 --     checkpoint and the one after it, moved Lane studs right of the line (each NPC its own lane, so they
 --     don't all fight over one line). It steers at a point a little way along the line (further the
 --     faster it goes) and brakes in time for every bend in the next SLOW_AHEAD studs (sharper = slower).
+--   * Bumped by a player's car (ImpactService pushes it and stamps the car's BumpedAt, server time): for
+--     KNOCK_TIME s it rolls with the shove instead of cancelling it. No braking off the extra speed (only
+--     for a bend it couldn't make), no throttle either, KNOCK_STEER of its steering, and for the first
+--     KNOCK_SKID s its tyres let go by KNOCK_SLIDE (CarPhysics' Slide), so a shove from the side slides it
+--     instead of the grip killing it in one step. Then it drives on (being knocked never counts as stuck).
 --   * Trouble: stuck (slow for STUCK_AFTER s on the throttle) -> reverse and turn; stuck RECOVER_STUCKS
 --     times in RECOVER_WINDOW s, sunk, or off the line for OFF_FOR s twice in a row -> put back on its
 --     line at the last point it reached (never ahead of where it was); upside down -> flipped back.
@@ -61,6 +66,10 @@ local K = {
 	OFF_PATH = 90, -- studs off the line...
 	OFF_FOR = 3, -- ...for this long: plan again from where it is
 	SINK_Y = -4, -- below this it is in the water (or falling out of the world)
+	KNOCK_TIME = 0.7, -- seconds a bumped car rolls with the shove (see the header)...
+	KNOCK_STEER = 0.35, -- ...steering this share of what it wants...
+	KNOCK_SKID = 0.3, -- ...with its tyres let go for this long...
+	KNOCK_SLIDE = 0.8, -- ...this far (0-1)
 	SPAWN_Y = 3.2,
 	NAME_DIST = 450,
 	NAME_FONT = Font.new("rbxasset://fonts/families/Oswald.json", Enum.FontWeight.Bold),
@@ -468,7 +477,8 @@ local function drive(bot, dt, now)
 
 	-- Speed: the pace asked for, held down for the bends ahead.
 	local top = bot.top * bot.pace
-	local target = math.min(top, cornerLimit(bot, path, here))
+	local bend = cornerLimit(bot, path, here)
+	local target = math.min(top, bend)
 	local throttle = 1
 	if speed > target + 6 then
 		throttle = -1
@@ -492,6 +502,18 @@ local function drive(bot, dt, now)
 	end
 	if math.abs(angle) > 2.4 and speed < 20 then
 		throttle, steer = -0.8, -steer -- the line is behind it: back up while turning
+	end
+
+	-- Just bumped by a player's car: roll with the shove for a moment (see the header). Braking only for
+	-- a bend it couldn't make at this speed.
+	local bumpedAt = car:GetAttribute("BumpedAt")
+	local since = type(bumpedAt) == "number" and Workspace:GetServerTimeNow() - bumpedAt or math.huge
+	if since >= 0 and since < K.KNOCK_TIME then
+		throttle = speed > bend + 6 and -1 or 0
+		steer *= K.KNOCK_STEER
+		if since < K.KNOCK_SKID then
+			bot.phys.Slide = math.max(bot.phys.Slide or 0, K.KNOCK_SLIDE)
+		end
 	end
 
 	-- Stuck? Back up for a moment; stuck again and again: put it back on its line.

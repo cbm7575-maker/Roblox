@@ -24,8 +24,13 @@
 -- switched to it as it opens. Stamps for a finished guide or goal (cinematic, HUDController.Stamp, in
 -- gold) wait until the phone is put away (it draws over them).
 -- The frame steps aside while ObjectiveClient's strip (same Goal zone) has something more urgent to
--- say, while a HUDController stamp would draw over the goal strip (short screens; StampTop is in zone
--- coordinates, so the strip is measured from this ScreenGui's corner), while ImpactClient's KNOCKED DOWN
+-- say (and its SHOW ME and J with it), so the current goal's place is handed to ObjectiveClient on every
+-- refresh (ObjectiveClient.SetGoalPlace): for the chop goal ("Sell a stolen car at the Chop Shop") its
+-- strip names the Chop Shop and the Docks and has a SHOW ME of its own (J / L3, a tap on touch screens).
+-- That's the strip you're looking at right after goal 1's jack (WANTED, then JACKED at the wheel), when
+-- this pill's SHOW ME used to be out of reach. The frame also steps aside while a HUDController stamp
+-- would draw over the goal strip (short screens; StampTop is in zone coordinates, so the strip is
+-- measured from this ScreenGui's corner), while ImpactClient's KNOCKED DOWN
 -- caption uses the Subtitle zone (guide line only; ScreenGui "ImpactFx", frame "KnockedDown"), while
 -- InteractClient's "Get out first" hint overlaps it, during races, job shifts and missions (their own
 -- banners), and on the first-join title screen (local attribute TitleScreen, set by TeamUI).
@@ -519,6 +524,10 @@ end
 
 local function refresh()
 	local goal = currentGoal()
+	-- Where the goal's SHOW ME points, for ObjectiveClient's strip (it covers this pill and its button).
+	if Objective ~= nil and type(Objective.SetGoalPlace) == "function" then
+		Objective.SetGoalPlace(goal and goal.chain == "civ" and goal.def.Show or nil)
+	end
 	-- Out of the way during races, job shifts and missions (their own banners), and on the title screen.
 	local busy = player:GetAttribute("RacingId") ~= nil or player:GetAttribute("JobKind") ~= nil
 		or player:GetAttribute("Mission") ~= nil or player:GetAttribute("TitleScreen") == true
@@ -679,7 +688,8 @@ function TutorialClient.Init()
 			refresh()
 		end
 	end)
-	-- The SHOW ME shortcut (J / gamepad L3), only while its button is on screen.
+	-- The SHOW ME shortcut (J / gamepad L3), only while its button is on screen. (While ObjectiveClient's
+	-- strip covers the pill, that strip answers J for its own next place: never both at once.)
 	UserInputService.InputBegan:Connect(function(input, processed)
 		if processed or not SHOW_KEYCODES[input.KeyCode] then
 			return

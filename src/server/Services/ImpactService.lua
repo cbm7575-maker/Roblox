@@ -20,6 +20,25 @@
 --   * TrafficHit (victim's device -> server): street traffic lives on each device alone, so a traffic car
 --     that knocks you over is reported by your own device, with its speed (ImpactClient.KnockLocal).
 --     It can only ever hurt the one who sends it; at most one every 1.5 s.
+--   * CarBump (driver's device -> server): "my car just drove into this car, closing this fast, along this
+--     direction". Each car is run by its own machine (its driver's device, or the server for race bots,
+--     patrols and parked cars), so to the hitter the other car was a wall that never moved, and nothing
+--     ever pushed it on the machine that runs it either (owner play-test, Nov 2: "he didn't budge at all").
+--     ImpactClient does the hitter's own side of the bump and asks us for the other car's side. We check
+--     it: rate limit (K.BUMP_RATE a second, one per car per driver every K.PAIR_GAP s, one per car every
+--     K.TARGET_GAP s), the hitter really is driving, the other is a car in Workspace.Vehicles (not theirs,
+--     not held still for a race start), the two boxes touch as we see them (slack: the other car's speed
+--     x the hitter's round trip, at most K.TOUCH_MAX studs), the direction points away from the hitter, and
+--     the closing speed is no more than the fastest we saw the hitter drive in the last second (x
+--     K.CLAIM_SLACK + K.CLAIM_EXTRA, plus the other car's speed toward it). The push is what a real bump
+--     gives: closing speed x (1 + K.RESTITUTION) x hitter's mass / both masses, at most K.MAX_PUSH studs/s
+--     and never past that car's own top speed, plus a little yaw from a hit off its middle (K.MAX_SPIN).
+--       - A car the server runs: its velocity changes here.
+--       - A car a player's device runs: "CarShove" (car, push, spin, want, hitter's car) goes to that
+--         device, which applies it to its own car (ImpactClient), topping its speed that way up to `want`
+--         (as we saw it, plus the push), so a shove its own physics already gave isn't given twice.
+--       - Either way the car gets attribute BumpedAt (server time): RaceAIService's bots roll with the
+--         shove for a moment instead of braking it away.
 --   * RequestEnterCar (F / GET IN / gamepad X): sits you in your own empty car, or (civilians only) in
 --     the hot car you stole (its Drive prompt is gone once stolen, so this is the only way back in),
 --     when you're close and not knocked over or tasered. The E prompt (VehicleService) has the same
@@ -80,13 +99,43 @@ local ENTER_RANGE = 16 -- the client offers GET IN at 12 studs; a little slack f
 local BUMP_KEEP = 0.7 -- the driver's device cuts its speed to 75% on hitting someone: we may see that already
 local CONTACT_SLACK = 4 -- studs past the car's box a victim may be and still count as hit (for the damage)...
 local CONTACT_LAG = 0.12 -- ...plus this many per stud/s of speed (what we see is a little behind the driver)
+-- ...and anywhere along the car's own path this many seconds ahead: we see a driver's car up to that far
+-- behind their device (physics buffering plus ping; 0.2 s, 10 studs at 50, in a two-player test).
+local CONTACT_AHEAD = 0.35
 local contactParams = RaycastParams.new()
 contactParams.FilterType = Enum.RaycastFilterType.Exclude
 contactParams.IgnoreWater = true
 
+-- Car-to-car bumps (CarBump, see the header).
+local K = {
+	-- Share of the closing speed the two cars spring apart with (1 would be a perfect bounce). The same
+	-- number as ImpactClient's K.RESTITUTION, which does the hitter's side of the same bump.
+	RESTITUTION = 0.25,
+	MIN_CLOSING = 12, -- studs/s: a gentler touch is left to plain physics
+	MAX_CLOSING = 220, -- studs/s, whatever anyone claims (two cars flat out into each other)
+	MAX_PUSH = 70, -- studs/s: the most speed one bump may give a car
+	MIN_PUSH = 2, -- less is not worth a message
+	MAX_SPIN = 1.5, -- rad/s of yaw one bump may give (VehicleGuard's spin limit is 25)
+	SPIN_SHARE = 0.6, -- of the yaw a hit off the car's middle would give a free box: the tyres take the rest
+	TOUCH_SLACK = 6, -- studs between the two boxes, as we see them, that still count as touching...
+	TOUCH_LAG = 0.15, -- ...plus the other car's speed x (the hitter's round trip + this many seconds)...
+	TOUCH_MAX = 30, -- ...never more than this in all
+	NORMAL_DOT = 0.25, -- the device's push direction must lean at least this much away from the hitter
+	CLAIM_SLACK = 1.15, -- closing speed at most (the fastest we saw the hitter lately) x this...
+	CLAIM_EXTRA = 10, -- ...+ this (+ the other car's speed toward the hitter)
+	PEAK_HOLD = 1, -- seconds that fastest speed is remembered
+	BUMP_RATE = 4, -- bumps a second per player (burst as many)
+	PAIR_GAP = 0.6, -- seconds before the same driver may bump the same car again (the device waits 1 s)
+	TARGET_GAP = 0.2, -- seconds before the same car can be shoved again by anyone (two at once: one shove)
+}
+
 local safeUntil = {} -- [player] = os.clock() until which they can't be knocked down again
 local downUntil = {} -- [player] = os.clock() until which they're on the ground
 local knockRemote, notify
+local shoveRemote -- CarShove: a bump for a car that player's device runs
+local peakSpeed = {} -- [player] = { speed, at }: the fastest we saw them drive in the last K.PEAK_HOLD s
+local bumpedBy = setmetatable({}, { __mode = "k" }) -- [car] = { [userId] = os.clock() they last bumped it }
+local shovedAt = setmetatable({}, { __mode = "k" }) -- [car] = os.clock() it was last shoved
 
 local function onFoot(p)
 	local char = p.Character
@@ -199,6 +248,30 @@ local function pushDir(chassis, root, flatVel)
 	return dir.Unit
 end
 
+-- Does a box of half-size hx by hz (flat, car space), moving at v (car space), cover the point rel at some
+-- moment in the next `ahead` seconds? Each axis allows a span of time; the spans have to overlap.
+local function sweptTouch(rel, v, hx, hz, ahead)
+	local lo, hi = 0, ahead
+	for _, a in ipairs({ { rel.X, v.X, hx }, { rel.Z, v.Z, hz } }) do
+		local p, w, h = a[1], a[2], a[3]
+		if math.abs(w) < 1e-3 then
+			if math.abs(p) > h then
+				return false
+			end
+		else
+			local t1, t2 = (p - h) / w, (p + h) / w
+			if t1 > t2 then
+				t1, t2 = t2, t1
+			end
+			lo, hi = math.max(lo, t1), math.min(hi, t2)
+			if not (lo <= hi) then -- (and NaN)
+				return false
+			end
+		end
+	end
+	return true
+end
+
 local function onHit(player, victim, reported)
 	if not RateLimit.Allow(player, "ImpactHit", 3, 4) then
 		return
@@ -241,10 +314,20 @@ local function onHit(player, victim, reported)
 	local rel = chassis.CFrame:PointToObjectSpace(root.Position)
 	local half = chassis.Size / 2
 	local slack = CONTACT_SLACK + speed * CONTACT_LAG
-	if math.abs(rel.X) > half.X + slack or math.abs(rel.Z) > half.Z + slack or rel.Y < -half.Y - 3 or rel.Y > half.Y + 7 then
+	if rel.Y < -half.Y - 3 or rel.Y > half.Y + 7
+		or not sweptTouch(rel, chassis.CFrame:VectorToObjectSpace(flatVel), half.X + slack, half.Z + slack, CONTACT_AHEAD) then
 		return
 	end
-	contactParams.FilterDescendantsInstances = { car, victim.Character, Workspace:FindFirstChild("Vehicles") or car }
+	-- (Everyone sitting in the car too: the ray starts inside it, and the driver's own hand used to count
+	-- as "something solid between", so no player's car ever hurt anyone.)
+	local ignore = { car, victim.Character, Workspace:FindFirstChild("Vehicles") or car }
+	for _, p in ipairs(Players:GetPlayers()) do
+		local h = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+		if h and h.SeatPart and h.SeatPart:IsDescendantOf(car) then
+			table.insert(ignore, p.Character)
+		end
+	end
+	contactParams.FilterDescendantsInstances = ignore
 	local from = chassis.Position + Vector3.new(0, 1, 0)
 	if Workspace:Raycast(from, root.Position - from, contactParams) then
 		return
@@ -265,6 +348,194 @@ local function onTrafficHit(player, speed, dir)
 		return
 	end
 	hurt(player, math.clamp(speed, 0, 90), dir, nil, nil, false, true) -- (traffic never drives faster than that)
+end
+
+------------------------------------------------------------------ cars bumping cars (CarBump)
+
+local function flatV(v)
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+-- How far a car box (cf, half = half its size) reaches from its centre along flat direction n.
+local function extent(cf, half, n)
+	return math.abs(flatV(cf.RightVector):Dot(n)) * half.X + math.abs(flatV(cf.LookVector):Dot(n)) * half.Z
+end
+
+-- How two car boxes sit on the ground plane (ImpactClient's test): the side direction from A toward B with
+-- the widest gap (for touching boxes, the face they meet on; nil if every axis is degenerate) and that gap
+-- in studs (negative: overlapping that deep).
+local function boxGap(cfA, halfA, cfB, halfB)
+	local d = flatV(cfB.Position - cfA.Position)
+	local bestAxis, bestGap = nil, -math.huge
+	for _, v in ipairs({ cfA.RightVector, cfA.LookVector, cfB.RightVector, cfB.LookVector }) do
+		local axis = flatV(v)
+		if axis.Magnitude > 0.05 then
+			axis = axis.Unit
+			local along = d:Dot(axis)
+			local gap = math.abs(along) - extent(cfA, halfA, axis) - extent(cfB, halfB, axis)
+			if gap > bestGap then
+				bestAxis, bestGap = along < 0 and -axis or axis, gap
+			end
+		end
+	end
+	return bestAxis, bestGap
+end
+
+-- 5 times a second: the fastest each driver went lately, to judge the closing speed a device claims (its
+-- car is already slowed by the bump when the claim arrives, so the speed we see then is too low).
+local function sampleDrivers()
+	local now = os.clock()
+	for _, p in ipairs(Players:GetPlayers()) do
+		local _, chassis = drivenCar(p)
+		local speed = chassis and flatV(chassis.AssemblyLinearVelocity).Magnitude
+		if speed and speed == speed then
+			local peak = peakSpeed[p]
+			if not peak then
+				peakSpeed[p] = { speed = speed, at = now }
+			elseif speed >= peak.speed or now - peak.at > K.PEAK_HOLD then
+				peak.speed, peak.at = speed, now
+			end
+		else
+			peakSpeed[p] = nil
+		end
+	end
+end
+
+-- A number that is one (not NaN, not infinite), else nil.
+local function finite(x)
+	x = tonumber(x)
+	return (x and x == x and x > -math.huge and x < math.huge) and x or nil
+end
+
+-- The car's top speed with nitro (Config.Vehicles, copied onto the car), for the cap on a push.
+local function topSpeed(car)
+	local top, nitro = finite(car:GetAttribute("MaxSpeed")) or 120, finite(car:GetAttribute("NitroSpeed")) or 1
+	return math.max(top, 1) * math.max(nitro, 1)
+end
+
+-- The yaw (rad/s, about world up) that pushing `oc` by `push` at the point of its box nearest `from` gives
+-- it: a free box's spin x K.SPIN_SHARE, within K.MAX_SPIN. Nothing for a hit square on its middle.
+local function bumpSpin(oc, from, push)
+	local cf, half = oc.CFrame, oc.Size / 2
+	local rel = cf:PointToObjectSpace(from)
+	local contact = cf:PointToWorldSpace(Vector3.new(math.clamp(rel.X, -half.X, half.X), 0, math.clamp(rel.Z, -half.Z, half.Z)))
+	local r = flatV(contact - oc.Position)
+	-- (r x push).Y over a box's yaw inertia per unit mass, (L^2 + W^2) / 12
+	local spin = (r.Z * push.X - r.X * push.Z) * 12 / math.max(oc.Size.X ^ 2 + oc.Size.Z ^ 2, 1)
+	return math.clamp(spin * K.SPIN_SHARE, -K.MAX_SPIN, K.MAX_SPIN)
+end
+
+-- The hitter's device: "my car drove into `other`, closing at `claimed` studs/s along `normal`".
+local function onBump(player, other, claimed, normal)
+	if not RateLimit.Allow(player, "CarBump", K.BUMP_RATE, K.BUMP_RATE) then
+		return
+	end
+	local folder = Workspace:FindFirstChild("Vehicles")
+	if typeof(other) ~= "Instance" or not other:IsA("Model") or not folder or other.Parent ~= folder
+		or other:GetAttribute("NCVehicle") ~= true then
+		return
+	end
+	local car, chassis = drivenCar(player)
+	local oc = other.PrimaryPart
+	if not car or not chassis or car == other or not oc or not oc:IsDescendantOf(Workspace) then
+		return
+	end
+	-- Held still (a race grid's countdown): no shoving a car off the line, and it has no owner to ask.
+	if oc.Anchored or chassis.Anchored then
+		return
+	end
+	claimed = finite(claimed)
+	if not claimed or claimed < K.MIN_CLOSING then
+		return
+	end
+	local now = os.clock()
+	local mine = bumpedBy[other]
+	if (mine and now - (mine[player.UserId] or -math.huge) < K.PAIR_GAP) or now - (shovedAt[other] or -math.huge) < K.TARGET_GAP then
+		return
+	end
+	local v1, v2 = flatV(chassis.AssemblyLinearVelocity), flatV(oc.AssemblyLinearVelocity)
+	local s1, s2 = v1.Magnitude, v2.Magnitude
+	if s1 ~= s1 or s2 ~= s2 or s1 == math.huge or s2 == math.huge then
+		return
+	end
+
+	-- Touching, as we see them. The hitter saw the other car a round trip ago (it reached them through us
+	-- and their report came back through us), so it may have moved on since by its speed x that.
+	local okPing, ping = pcall(player.GetNetworkPing, player)
+	ping = (okPing and finite(ping)) and math.clamp(ping, 0, 0.5) or 0.1
+	local cfA, halfA, cfB, halfB = chassis.CFrame, chassis.Size / 2, oc.CFrame, oc.Size / 2
+	if math.abs(cfA.Position.Y - cfB.Position.Y) > halfA.Y + halfB.Y + 4 then
+		return
+	end
+	local axis, gap = boxGap(cfA, halfA, cfB, halfB)
+	local slack = math.min(K.TOUCH_SLACK + (s2 + s1 * 0.25) * (2 * ping + K.TOUCH_LAG), K.TOUCH_MAX)
+	if not axis or gap > slack then
+		return
+	end
+
+	-- Which way: the device's direction (it saw the touch as it happened) if it leans away from the
+	-- hitter, else the face the boxes meet on as we see them.
+	local centre = flatV(cfB.Position - cfA.Position)
+	if centre.Magnitude < 0.1 then
+		return
+	end
+	centre = centre.Unit
+	local n = axis
+	if typeof(normal) == "Vector3" then
+		local f = flatV(normal)
+		local len = f.Magnitude
+		if len == len and len > 0.5 and len < 1.5 and (f / len):Dot(centre) >= K.NORMAL_DOT then
+			n = f / len
+		end
+	end
+
+	-- How hard: never more than the hitter could have been doing (see sampleDrivers) plus the other car
+	-- coming at it.
+	local peak = peakSpeed[player]
+	local seen = math.max(s1, peak and now - peak.at <= K.PEAK_HOLD + 0.5 and peak.speed or 0)
+	local bound = math.min(seen * K.CLAIM_SLACK + K.CLAIM_EXTRA + math.max(-v2:Dot(n), 0), K.MAX_CLOSING)
+	local closing = math.min(claimed, bound)
+	if closing < K.MIN_CLOSING then
+		return
+	end
+	local m1, m2 = finite(chassis.AssemblyMass), finite(oc.AssemblyMass)
+	if not m1 or not m2 or m1 <= 0 or m2 <= 0 then
+		return
+	end
+	-- A real bump (momentum kept, a little bounce): the other car gains (1 + e) x m1 / (m1 + m2) of the
+	-- closing speed. Within K.MAX_PUSH, and never past its own top speed (a player's car would trip
+	-- VehicleGuard's speed check).
+	local dv = math.min((1 + K.RESTITUTION) * m1 / (m1 + m2) * closing, K.MAX_PUSH)
+	local over = (v2 + n * dv).Magnitude - topSpeed(other)
+	if over > 0 then
+		dv = math.max(0, dv - over)
+	end
+	if dv < K.MIN_PUSH then
+		return
+	end
+	local push = n * dv
+	local spin = bumpSpin(oc, cfA.Position, push)
+
+	-- Who runs that car's physics. (Asking is an error on an anchored part: checked above.)
+	local okOwner, owner = pcall(oc.GetNetworkOwner, oc)
+	if not okOwner then
+		return
+	end
+	if not mine then
+		mine = {}
+		bumpedBy[other] = mine
+	end
+	mine[player.UserId] = now
+	shovedAt[other] = now
+	other:SetAttribute("BumpedAt", Workspace:GetServerTimeNow())
+	if owner == nil then
+		-- Ours: race bots and patrols (their services keep them server-owned), parked and empty cars.
+		oc.AssemblyLinearVelocity += push
+		oc.AssemblyAngularVelocity += Vector3.new(0, spin, 0)
+	elseif typeof(owner) == "Instance" and owner:IsA("Player") and owner.Parent == Players then
+		-- A player's device runs it (its driver, or whoever just got out of it): that device applies it.
+		shoveRemote:FireClient(owner, other, push, spin, v2:Dot(n) + dv, car)
+	end
 end
 
 -- AI patrols driving into people on foot (5 times a second).
@@ -381,14 +652,21 @@ function ImpactService.Init()
 	Remotes.Event("ImpactHit").OnServerEvent:Connect(onHit)
 	Remotes.Event("TrafficHit").OnServerEvent:Connect(onTrafficHit)
 	Remotes.Event("RequestEnterCar").OnServerEvent:Connect(onEnter)
+	shoveRemote = Remotes.Event("CarShove")
+	Remotes.Event("CarBump").OnServerEvent:Connect(onBump)
 	Players.PlayerRemoving:Connect(function(p)
 		safeUntil[p] = nil
 		downUntil[p] = nil
+		peakSpeed[p] = nil
 	end)
 	task.spawn(function()
 		while true do
 			task.wait(AI_INTERVAL)
 			local ok, err = pcall(checkAI)
+			if not ok then
+				warn("[ImpactService] " .. tostring(err))
+			end
+			ok, err = pcall(sampleDrivers)
 			if not ok then
 				warn("[ImpactService] " .. tostring(err))
 			end

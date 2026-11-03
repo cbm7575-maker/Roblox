@@ -13,10 +13,28 @@
 --       - Hands up (player attribute Surrender: H / gamepad Y / the HANDS UP tile, LawClient ->
 --         RequestSurrender, handled here): they hold fire, walk up and cuff them K.SURRENDER_CUFF seconds
 --         after reaching them. A surrender also takes a star off the sentence (ArrestService).
---       - Standing still (or sitting in a stopped car) with no threat: they run up ("POLICE! HANDS
---         UP!") and cuff them after K.CUFF seconds at arm's length (K.CUFF_CAR from the side of the
+--       - Standing still (or sitting in a stopped car, or tasered) with no threat: they run up ("POLICE!
+--         HANDS UP!") and cuff them after K.CUFF seconds at arm's length (K.CUFF_CAR from the side of the
 --         car: walking straight at the driver shoved it down the road): ArrestService.Arrest, as ever.
---       - Running: they chase at K.RUN, a little under a sprinting player.
+--         Moving off again breaks it: the cuff timer runs back down, twice as fast as it filled.
+--       - Running: they chase at K.RUN, a little under a sprinting player, and TASER them (owner, Nov 2:
+--         a sprinter simply got away). An officer out of the car for K.TASER_AFTER seconds with a clear
+--         line to an unarmed runner on foot within K.TASER_RANGE studs shouts "TASER!" and holds it out
+--         (the pistol part turned yellow, with the "aim" arm) for K.TASER_WINDUP seconds while he keeps
+--         running: the suspect sees it coming, and stopping, sitting down or putting the hands up then
+--         calls the shot off. Then he fires (and waits K.TASER_COOLDOWN, counted from the shout): a hit
+--         is likelier the closer they are, K.TASER_HIT_NEAR at arm's length down to K.TASER_HIT_FAR at
+--         K.TASER_REACH studs, none further (the wire falls short). A hit stuns them for K.TASER_STUN
+--         seconds the way a player cop's taser does: the player attribute StunnedUntil (server time),
+--         which the suspect's own LawClient reads to lay the body down and hold it there, and which
+--         every move, tool, seat and hands-up check reads. (WalkSpeed is left alone: ArrestService saves
+--         it and gives it back for its own stun, so nobody already stunned or knocked down is tasered
+--         here, and its stun is never stretched by ours.) A stunned suspect is standing still, so the
+--         cuffing above follows; the officer keeps running at them until close. Remote TaserFx (officer
+--         Model, suspect) shows the wire to everyone and plays the zap and the "ZAPPED!" toast as for a
+--         player cop's taser (LawClient, SoundClient); a miss sends (officer Model, false, where the wire
+--         ended). Never at someone in a seat, in a safe zone, with their hands up or a gun out, or
+--         hostile (they get the pistol, below).
 --       - Hostile (hostileTo): a gun out at 2+ stars, a gun fired in the last K.FIRED_MEMORY seconds, an
 --         officer shot or punched by them in the last K.ASSAULT_MEMORY seconds, or 4+ stars. They draw
 --         their pistols, keep K.KEEP_NEAR..K.KEEP_FAR studs off with a clear line, and shoot every
@@ -31,12 +49,18 @@
 --     (CombatService.CrimeHeat; a dead officer is one more real star: HeatService.Add) and turns every
 --     officer on that player hostile.
 --   * Shouts: a bubble over the head ("POLICE! HANDS UP!"), and the suspect's own toast says how to give
---     up (Notify "PoliceOnFoot", once per patrol).
+--     up (Notify "PoliceOnFoot", once per patrol). "TASER!" always shows (the others wait K.SAY_GAP).
+--   * The suspect's cuff bar: while a walking officer's cuff timer runs on a wanted player, the player
+--     attribute CuffProgress (0..1 in 0.05 steps; the furthest along when several officers are at it)
+--     tells their LawClient, which draws BEING CUFFED with a bar ("RUN to break free" unless the hands
+--     are up). nil the rest of the time, set every K.TICK by a loop of its own (Init), so officers who
+--     go (back in the car, down, removed) take it with them.
 --   * Walking officers are HeatService eyes, like the patrol cars, and carry the attribute AimTarget
 --     (CombatClient's AIM swing can lock onto them). Riders don't (bullets pass through them to the car).
 -- Look: navy uniform (body colours), a cap, a gold badge, POLICE on the back, a pistol that shows only
--- when drawn (with Roblox's stock R15 "tool" arm). Four looks are built at start-up (OfficerTemplates in
--- ServerStorage); until they are ready a patrol simply has nobody in it and arrests from the car as before.
+-- when drawn (with Roblox's stock R15 "tool" arm), or yellow as the taser while that is out. Four looks
+-- are built at start-up (OfficerTemplates in ServerStorage); until they are ready a patrol simply has
+-- nobody in it and arrests from the car as before.
 -- Public (AIPoliceService): Board(car, count) -> crew or nil, Step(crew, dt, target, info, carSpeed) ->
 -- "ride" | "out" | "gone", Remove(crew). CombatService: NPCHit(model, attacker, damage, dir, kind) -> bool.
 
@@ -63,8 +87,20 @@ local K = {
 	RUN = 19.5, -- (players walk 18 and sprint faster: a sprinter gets away, a walker doesn't)
 	CUFF_RANGE = 5.5,
 	CUFF_CAR = 2.5, -- studs from the body of a car the suspect sits in: the cuffing is done from beside it
-	CUFF = 2.2, -- seconds at arm's length from a suspect who stands still
+	CUFF = 1.4, -- seconds at arm's length from a suspect who stands still (2.2 was long enough to walk off)
 	SURRENDER_CUFF = 1, -- ...or who has their hands up
+	-- The taser (see the header). A sprinter gains about 10 studs a second on an officer, so these decide
+	-- how far a runner gets before it comes out.
+	TASER_AFTER = 1.6, -- seconds out of the car before the first "TASER!" (so the first hit is 2 s out at the earliest)
+	TASER_RANGE = 25, -- studs (flat): close enough to start the shot...
+	TASER_REACH = 30, -- ...and the wire's reach when it flies (they ran on during the wind-up)
+	TASER_WINDUP = 0.4, -- seconds from the shout to the shot: the suspect's warning
+	TASER_COOLDOWN = 5.5, -- seconds from one shout to the next, hit or miss
+	TASER_HIT_NEAR = 0.9, -- chance of a hit at arm's length...
+	TASER_HIT_FAR = 0.35, -- ...falling in a straight line to this at TASER_REACH
+	TASER_STUN = 3, -- seconds stunned (as ArrestService's STUN_SECONDS): time to run up and cuff them
+	TASER_COLOR = Color3.fromRGB(245, 200, 40), -- the pistol part while it's the taser
+	PISTOL_COLOR = Color3.fromRGB(30, 30, 34),
 	STILL = 7, -- studs/s: slower counts as standing still (a car: under 5)
 	SHOOT_RANGE = 90,
 	KEEP_NEAR = 14, -- a hostile suspect is kept between these two distances
@@ -192,7 +228,7 @@ local function dress(model)
 		local gun = Instance.new("Part")
 		gun.Name = "Pistol"
 		gun.Size = Vector3.new(0.2, 0.36, 0.95)
-		gun.Color = Color3.fromRGB(30, 30, 34)
+		gun.Color = K.PISTOL_COLOR
 		gun.Material = Enum.Material.Metal
 		gun.CanCollide = false
 		gun.CanQuery = false
@@ -371,12 +407,34 @@ local function draw(o, on)
 	end
 end
 
-local function say(o, text)
+-- The taser held out (the wind-up, see the header): the pistol part shows yellow with the "aim" arm.
+-- Put away (taserAt cleared) it goes back to the pistol's own colour and to however draw left the gun.
+local function taserUp(o, on)
+	if not on then
+		o.taserAt = nil
+	end
+	local gun = o.model and o.model:FindFirstChild("Pistol")
+	if gun then
+		gun.Color = on and K.TASER_COLOR or K.PISTOL_COLOR
+		gun.Transparency = (on or o.drawn) and 0 or 1
+	end
+	local aim = o.tracks and o.tracks.aim
+	if aim and not o.drawn then
+		if on then
+			aim:Play(0.1)
+		else
+			aim:Stop(0.2)
+		end
+	end
+end
+
+-- force: say it now, whatever was said last ("TASER!" is the suspect's warning: it can't wait its turn).
+local function say(o, text, force)
 	local t = os.clock()
-	if o.said == text and t - (o.sayAt or 0) < K.SAY_GAP * 2 then
+	if not force and o.said == text and t - (o.sayAt or 0) < K.SAY_GAP * 2 then
 		return
 	end
-	if t - (o.sayAt or 0) < K.SAY_GAP then
+	if not force and t - (o.sayAt or 0) < K.SAY_GAP then
 		return
 	end
 	o.said, o.sayAt = text, t
@@ -462,6 +520,7 @@ local function newWalker(o, car, toward)
 	o.hp = K.HEALTH
 	o.gait, o.drawn, o.cuffFor, o.stuckFor = nil, false, 0, 0
 	o.nextShot = 0
+	o.nextTaser, o.taserAt = os.clock() + K.TASER_AFTER, nil
 	loadTracks(o)
 	byModel[model] = o
 	HeatService.RegisterEye(root)
@@ -574,6 +633,51 @@ local function shoot(o, p, troot, tchar, dist, targetSpeed)
 	end
 end
 
+-- One tick of the taser (officerStep, while not shooting; see the header). fair: the suspect is an
+-- unarmed runner on foot it may be used on right now. The chase goes on around it either way.
+local function taserStep(o, p, troot, dist, los, fair, t)
+	if o.taserAt then
+		if not fair or not los then
+			taserUp(o, false) -- (they stopped, sat down, put their hands up or went behind a wall: no shot)
+		elseif t >= o.taserAt then
+			o.taserAt = nil
+			face(o, troot.Position)
+			local chance = K.TASER_HIT_NEAR + (K.TASER_HIT_FAR - K.TASER_HIT_NEAR) * math.clamp(dist / K.TASER_REACH, 0, 1)
+			local fx = Remotes.Event("TaserFx")
+			if dist <= K.TASER_REACH and rng:NextNumber() < chance then
+				-- (Nobody stunned already gets here: `fair`. So ArrestService's own stun is never stretched,
+				-- which would stop it giving the WalkSpeed back.)
+				p:SetAttribute("StunnedUntil", serverNow() + K.TASER_STUN)
+				fx:FireAllClients(o.model, p)
+			else
+				-- Where the wire ends: past them to one side, or short of them when they got out of reach.
+				local from = o.root.Position
+				local miss
+				if dist > K.TASER_REACH then
+					miss = from + (troot.Position - from).Unit * K.TASER_REACH
+				else
+					local side = flat(rng:NextUnitVector())
+					miss = troot.Position + (side.Magnitude > 0.1 and side.Unit or Vector3.xAxis) * rng:NextNumber(2.5, 4)
+				end
+				fx:FireAllClients(o.model, false, miss)
+			end
+			-- Held out a moment longer, then away (unless a new wind-up has begun by then).
+			task.delay(0.35, function()
+				if not o.taserAt then
+					taserUp(o, false)
+				end
+			end)
+		end
+		return
+	end
+	if fair and los and dist <= K.TASER_RANGE and t >= o.nextTaser then
+		o.taserAt = t + K.TASER_WINDUP
+		o.nextTaser = t + K.TASER_COOLDOWN
+		taserUp(o, true)
+		say(o, "TASER!", true)
+	end
+end
+
 ------------------------------------------------------------------ one officer, one tick
 
 local function arrest(p)
@@ -628,6 +732,10 @@ local function knockDown(o, dir)
 		HeatService.UnregisterEye(o.root) -- (out cold: sees nothing)
 	end
 	draw(o, false)
+	if o.taserAt then
+		taserUp(o, false)
+	end
+	o.cuffFor = 0
 	stop(o)
 	local ok = pcall(function()
 		require(ReplicatedStorage.Shared.Util.Ragdoll).Start(o.model, dir * 14 + Vector3.new(0, 10, 0), { NoCap = true })
@@ -642,6 +750,9 @@ local function kill(o, dir)
 	o.model:SetAttribute("AimTarget", nil)
 	o.model:SetAttribute("NPCKind", nil)
 	draw(o, false)
+	if o.taserAt then
+		taserUp(o, false)
+	end
 	if o.root then
 		HeatService.UnregisterEye(o.root)
 	end
@@ -707,6 +818,9 @@ local function officerStep(crew, o, dt, p, info, t)
 
 	if o.state == "Return" then
 		draw(o, false)
+		if o.taserAt then
+			taserUp(o, false)
+		end
 		hum.AutoRotate = true
 		local door = doorSpot(crew.car, o.seatName)
 		if not door or flat(root.Position - door).Magnitude < 5 or t - o.returnAt > K.RETURN_MAX then
@@ -721,8 +835,13 @@ local function officerStep(crew, o, dt, p, info, t)
 
 	local tchar = p.Character
 	local troot = tchar and tchar:FindFirstChild("HumanoidRootPart")
+	o.cuffTarget = p -- (whose cuff bar o.cuffFor fills: the CuffProgress loop in Init)
 	if not troot or not info then
 		stop(o)
+		o.cuffFor = 0
+		if o.taserAt then
+			taserUp(o, false)
+		end
 		return
 	end
 	local dist = flat(troot.Position - root.Position).Magnitude
@@ -730,6 +849,10 @@ local function officerStep(crew, o, dt, p, info, t)
 	local targetSpeed = info.vel.Magnitude
 	local los = canSee(o, troot, tchar)
 	if crew.hostile and not info.inCar then
+		o.cuffFor = 0 -- (no cuffing while shooting: the bar goes)
+		if o.taserAt then
+			taserUp(o, false) -- (the pistol instead)
+		end
 		draw(o, true)
 		if dist > K.KEEP_FAR or not los then
 			hum.AutoRotate = true
@@ -751,27 +874,41 @@ local function officerStep(crew, o, dt, p, info, t)
 	local gap, goal, range = dist, troot.Position, K.CUFF_RANGE
 	local thum = tchar:FindFirstChildOfClass("Humanoid")
 	local seat = info.inCar and thum and thum.SeatPart
-	local chassis = seat and seat.Parent and seat.Parent.PrimaryPart
+	local chassis = seat and seat.Parent and seat.Parent:IsA("Model") and seat.Parent.PrimaryPart -- (not a home's chair)
 	if chassis then
 		gap, goal = besideCar(chassis, seat, root.Position)
 		range = K.CUFF_CAR
 	end
+	-- The taser: only on an unarmed runner on foot, nowhere near a seat, a safe zone, raised hands, or a
+	-- stun or knock-down already running (see the header).
+	local st = serverNow()
+	local stunned = (p:GetAttribute("StunnedUntil") or 0) > st
+	local fair = not info.inCar and thum ~= nil and thum.Health > 0 and thum.SeatPart == nil and not gunOut
+		and not surrender and not stunned and (p:GetAttribute("KnockedUntil") or 0) <= st and not crew.safe
+		and targetSpeed >= K.STILL
+	taserStep(o, p, troot, dist, los, fair, t)
 	if gap > range then
 		hum.AutoRotate = true
-		moveTo(o, goal, gap > 12 and K.RUN or K.WALK)
+		-- (Walking the last 12 studs keeps from shoving them; a tasered one is run at until close: the stun
+		-- has to last until the cuffs are on.)
+		moveTo(o, goal, (gap > 12 or (stunned and gap > 8)) and K.RUN or K.WALK)
 		o.cuffFor = math.max(0, o.cuffFor - dt)
-		say(o, surrender and "STAY RIGHT THERE!" or (gunOut and "DROP THE WEAPON!") or "POLICE! HANDS UP!")
+		say(o, surrender and "STAY RIGHT THERE!" or (stunned and "STAY DOWN!") or (gunOut and "DROP THE WEAPON!")
+			or "POLICE! HANDS UP!")
 		return
 	end
 	stop(o)
 	face(o, troot.Position)
-	local still = surrender or (info.inCar and targetSpeed < 5) or (not info.inCar and targetSpeed < K.STILL)
+	local still = surrender or stunned or (info.inCar and targetSpeed < 5) or (not info.inCar and targetSpeed < K.STILL)
 	if still then
 		o.cuffFor += dt
-		handsUp(p)
+		if not stunned then
+			handsUp(p) -- (not on a body lying tasered: they go up if it gets up)
+		end
 		say(o, "YOU'RE UNDER ARREST!")
 		if o.cuffFor >= (surrender and K.SURRENDER_CUFF or K.CUFF) then
 			o.cuffFor = 0
+			p:SetAttribute("CuffProgress", nil) -- (the bar goes with the arrest, not a tick later)
 			arrest(p)
 		end
 	else
@@ -886,6 +1023,7 @@ function PoliceOfficerService.Step(crew, dt, p, info, carSpeed)
 	-- (Never into a safe zone: there they only come to cuff.)
 	local cs = service("CombatService")
 	local safe = cs ~= nil and type(cs.IsSafe) == "function" and cs.IsSafe(p) == true
+	crew.safe = safe -- (no taser there either: officerStep)
 	crew.hostile = info ~= nil and not safe and hostileTo(p)
 	for _, o in ipairs(crew.officers) do
 		local ok, err = pcall(officerStep, crew, o, dt, p, info, t)
@@ -1099,6 +1237,37 @@ function PoliceOfficerService.Init()
 		watch(p)
 	end
 	Players.PlayerAdded:Connect(watch)
+	-- The cuff bar (see the header): CuffProgress on each wanted player that walking officers are cuffing,
+	-- the furthest along of them, in 0.05 steps (a fresh cuffing shows at once); nil on everyone else.
+	-- Its own loop, not Step's: officers who go (back in, down, removed) must take the bar with them.
+	task.spawn(function()
+		while true do
+			task.wait(K.TICK)
+			local ok, err = pcall(function()
+				local best = {}
+				for _, o in pairs(byModel) do
+					local p = o.cuffTarget
+					if p and o.state == "Out" and (o.cuffFor or 0) > 0 then
+						local need = p:GetAttribute("Surrender") == true and K.SURRENDER_CUFF or K.CUFF
+						best[p] = math.max(best[p] or 0, o.cuffFor / need)
+					end
+				end
+				for _, p in ipairs(Players:GetPlayers()) do
+					local v = best[p]
+					if v and (p:GetAttribute("Side") ~= "Civilian" or HeatService.GetHeat(p) <= 0) then
+						v = nil -- (caught by the other officer a moment ago: a prisoner has no bar)
+					end
+					v = v and math.clamp(math.floor(v * 20 + 0.5) / 20, 0.05, 1) or nil
+					if p:GetAttribute("CuffProgress") ~= v then
+						p:SetAttribute("CuffProgress", v)
+					end
+				end
+			end)
+			if not ok then
+				warn("[PoliceOfficerService] cuff bar: " .. tostring(err))
+			end
+		end
+	end)
 	task.spawn(function()
 		while true do
 			task.wait(0.5)

@@ -22,6 +22,18 @@
 --   * Prep panels (fuse box, yacht panel) with a live prep read "Done (1:05 left)" for the crew that
 --     did it and "Taken (free in 0:32)" for everyone else while it's protected (PrepLockUntil); a tap
 --     asks the server, which explains. Otherwise they show the server's own text and hold time.
+--   * Heists with a prep step (Config.Heists Prep: the Coastal Bank's fuse box on its east wall, the Sea
+--     Dream's alarm panel on the boarding deck) say so BEFORE anyone tries the vault. Until the prep is
+--     this player's or their crew's and its window is open (PrepBy / PrepUntil: the server's own test,
+--     HeistService prepIsMine), the Rob prompt is locked on this device: it reads "Cut the power first"
+--     over "Fuse box: east wall" (K.PREP_WORDS) and has no hold, so E can't be held on it (a tap asks the
+--     server, which says NeedPrep_<type>). The sign adds the step in gold under OPEN ("CUT THE POWER
+--     FIRST"), or how long your window has left in green ("POWER OUT 1:05"); a gold marker ("CUT THE
+--     POWER" over a chevron) floats over the panel for anyone within K.MARK_RANGE studs of it, drawn on
+--     top of everything (the fuse box is round the outside of the bank); and the first walk-up to the
+--     place says it in a toast. A prep done or redone, or a crew joined or left, re-labels it at once
+--     (attribute signals); the pass catches a window running out. A hold already running is never
+--     locked under your thumb: the server pays a hold that began inside the window.
 --   * Holding a Rob prompt (ScreenGui "HeistUI", frame "Rob", in the Subtitle zone, or standing on top
 --     of whatever else is using that zone): the place's name, the take so far counting up in green
 --     ("$420 ...": the store's base payout times how far the hold has got; the real figure, with night /
@@ -84,7 +96,7 @@ K.PROMPT_NAMES = { "RobPrompt", "PrepPrompt" }
 -- rank up first" (DealerClient's heist locks use the same), red = the alarm.
 K.HEX_OPEN, K.HEX_SHUT, K.HEX_LOCKED = C.Cash:ToHex(), C.Dim:ToHex(), C.Purple:ToHex()
 K.HEX_ALARM, K.HEX_TEXT = C.Danger:ToHex(), C.Text:ToHex()
-K.SIGN_BIG = UDim2.fromOffset(300, 64) -- the locked sign has two lines, so it gets a bigger board
+K.SIGN_BIG = UDim2.fromOffset(300, 64) -- a two-line sign (rank lock, prep step) gets a bigger board
 K.SIGN_RULE = 64 -- pixels: the thin rule under a sign's words
 -- The rob bar
 K.ROB_W, K.ROB_W_TOUCH = 360, 300 -- its width (never wider than the Subtitle zone)
@@ -113,6 +125,19 @@ K.CLERK_REACH = 22 -- studs: a gun aimed at a clerk this close starts the robber
 K.CLERK_CONE = 0.94 -- cosine: how close to the gun's line the clerk must be
 K.CLERK_ASK_GAP = 1 -- seconds between two asks
 K.HINT_RANGE = 40 -- studs from a clerk: a gun owner is told how to rob that store (once each)
+-- Prep steps, by heist type: the locked Rob prompt's words (Lock over Where), the panel's marker (Mark)
+-- and the sign's word while your crew's window runs (Done). A type missing here gets words made from its
+-- Config.Heists Prep (prepWords).
+K.PREP_WORDS = {
+	CoastalBank = { Lock = "Cut the power first", Where = "Fuse box: east wall", Mark = "CUT THE POWER", Done = "POWER OUT" },
+	SeaDream = { Lock = "Disable the alarm first", Where = "Alarm panel: boarding deck", Mark = "DISABLE THE ALARM",
+		Done = "ALARM OFF" },
+}
+K.HEX_PREP = C.Gold:ToHex() -- the sign's "do this first" line (gold: the step toward the reward)
+K.PREP_ATTRS = { "PrepBy", "PrepUntil", "PrepLockUntil", "Robbable" } -- site attributes that re-label at once
+K.MARK_RANGE = 220 -- studs from the panel: its marker shows this close (all round the bank, the whole yacht)
+K.MARK_UP = 4.5 -- studs over the panel's middle (the panel is 4 tall)
+K.MARK_SIZE = UDim2.fromOffset(190, 40) -- the words, and the chevron under them
 
 -- The HUD pieces (build sets them once): gui, rob (the frame), robName, robTake, robNameShadow,
 -- robTakeShadow, robBar, robFill, alarm (the frame), alarmEdges = { { frame, across } x 4 }
@@ -149,6 +174,8 @@ local clerkPoses = setmetatable({}, { __mode = "k" }) -- [clerk model] = { name,
 local clerkHinted = {} -- [site] = true once a gun owner was told how to rob it
 local lastClerkAsk = 0
 local lazy = {} -- [controller name] = its module (false if missing)
+local prepMarks = {} -- [site] = { part, gui }: the gold marker over that site's prep panel, on this device
+local prepTold = {} -- [heist type] = true once this player has been told its prep comes first
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -182,6 +209,26 @@ local function rankLock(site)
 	return nil
 end
 
+-- Is this site's prep ours: done by us or our crew, its window still open at server time t? The
+-- server's own test (HeistService prepIsMine), from the attributes it replicates.
+local function prepIsMine(site, t)
+	local by = site:GetAttribute("PrepBy")
+	local mine = by ~= nil and (by == player:GetAttribute("Crew") or by == "u" .. player.UserId)
+	return mine and (site:GetAttribute("PrepUntil") or 0) >= t
+end
+
+-- The words for a heist type's prep step (K.PREP_WORDS, or made from its Config.Heists Prep once).
+local function prepWords(typeId, def)
+	local w = K.PREP_WORDS[typeId]
+	if not w then
+		local prep = def.Prep
+		w = { Lock = tostring(prep.Action) .. " first", Where = tostring(prep.Object), Mark = string.upper(tostring(prep.Action)),
+			Done = "STEP 1 DONE" }
+		K.PREP_WORDS[typeId] = w
+	end
+	return w
+end
+
 -- The prep panel's lock text while a prep is live, or nil when anyone may do it now.
 local function prepLabel(site)
 	local t = now()
@@ -189,8 +236,7 @@ local function prepLabel(site)
 	if untilAt <= t then
 		return nil
 	end
-	local by = site:GetAttribute("PrepBy")
-	if by ~= nil and (by == player:GetAttribute("Crew") or by == "u" .. player.UserId) then
+	if prepIsMine(site, t) then
 		return "Done (" .. clock(untilAt - t) .. " left)"
 	end
 	local lockUntil = site:GetAttribute("PrepLockUntil") or 0
@@ -201,18 +247,24 @@ local function prepLabel(site)
 end
 
 -- Locked (text given, e.g. "Rank 3 needed"): no hold, and a tap asks the server, which explains
--- (BankNeedsRank, PrepTaken...). Unlocked (nil): back to the server's own text and hold time. With
--- `hold` as well: that text with that hold (an unlocked stage of its own: the drill's "Grab the cash").
-local function labelPrompt(prompt, text, hold)
+-- (BankNeedsRank, PrepTaken, NeedPrep_...). Unlocked (nil): back to the server's own text and hold
+-- time. With `hold` as well: that text with that hold (an unlocked stage of its own: the drill's "Grab
+-- the cash"). With `object`: the small line over the words too (a prep lock's "Fuse box: east wall");
+-- without it, the server's own (the place's name).
+local function labelPrompt(prompt, text, hold, object)
 	local d = promptDefaults[prompt]
 	if not d then
-		d = { ActionText = prompt.ActionText, HoldDuration = prompt.HoldDuration }
+		d = { ActionText = prompt.ActionText, HoldDuration = prompt.HoldDuration, ObjectText = prompt.ObjectText }
 		promptDefaults[prompt] = d
 	end
 	local action = text or d.ActionText
 	hold = hold or (text and 0 or d.HoldDuration)
+	object = object or d.ObjectText
 	if prompt.ActionText ~= action then
 		prompt.ActionText = action
+	end
+	if prompt.ObjectText ~= object then
+		prompt.ObjectText = object
 	end
 	if prompt.HoldDuration ~= hold then
 		prompt.HoldDuration = hold
@@ -247,7 +299,7 @@ local function styleSign(gui, label)
 	return rule
 end
 
--- The locked sign has two lines, so it gets a bigger board.
+-- A two-line sign (a rank lock, or a prep step under OPEN) gets a bigger board.
 local function sizeSign(gui, big)
 	local normal = gui:GetAttribute("NormalSize")
 	local want = big and K.SIGN_BIG or normal
@@ -273,6 +325,91 @@ local function explainLock(site, need, rank)
 		C.Purple, string.upper(name))
 	NotifyController.Show("Earn XP by robbing stores, racing, stunts, taxi/courier jobs and missions. Check PHONE > GOALS.",
 		C.Gold, "info")
+end
+
+-- First walk-up to an open heist whose prep we haven't done: say what comes first and where, before
+-- anyone tries the vault (the server's own NeedPrep words, which a tap on the locked prompt also brings).
+local function explainPrep(site, typeId)
+	if prepTold[typeId] then
+		return
+	end
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local pad = site.PrimaryPart
+	if not root or not pad or (root.Position - pad.Position).Magnitude > K.EXPLAIN_RANGE then
+		return
+	end
+	prepTold[typeId] = true
+	local text = NotifyController.Messages and NotifyController.Messages["NeedPrep_" .. typeId]
+	if text then
+		NotifyController.Show(text, nil, "info")
+	end
+end
+
+-- The prep panel's marker: a small invisible anchor at the panel's Config spot under the camera (the
+-- panel itself may not have streamed in yet), holding a board drawn on top of everything, so it reads
+-- through the bank's walls from the vault: the step in gold Display over a gold chevron pointing down.
+local function buildMark(def, w)
+	local anchor = Instance.new("Part")
+	anchor.Name = "PrepMark"
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.CastShadow = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.new(0.2, 0.2, 0.2)
+	anchor.CFrame = CFrame.new(def.Prep.Pos + Vector3.new(0, K.MARK_UP, 0))
+	local tag = Instance.new("BillboardGui")
+	tag.Name = "Tag"
+	tag.Size = K.MARK_SIZE
+	tag.AlwaysOnTop = true
+	tag.LightInfluence = 0
+	tag.Enabled = false
+	tag.Parent = anchor
+	local words = Instance.new("TextLabel")
+	words.Name = "Words"
+	words.Size = UDim2.new(1, 0, 0, 22)
+	Theme.Text(words, 17, "Display")
+	words.TextColor3 = C.Gold
+	words.Text = w.Mark
+	words.Parent = tag
+	for _, s in ipairs({ { -4, 40 }, { 4, -40 } }) do -- (MissionClient's target chevron: two strokes, a "V")
+		local stroke = Instance.new("Frame")
+		stroke.AnchorPoint = Vector2.new(0.5, 0.5)
+		stroke.Position = UDim2.new(0.5, s[1], 0, 31)
+		stroke.Size = UDim2.fromOffset(13, 3)
+		stroke.Rotation = s[2]
+		stroke.BackgroundColor3 = C.Gold
+		stroke.BorderSizePixel = 0
+		Theme.Corners(stroke, 1)
+		stroke.Parent = tag
+	end
+	anchor.Parent = Workspace.CurrentCamera
+	return { part = anchor, gui = tag }
+end
+
+-- Show this site's prep marker (on: the step is ours to do and the place is open) while we're within
+-- K.MARK_RANGE studs of the panel; built the first time it's needed (again if the camera was replaced).
+local function markPrep(site, def, w, on)
+	local mark = prepMarks[site]
+	if on then
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		on = root ~= nil and (root.Position - def.Prep.Pos).Magnitude <= K.MARK_RANGE
+			and player:GetAttribute("TitleScreen") ~= true
+	end
+	if not on then
+		if mark and mark.gui.Enabled then
+			mark.gui.Enabled = false
+		end
+		return
+	end
+	if not mark or not mark.part.Parent then
+		mark = buildMark(def, w)
+		prepMarks[site] = mark
+	end
+	if not mark.gui.Enabled then
+		mark.gui.Enabled = true
+	end
 end
 
 ------------------------------------------------------------------ the alarm flash
@@ -380,17 +517,30 @@ local function updateSite(site, collect)
 	local robbable = site:GetAttribute("Robbable") == true
 	local civilian = player:GetAttribute("Side") == "Civilian"
 	local need, rank = rankLock(site)
-	local def = Heists.Types[site:GetAttribute("HeistId")]
+	local typeId = site:GetAttribute("HeistId")
+	local def = Heists.Types[typeId]
+	local t = now()
+	-- A prep step (fuse box, alarm panel) that we or our crew still have to do before the vault works.
+	-- (Under a rank lock that one says it all: the rank comes first, on the server too.)
+	local prepW = def and def.Prep and prepWords(typeId, def) or nil
+	local prepLocked = prepW ~= nil and civilian and need == nil and not prepIsMine(site, t)
 	for _, name in ipairs(K.PROMPT_NAMES) do
 		local prompt = site:FindFirstChild(name, true)
 		if prompt then
 			local text = need and ("Rank " .. need .. " needed") or (name == "PrepPrompt" and prepLabel(site)) or nil
+			local object -- a lock's small line over the words: where the prep step is
+			-- The vault waits for the prep: the step to do, where it is, and no hold. Never under our own
+			-- thumb, though: a hold begun inside the window is paid (the server checks the prep when the
+			-- hold begins), so the window running out mid-hold must not take that hold away.
+			if not text and name == "RobPrompt" and prepLocked and not (rob.active and rob.prompt == prompt) then
+				text, object = prepW.Lock, prepW.Where
+			end
 			local stageHold -- an unlocked stage with its own text (the drill's "Grab the cash")
 			if not text and name == "RobPrompt" and def and def.Drill then
 				text, stageHold = drillLabel(site, def)
 				stageHold = (stageHold ~= nil and stageHold > 0) and stageHold or nil
 			end
-			labelPrompt(prompt, text, stageHold)
+			labelPrompt(prompt, text, stageHold, object)
 			-- A locked prompt shows even while the site is closed, so walking up to it tells you why.
 			-- Only Enabled is switched here, and never for the seat: PromptGate keeps both prompts out of
 			-- sight while we sit (through MaxActivationDistance), so the two can't flicker against each other.
@@ -419,7 +569,15 @@ local function updateSite(site, collect)
 	if need then
 		explainLock(site, need, rank)
 	end
-	local t = now()
+	-- The panel's marker and the first walk-up's heads-up, only while the place is open (a shut bank
+	-- has nothing to prepare for).
+	if prepW then
+		local on = prepLocked and robbable
+		markPrep(site, def, prepW, on)
+		if on then
+			explainPrep(site, typeId)
+		end
+	end
 	watchAlarm(site, t)
 	local pad = site.PrimaryPart
 	local gui = pad and pad:FindFirstChildOfClass("BillboardGui")
@@ -431,6 +589,7 @@ local function updateSite(site, collect)
 	local name = escape(string.upper(site:GetAttribute("Display") or site.Name))
 	local alarm = t < (site:GetAttribute("AlarmUntil") or 0)
 	local words, color
+	local twoLines = need ~= nil
 	if alarm and player:GetAttribute("Side") == "Cop" then
 		local lit = math.floor(t * 3) % 2 == 0 -- (blinks from one pass to the next)
 		color = lit and C.Danger or C.Text
@@ -441,6 +600,16 @@ local function updateSite(site, collect)
 	elseif robbable then
 		color = C.Cash
 		words = name .. "  " .. tint(K.HEX_OPEN, "OPEN")
+		-- A prep step first: which one, under OPEN (gold), so nobody finds out at the vault. Once ours is
+		-- live: how long the window has left (green: go).
+		if prepLocked then
+			color = C.Gold
+			words = words .. "\n" .. tint(K.HEX_PREP, string.upper(prepW.Lock))
+			twoLines = true
+		elseif prepW and civilian then
+			words = words .. "\n" .. tint(K.HEX_OPEN, prepW.Done .. " " .. clock((site:GetAttribute("PrepUntil") or 0) - t))
+			twoLines = true
+		end
 	elseif site:GetAttribute("TypeOpen") then
 		color = C.Dim
 		words = tint(K.HEX_SHUT, name .. "  CLOSED " .. clock((site:GetAttribute("ReopenAt") or 0) - t))
@@ -454,7 +623,7 @@ local function updateSite(site, collect)
 	if rule.BackgroundColor3 ~= color then
 		rule.BackgroundColor3 = color
 	end
-	sizeSign(gui, need ~= nil)
+	sizeSign(gui, twoLines)
 end
 
 ------------------------------------------------------------------ holding a Rob prompt
@@ -866,7 +1035,42 @@ function HeistClient.Init()
 			end
 			robSpots, fillSpots = fillSpots, robSpots
 			robCount = fillCount
+			-- A site that's gone (streamed out) takes its prep marker with it: the pass no longer visits it.
+			for site, mark in pairs(prepMarks) do
+				if site.Parent ~= heists then
+					mark.part:Destroy()
+					prepMarks[site] = nil
+				end
+			end
 			task.wait(K.PASS_EVERY)
+		end
+	end)
+	-- A prep done, redone or wiped by a robbery (the server's attributes), or our crew changing, locks or
+	-- unlocks that vault at once instead of on the next pass: the Rob prompt is there the moment the fuse
+	-- box is cut. (A window running out changes no attribute: the pass sees that one.)
+	local watched = setmetatable({}, { __mode = "k" })
+	local function watchSite(site)
+		local def = Heists.Types[site:GetAttribute("HeistId")]
+		if watched[site] or not (def and def.Prep) then
+			return
+		end
+		watched[site] = true
+		for _, attr in ipairs(K.PREP_ATTRS) do
+			site:GetAttributeChangedSignal(attr):Connect(function()
+				pcall(updateSite, site, false)
+			end)
+		end
+	end
+	for _, site in ipairs(heists:GetChildren()) do
+		watchSite(site)
+	end
+	heists.ChildAdded:Connect(watchSite)
+	player:GetAttributeChangedSignal("Crew"):Connect(function()
+		for _, site in ipairs(heists:GetChildren()) do
+			local def = Heists.Types[site:GetAttribute("HeistId")]
+			if def and def.Prep then
+				pcall(updateSite, site, false)
+			end
 		end
 	end)
 	-- A Rob / prep prompt streaming in is switched right away: the server leaves it on for everybody, so

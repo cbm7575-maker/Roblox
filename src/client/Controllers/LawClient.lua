@@ -13,8 +13,17 @@
 --     shooting, and the sentence is a star shorter.
 --   * Markers for wanted players at their LastSeen spot: a WANTED / LAST SEEN tag with white stars and
 --     the suspect's clues, and a faint red search circle (150 + 50 per star) while their stars are hollow.
---   * Taser zap beams, and the stamps: CUFFED (with a mugshot headline), BOUNTY +$X (or ARRESTED when
---     the stars carried no bounty), BREAKOUT.
+--   * Taser zap beams (remote TaserFx: from a player cop's body, or from the hand of an AI officer on foot,
+--     PoliceOfficerService; a miss, target false, ends where the server says the wire went), the "ZAPPED!"
+--     toast for whoever is hit, and while tasered (StunnedUntil, server time) the body is held down here
+--     (PlatformStand: every update, and at once when the attribute changes).
+--   * Being cuffed by an AI officer on foot (player attribute CuffProgress, 0..1, PoliceOfficerService):
+--     a small panel, frame "Cuffing", centred in the Stamp zone (where CUFFED lands next) but below the
+--     Banner zone's escape line, or just under a stamp's band while one shows (HUDController.StampTop):
+--     BEING CUFFED, a thin bar filling up (red; blue with the hands up) and, unless the hands are up,
+--     "RUN to break free" ("DRIVE to break free" in a seat). Gone when the attribute is.
+--   * The stamps: CUFFED (with a mugshot headline), BOUNTY +$X (or ARRESTED when the stars carried no
+--     bounty), BREAKOUT.
 --   * Prisoners: the release countdown in the Banner zone (Theme.Zone), with the breakout hint under it.
 -- While the first-join title screen is up (player attribute TitleScreen) none of it shows. WardrobeUI
 -- switches the whole "LawUI" ScreenGui off while its dressing room is open; T and G do nothing then.
@@ -36,6 +45,7 @@
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
@@ -75,6 +85,7 @@ local HEADLINES = {
 }
 
 local gui, taserButton, spikeButton, spikeCount, prisonLabel, handsButton
+local cuffBar = {} -- the BEING CUFFED panel's pieces (build) and the progress it last showed (updateCuff)
 local surrenderCapped = false -- LocomotionClient holds our feet still (hands up)
 local keyCaps = {} -- the T and G caps beside the tiles
 local markers = {} -- [player] = { beacon = Part, label, clues, circle = Part }
@@ -514,6 +525,42 @@ local function build()
 	hint.TextColor3 = C.Dim
 	hint.Parent = prisonLabel
 
+	-- Being cuffed (see the header): BEING CUFFED, the bar under it, the hint under that, a thin edge on
+	-- the left like the prison timer's. updateCuff places it, sizes it and fills the bar.
+	local cuffing = Instance.new("Frame")
+	cuffing.Name = "Cuffing"
+	Theme.Panel(cuffing)
+	cuffing.Size = UDim2.fromOffset(240, 52)
+	cuffing.Visible = false
+	cuffing.Parent = gui
+	local cuffEdge = Instance.new("Frame")
+	cuffEdge.Name = "Edge"
+	cuffEdge.Size = UDim2.new(0, 3, 1, 0)
+	cuffEdge.BackgroundColor3 = C.Danger
+	cuffEdge.BorderSizePixel = 0
+	cuffEdge.Parent = cuffing
+	Theme.Corners(cuffEdge, 2)
+	local cuffTitle = Instance.new("TextLabel")
+	cuffTitle.Name = "Title"
+	cuffTitle.Position = UDim2.fromOffset(0, 5)
+	cuffTitle.Size = UDim2.new(1, 0, 0, 18)
+	cuffTitle.Text = "BEING CUFFED"
+	Theme.Text(cuffTitle, 17, "Display")
+	cuffTitle.Parent = cuffing
+	local cuffTrack, cuffFill = Theme.Bar(cuffing, C.Danger)
+	cuffTrack.Position = UDim2.fromOffset(12, 27)
+	cuffTrack.Size = UDim2.new(1, -24, 0, 6)
+	cuffFill.Size = UDim2.fromScale(0, 1)
+	local cuffHint = Instance.new("TextLabel")
+	cuffHint.Name = "Hint"
+	cuffHint.Position = UDim2.fromOffset(0, 35)
+	cuffHint.Size = UDim2.new(1, 0, 0, 13)
+	cuffHint.RichText = true -- (the word to act on is white, the rest dim)
+	Theme.Text(cuffHint, 12, "Body")
+	cuffHint.TextColor3 = C.Dim
+	cuffHint.Parent = cuffing
+	cuffBar.panel, cuffBar.edge, cuffBar.title, cuffBar.fill, cuffBar.hint = cuffing, cuffEdge, cuffTitle, cuffFill, cuffHint
+
 	markerFolder = Instance.new("Folder")
 	markerFolder.Name = "WantedMarkers"
 	markerFolder.Parent = Workspace.CurrentCamera -- local-only parts
@@ -697,6 +744,60 @@ local function placeButtons()
 	end
 end
 
+-- Tasered (StunnedUntil, server time: ArrestService for a player cop's taser, PoliceOfficerService for an
+-- officer's): keep the character down on this device while it lasts.
+local function holdStunned()
+	local _, hum = myRoot()
+	if hum then
+		local stunned = (player:GetAttribute("StunnedUntil") or 0) > now()
+		if hum.PlatformStand ~= stunned and not hum.SeatPart then
+			hum.PlatformStand = stunned
+		end
+	end
+end
+
+-- The BEING CUFFED panel (see the header), from PoliceOfficerService's CuffProgress.
+local function updateCuff()
+	local panel = cuffBar.panel
+	local frac = player:GetAttribute("CuffProgress")
+	if type(frac) ~= "number" or not isWanted(player) or player:GetAttribute("TitleScreen") == true then
+		panel.Visible = false
+		return
+	end
+	local up = player:GetAttribute("Surrender") == true
+	local _, hum = myRoot()
+	local tone = up and C.Police or C.Danger -- (blue: coming quietly)
+	cuffBar.fill.BackgroundColor3 = tone
+	cuffBar.edge.BackgroundColor3 = tone
+	cuffBar.hint.Visible = not up
+	cuffBar.hint.Text = '<font color="#' .. C.Text:ToHex() .. '">' .. ((hum and hum.SeatPart) and "DRIVE" or "RUN")
+		.. "</font> to break free"
+	-- Centred in the Stamp zone, never up into the Banner zone (the escape line shows there while wanted);
+	-- just under the stamp's band while a stamp is up.
+	local touch = Theme.IsTouch()
+	local w, h = gui.AbsoluteSize.X, gui.AbsoluteSize.Y
+	local pw, ph = touch and 210 or 240, up and 39 or 52
+	local _, sy, _, sh = zoneRect("Stamp", touch, w, h)
+	local _, by, _, bh = zoneRect("Banner", touch, w, h)
+	local top = math.max(sy + (sh - ph) / 2, by + bh + 6)
+	local _, bandBottom = HUDController.StampTop()
+	if bandBottom then
+		top = bandBottom + 8
+	end
+	panel.Position = UDim2.fromOffset(math.floor((w - pw) / 2), math.floor(top))
+	panel.Size = UDim2.fromOffset(pw, ph)
+	cuffBar.title.TextSize = touch and 15 or 17
+	local goal = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
+	if not panel.Visible then
+		cuffBar.fill.Size = goal -- (a new cuffing starts where it is, not swept from the last one)
+		panel.Visible = true
+	elseif cuffBar.last ~= frac then
+		-- (the server's steps come 10 times a second: glide between them)
+		TweenService:Create(cuffBar.fill, TweenInfo.new(0.12, Enum.EasingStyle.Linear), { Size = goal }):Play()
+	end
+	cuffBar.last = frac
+end
+
 local function updateUI()
 	local amCop = side() == "Cop"
 	local title = player:GetAttribute("TitleScreen") == true
@@ -729,25 +830,37 @@ local function updateUI()
 	else
 		prisonLabel.Visible = false
 	end
-	-- Stunned: keep the character down on this device while the server's stun lasts.
-	if hum then
-		local stunned = (player:GetAttribute("StunnedUntil") or 0) > now()
-		if hum.PlatformStand ~= stunned and not hum.SeatPart then
-			hum.PlatformStand = stunned
-		end
-	end
+	holdStunned()
+	updateCuff()
 end
 
-local function zap(cop, target)
-	local a = cop.Character and cop.Character:FindFirstChild("HumanoidRootPart")
-	local b = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-	if not a or not b then
+-- TaserFx (see the header): `from` is the cop (a Player) or an AI officer's Model; `target` the player
+-- hit, or false for a miss, whose wire ends at missAt. Ends streamed out of this device arrive as nil:
+-- then there is no wire to draw (the toast still shows for the one hit).
+local function zap(from, target, missAt)
+	local hit = typeof(target) == "Instance" and target:IsA("Player")
+	if hit and target == player then
+		NotifyController.Show("ZAPPED! You're stunned.", C.Police)
+	end
+	local a
+	if typeof(from) == "Instance" and from:IsA("Player") then
+		a = from.Character and from.Character:FindFirstChild("HumanoidRootPart")
+	elseif typeof(from) == "Instance" and from:IsA("Model") then
+		a = from:FindFirstChild("RightHand") or from:FindFirstChild("HumanoidRootPart")
+	end
+	local b = hit and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not a or not (b or typeof(missAt) == "Vector3") then
 		return
 	end
 	local a0 = Instance.new("Attachment")
 	a0.Parent = a
 	local a1 = Instance.new("Attachment")
-	a1.Parent = b
+	if b then
+		a1.Parent = b
+	else
+		a1.Parent = Workspace.Terrain
+		a1.WorldPosition = missAt
+	end
 	local beam = Instance.new("Beam")
 	beam.Attachment0, beam.Attachment1 = a0, a1
 	beam.Color = ColorSequence.new(C.Police)
@@ -761,9 +874,6 @@ local function zap(cop, target)
 		a0:Destroy()
 		a1:Destroy()
 	end)
-	if target == player then
-		NotifyController.Show("ZAPPED! You're stunned.", C.Police)
-	end
 end
 
 function LawClient.Init()
@@ -791,6 +901,12 @@ function LawClient.Init()
 	player:GetAttributeChangedSignal("Surrender"):Connect(function()
 		capFeet(player:GetAttribute("Surrender") == true)
 	end)
+	-- The cuff bar and the taser stun follow their attributes at once, not at the loop's next pass: the
+	-- bar fills in about a second, and a tasered runner would carry on for up to 0.2 s.
+	for _, name in ipairs({ "CuffProgress", "Surrender" }) do
+		player:GetAttributeChangedSignal(name):Connect(updateCuff)
+	end
+	player:GetAttributeChangedSignal("StunnedUntil"):Connect(holdStunned)
 	Remotes.OnClient("BountyEarned", function(info)
 		if (tonumber(info.Amount) or 0) > 0 then
 			HUDController.Stamp("BOUNTY", "+" .. HUDController.Money(info.Amount) .. " for catching " .. info.Name, C.Cash)
