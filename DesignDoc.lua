@@ -17,7 +17,7 @@ return {
 
 	Targets = {
 		Launch = "Early 16+ version Sat Oct 10 2026; full launch Thu Nov 12 2026 (GTA 6 preload day)",
-		Rating = "Moderate 13+ likely (real guns that kill, since 2026-10-29; was Mild 9+)",
+		Rating = "Moderate likely: 16+ at launch, 9-15 after Roblox's evaluation (real guns that kill, since 2026-10-29; was Mild)",
 		MaxPlayers = 30,
 		D1 = "12-20%", Session = "15+ min", Payers = "1-3%",
 	},

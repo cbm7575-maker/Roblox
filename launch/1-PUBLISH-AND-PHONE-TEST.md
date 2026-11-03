@@ -1,7 +1,9 @@
 # 1. Private publish and phone driving test
 
 Do this first: game passes and products can only be created for a published experience, and the
-phone test needs one too. New experiences start private, so nobody else can join yet.
+phone test needs one too. A newly published game is closed: only you, people with Edit access and
+group members whose role allows it can get in. Releasing it to the public is a separate step
+(launch/5), and it happens only when you decide.
 
 ## Before you publish (in Studio)
 
@@ -13,6 +15,9 @@ phone test needs one too. New experiences start private, so nobody else can join
      window, choose **NightShift Dev** as the creator/owner instead of your own account. In the
      Creator Hub, switch Creations to the group to find the game.
    - If NightShift Dev is a **separate account**: sign Studio into that account before publishing.
+   - Roblox's publishing rules fall on the owner, so pick now. In a group game the group owner has to
+     meet the age and verification requirements, only the group owner can pay the all-ages fee, and
+     every member who publishes needs 2-step verification.
 3. The settings scripts can't change (from the design doc's "UserOnly" list):
 
 | Where | Setting |
@@ -27,9 +32,17 @@ so leaving it on is harmless; turn it off if you prefer.
 
 ## Publish
 
-File > **Publish to Roblox** > create a new experience named **THEFT MIAMI COAST**. Keep it **Private**.
+File > **Publish**. In the Game details window, enter the name **THEFT MIAMI COAST**, the genre and the
+description (launch/4), add the icon, then click **Save**. This first publish doesn't release the game.
 (If you already published it under another name, rename it in the Creator Hub instead.)
-Then copy the experience's link from the Creator Hub; you'll play it from your phone.
+Then copy the game's link from the Creator Hub; you'll play it from your phone.
+
+**Careful from here on.** Roblox uses File > Publish for releasing too: **Continue** leads to an age
+question, and the **Publish** button after it releases the game to age-checked players 16 and up.
+Roblox's docs don't say what that window does on a game that was never released, so when you only
+want to update the closed version, first open Creator Dashboard > the game > Publish settings >
+Manage Audience > **Manage access**. In the Public tab, **Friends** on limits the game to your friends
+and testers. Stop at the age question unless you mean to go live.
 
 ## Phone driving test (about 20 minutes)
 

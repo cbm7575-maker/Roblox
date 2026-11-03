@@ -10,13 +10,16 @@ tells you in two minutes whether everything loaded.
 
 ## Load it into Studio
 
-0. **Back up first.** In Studio, File > Save to File As... `TheftMiamiCoast-backup-oct30.rbxl`.
+0. **Back up first.** Close Studio, then copy `NeonCoast.rbxl` in File Explorer (for example to
+   `NeonCoast-backup.rbxl`). Don't use File > Save to File As: Studio then keeps working in the copy,
+   and the update would sync into the backup instead of the real place.
 1. In the project folder, run `python tools/manifest.py`. It should say **138 scripts** (135 before).
    Don't skip this: without a fresh manifest, DevSync skips scripts it thinks are up to date.
 2. `python -m http.server 34999 --bind 127.0.0.1` in that folder (skip if it's already running).
 3. Studio command bar: `print(require(game.ServerStorage.Tools.DevSync).Run())`.
-   - Expect 3 NEW lines: RobloxMenu (Shared.Util), PoliceOfficerService and RaceAIService
-     (Services).
+   - Expect 5 NEW lines: RobloxMenu (Shared.Util), PoliceOfficerService, RaceAIService and
+     RespawnService (Services), and RespawnClient (the last two are the Oct 29 death screen, which
+     the saved place didn't have yet). If you synced the death screen already, it's 3.
    - Many UPD lines are normal. Then save (Ctrl+S).
 
 ## A. Smoke test (2 minutes)
@@ -136,6 +139,12 @@ Two players (Test tab > Clients and Servers, 2 players):
      REMATCH. No money, no police for these.
 9. In a challenge, get out of the car (or get a star): it's off for both.
 10. Leave the game in the lobby and mid-race: no car is left frozen.
+
+## I. Mansion juice bar (Nov 2)
+
+Go inside the Flamingo Beach Mansion and up to the great room on level 2. The sign reads **FLAMINGO JUICE
+BAR**, in one line that fits the wall. The shelf behind the counter has four juice dispensers below and
+four fruit bowls above, and no bottles anywhere. Nothing floats, and you can still walk behind the counter.
 
 ## What to send me
 

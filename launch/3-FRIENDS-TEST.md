@@ -1,9 +1,14 @@
 # 3. Friends test (you + 3-5 friends, about 3 hours)
 
-**Getting friends in:** a private experience only lets in people with access. Either make the game
-public for the session (the maturity questionnaire in step 5 has to be done first), or give your
-friends access in the Creator Hub if your account offers that. Use the live game, not Studio: this
-test is about real servers, real phones and real lag.
+**Getting friends in:** invite them as early testers. The game doesn't need to be released or to have a
+maturity label for this. In Studio, File > **Invite early testers**, search for up to 10 friends, then
+click **Invite**. Change the list later with **Manage Collaborators** (top right of Studio).
+- If you're 18 or older, Roblox lets you invite friends who are 16+. Younger friends must be trusted
+  friends (under 9 also needs a parent's approval).
+- If you haven't done an age check, Roblox asks you to do one first.
+- Testers see a preview watermark. That's normal.
+
+Use the live game, not Studio: this test is about real servers, real phones and real lag.
 
 **Everyone:** play on whatever you normally use (phones especially). When something breaks, post it
 in the group chat right away using the template at the bottom, with a screenshot if you can.
@@ -26,7 +31,8 @@ inside their home. Leaving while carrying a bag loses the bag on purpose; banked
 
 **Purchases:** you, as the owner, get every pass and cash pack free, so you can't test a real purchase
 yourself. Once the IDs are in (launch/2), ask one friend to buy the cheapest cash pack (49 Robux) to
-prove real purchases work end to end. Nobody else needs to buy anything.
+prove real purchases work end to end. Nobody else needs to buy anything. Roblox's docs don't say
+whether purchases work in a preview, so if the prompt refuses, do this check right after release.
 
 ## Bug report template
 

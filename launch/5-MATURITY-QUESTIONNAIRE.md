@@ -1,50 +1,95 @@
-# 5. Maturity questionnaire (Theft Miami Coast)
+# 5. Maturity questionnaire and going public (Theft Miami Coast)
 
-The game can't be played publicly until this is filled in (Creator Hub > the game > Audience /
-Maturity & Compliance). Roblox asks you to answer for the **most intense moment** in the game, not
-the average.
+Roblox's rules were checked on Nov 2, 2026 against its Creator Hub docs and its Age-Restricted Content
+policy. The game facts below come from the current scripts (138), not the plan. I can't open your
+Creator Hub, so the wording on your screen may differ. Nothing here has been done yet, and none of it
+is needed for the friends test (launch/3).
 
-I couldn't open Roblox's questionnaire from here, so its questions may be worded differently. Below is
-every content category it covers, with the answer for Theft Miami Coast and the evidence. Each answer
-comes from reading the scripts of your Oct 25 Studio save (126 scripts), not from the plan alone.
+## Keep alcohol out
+
+Roblox limits any game that shows alcohol to age-verified players 18+, and a Restricted game can't be
+played at all in some countries. The Flamingo Beach Mansion used to have a bar with a shelf of bottles.
+It's now the FLAMINGO JUICE BAR, with juice dispensers and fruit bowls, like the rooftop apartments'
+juice bars. Don't add bottles, bars or drinks back without redoing this questionnaire. The mansion's
+pool and cabana bars are plain counters with no bottles or signs.
+
+## Answers
+
+Fill it in at Creator Dashboard > click the game's thumbnail > Publish settings > **Content rating** >
+**Start**. Answer for the **most intense moment** a player can reach, not the average. These are
+Roblox's 15 categories:
 
 | Category | Answer | Evidence in the game |
 |---|---|---|
-| Violence | **Yes, frequent, against players and pedestrians. Realistic-shaped guns, shown without injury** (it's part of normal play) | **Guns:** Coast Arms sells a pistol, an SMG, a shotgun and a rifle (plus body armor), and police on duty carry a service pistol that only works on wanted players. **Fists:** punching. **What a hit shows:** a white puff (never red), a flinch, and a health bar going down. **Being taken down (changed Oct 29):** a gun **kills** another player. Their body falls limp (ragdoll) and stays down, their screen goes grey with "YOU DIED", and they come back with a RESPAWN button or by themselves after 10 seconds. Fists only knock people out: they fall and get back up unhurt. **Pedestrians:** a punch, a shot or a car knocks them over, and they get up and run off, dropping a wallet. **Opting out:** PASSIVE mode (PHONE > SETTINGS) and safe zones (spawns, shops, homes, the Hideout, Police HQ, the car meet) stop fights. **Also:** cops tase and cuff wanted players and send them to prison, spike strips pop tires, and cars can knock pedestrians over or bump into each other (no damage). |
-| Blood or gore | **None** | Hits show a white puff, never red. No wounds. A shot player's body lies there, unmarked, until they respawn (10 seconds at most). |
-| Crude humor | **None** | Jokes are kid-safe puns on signs, parody billboards and the Coast Feed. |
-| Fear / horror | **None** | No scary content. |
-| Romance | **None** | |
-| Strong language | **None** | No profanity in game text. Player chat is Roblox's filtered chat. |
-| Alcohol, drugs, tobacco | **None** | The "LUCKY LOTTO" signs were renamed LUCKY LEMONADE in an earlier update; no drinks, drugs or smoking. |
-| Gambling | **None** | No casino, betting or chance games. |
-| Paid random items | **None** | Every purchase shows exactly what you get: game passes and fixed cash packs. |
-| Free-form user creation | **None** | Players can't build or type text that others see, apart from Roblox chat. |
-| Social hangout as the main purpose | **No** | The core is driving, heists and chases. |
-| Real-world crime | Fictional only | Robbing made-up stores, the Big Score heist, carjacking traffic cars (the driver runs off), knocking people over for a wallet, police arrests, prison breakouts. Nothing recreates a real crime or real place. |
+| Violence | **Yes. Intensity: Moderate. Frequency: Repeated.** | **Guns:** Coast Arms sells a realistic-looking pistol, SMG, shotgun and rifle, plus body armor. Police on duty carry a service pistol that only works on wanted players. **Players:** a gun kills. The body falls limp and stays down, the screen goes grey with YOU DIED, and they respawn by button or by themselves within 10 seconds. Fists knock out for 5 seconds. A car hit hurts, and a second hard hit, or being run over while down, kills. **Police on foot (AI):** they shout, chase, cuff, and shoot players who are armed and hostile; dying beside them is an arrest. Players can shoot them dead (the body lies there 12 seconds) or punch them down. **Store clerks:** held up at gunpoint they raise their hands and fill a bag. Shot or punched, they fall and lie there for 20 seconds before a new clerk takes over. **Pedestrians and drivers:** at gunpoint they raise their hands, cover their heads or run, and drivers leave their cars. A punch, a shot or a car knocks a pedestrian over; they get up, run off and drop a wallet. **Taser:** a 3-second stun with no injury shown. This matters because Roblox lists graphic electrocution as Restricted. **Opting out:** PASSIVE mode and safe zones stop fights. Port Solana and everyone in it are fictional. |
+| Blood | **No** | Hits show a small white puff, never red. No wounds. |
+| Fear | **No** | No scary content. The panting when you run out of stamina isn't a scare. |
+| Crude humor | **No** | Signs, billboards and the Coast Feed have no bodily-function jokes. |
+| Unplayable gambling content | **No** | No casino, cards or chance games. Races have no stakes, and Roblox says car racing doesn't count. |
+| Strong language | **No** | No profanity in game text. Player chat is Roblox's filtered chat. |
+| Romantic themes | **No** | No romance. Homes have bedrooms, and the code lists Club Nova's billboard as an all-ages roller disco, but the question is about games that mainly take place in private or adult settings. |
+| Alcohol | **No** | Nothing shows or mentions alcohol: the mansion and apartment bars are juice bars, the LUCKY LOTTO signs became LUCKY LEMONADE, and Club Nova has a dance floor and a DJ but no bar. |
+| Social hangout | **No** | The core is driving, heists and chases. This one matters: a hangout with bedrooms is 18+, and Roblox treats a game as a hangout if its title or description mentions one (launch/4). |
+| Free-form user creation | **No** | Players can't draw, paint freehand or type text that others see, apart from Roblox chat. Car paint comes from a fixed list. |
+| Sensitive issues | **No** | Roblox's own example says guns in a shooter don't count unless the issue is the game's main theme. |
+| Paid random items | **No** | Every purchase shows exactly what you get: game passes and fixed cash packs. |
+| Paid item trading | **No** | Players can't trade. A wallet or bag dropped in a fight is a share of in-game cash, not a paid item. |
+| Media | **No to all three** | No built-in sharing tools and no screenshots from other games. The Coast Feed is short auto-written posts that fade, not a scrolling feed; music and ambience are ordinary game audio. |
+| AI interaction | **No** | Nothing talks to a generative AI. AI police and racers are ordinary scripts. Using AI to build the game doesn't count. |
 
-**Expected label: Moderate (13+).** Since Oct 29 players can shoot each other dead with realistic guns, so answer for that. Roblox's
-content-maturity guide (as summarized by a web search; I couldn't open roblox.com from here):
-- **Mild:** violence that is implied or unrealistic, for example bodies that disappear when their
-  health reaches zero.
-- **Moderate:** realistic-looking violence.
+If you later add anything that changes one of these answers, you have to resubmit the questionnaire.
 
-Points for Mild: no blood, no gore. Points for Moderate: players shot dead with realistic-shaped
-guns, ragdoll falls, and the fact that you can knock pedestrians down and take their wallets. Answer
-honestly for the most intense moment: a player shooting another player dead.
-- If it asks whether weapons are realistic: **yes**.
-- If it asks whether players can be killed: **yes**, by other players' guns.
-- If it asks whether injuries or blood are shown: **no**.
+## Expected label: Moderate
 
-What each label means for you:
-- **Mild (9+):** reaches 9 to 12 year-olds as well.
-- **Moderate (13+):** loses the under-13 audience.
-- If you want Mild instead, the levers are the deaths and the realism: go back to knockouts only
-  (before Oct 29), make the guns clearly non-realistic (paint or foam blasters), and stop
-  pedestrians being knocked down.
+Roblox's Moderate violence is "Non-graphic, realistic-looking depictions of violence and/or death"
+(Content maturity guide). Bodies that fall and stay down are past Mild, whose example is a body that
+disappears at zero health, and one realistic moment is enough to count. Nothing in the game comes near
+Restricted's graphic injuries.
 
-Check Roblox's current wording at create.roblox.com (Production > Promotion > Content maturity) before
-you submit.
+Two risks a label doesn't remove:
+- Roblox says realistic or excessive violence in your uploaded assets can be moderated whatever the
+  label says.
+- It doesn't define where a gunpoint robbery falls, so a moderator could read the clerks and hands-up
+  scenes more strictly than I have.
 
-**Account to-do:** turn on ID verification and 2-step verification on the account that owns the game.
-Both are needed before a game can reach players under 16.
+| Label | Who can play |
+|---|---|
+| Minimal, Mild | Kids 5-8 and Select 9-15 (with the all-ages route), and 16+ |
+| **Moderate** | Select 9-15 (with the all-ages route), and 16+. Never Kids 5-8 |
+| Content May Vary | Age-checked 16+ only |
+| Restricted | Age-verified 18+ only, and unplayable in some countries (for example Korea, Saudi Arabia, Türkiye) |
+
+"Moderate (13+)" and "Mild (9+)" in older versions of this guide no longer apply. Mild now matters only
+for reaching ages 5-8, and it would mean going back to knockouts only, with non-realistic guns and no
+bodies left on the ground.
+
+## Going public
+
+**Route 1: age-checked 16+. Free, no evaluation. Do this first.**
+
+1. On the account that owns the game (the group owner for a group game): good standing, at least 2 days
+   old, and an age check by face scan or government ID.
+2. Do the questionnaire above and read the Questionnaire Preview page. It should say Moderate. Click
+   **Submit**. This doesn't release the game.
+3. In Studio, File > **Publish** > **Continue**. The window asks whether the game has age-restricted
+   content. Answer **Yes**: it matches the full questionnaire and gives the Moderate label. **No** gives
+   the same 16+ audience with a Content May Vary label, and you'd still need the full questionnaire
+   later for the all-ages route, some regions and rewarded video ads. Roblox's docs don't quote the exact
+   question or say whether a finished questionnaire skips it.
+4. Click **Publish**. **This is the step that goes live.**
+5. Creator Dashboard > the game > Publish settings > Manage Audience > **Manage access**. In the Public
+   tab, **Friends** off means anyone on Roblox can play, subject to age and region. Click **Save Changes**.
+
+**Route 2: all ages. Reaches players 9-15. Do this after Route 1 is running.**
+
+- Verify the owner's account: government ID at 18+ (face scan if under 18).
+- Turn on 2-step verification.
+- Pay the refundable 1,000 Robux fee, or keep Plus or Premium for 2 months in a row. To pay: Creator Hub >
+  the game > Audience > Reach > Refundable publishing fee > **Pay**. A 50,000 Robux refundable fee buys a
+  48-hour expedited review.
+- Pass Roblox's evaluation: a trial with age-checked 16+ players, then a safety review. There's no fixed
+  length. Roblox's pages disagree on the numbers (250 plays, 500 players, 25 players), and it has said
+  the criteria will change, so go by the **Audience Reach** tab. Its refund terms differ between pages too.
+
+**Every update after this counts as a release.** The same requirements apply to new versions and audience
+changes. Check Roblox's current rules before you submit, because they've changed several times this year.
