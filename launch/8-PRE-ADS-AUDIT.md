@@ -1,10 +1,51 @@
 # 8. Pre-ads audit (Nov 3): Creator Hub fixes, the five test passes, publishing
 
-The live game (version 4, public, Moderate, ages 16+) was checked on Nov 3 from the Creator Hub and the
-code. 24 scripts were fixed locally (list at the bottom). **None of this is live yet, and none of it has
-been played in Roblox.** Claude couldn't drive Studio this time (access to it was declined), so every
-gameplay test below is still to do. What was checked: every changed script compiles, lint shows no new
-warnings, and the save and purchase code passed logic tests (`tools/logic-tests`).
+## Status, Nov 3 evening: live as version 5
+
+The owner gave full access in the evening, and this is what Claude did:
+- **Created** the 5 passes and 5 cash packs at the prices in section F. They're on sale, with Managed
+  Pricing **off**. Turning it on needs you to accept Roblox's Managed Pricing terms, which is your call.
+- **Set** the genre to Action / Open World Action (locked until Dec 3), max players to 30, and Studio API access on.
+- **Put** the 10 IDs in `Config/Shop.lua`.
+- **Ran** all five test passes below in Studio.
+- **Published** version 5.
+
+The start place's name already reads THEFT MIAMI COAST.
+
+**Still yours:**
+- **Upload the icon and thumbnails** (A1 and A2). The ready files are `launch/icons/game_icon.png`,
+  `launch/thumbnails/thumb1_sunset_ocean_drive.png` and `thumb2_police_flamingo_beach.png`. This needs a
+  browser that can attach files, and this session had none.
+- **Join the live game once.** When Claude tried, Roblox asked the account to prove it's human.
+- **Test a real purchase from a second account.** Your own account owns every pass automatically.
+
+Test results (Studio, Nov 3):
+1. **Core:** car, drive, reverse, exit, the ATM robbery, the chase, an arrest on foot, release on time,
+   banking, the phone. Plus the tutorial dead end being fixed, the GPS routing itself, and Sea Dream's
+   rank 3 lock.
+2. **New player:** the owner's live save was effectively new (tutorial step 0), so the whole guide ran
+   from the start.
+3. **Two players:**
+   - An idle cop stops counting after 2 minutes, an AI patrol then comes for the wanted player, and the
+     idle cop gets no pay.
+   - A car hit on a PASSIVE player does nothing; the same hit without PASSIVE knocks them down.
+4. **Money:**
+   - Saves carry over between sessions.
+   - A Studio test purchase of the $5,000 pack paid $5,000 once, and the receipt was in the real
+     DataStore record.
+   - The shop shows the live Roblox prices.
+5. **Final run:** clean start, and thumbnails captured.
+
+Across all sessions there were no game script errors. The one error seen came from Claude anchoring
+cars for a photo.
+
+Found and fixed in play: store signs showed raw `<font color=...>` tags after a site streamed out and
+back in (HeistClient).
+
+Not testable here: a phone (Studio's simulator shows the desktop HUD), a gamepad, and a real Robux
+purchase.
+
+---
 
 Do it in this order: A (Creator Hub), B (load into Studio), C (the five tests), D (publish), E (ads).
 

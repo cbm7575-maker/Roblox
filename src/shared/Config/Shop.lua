@@ -16,15 +16,15 @@
 local Shop = {}
 
 Shop.Passes = {
-	{ Key = "VIP", Id = 0, Price = 499, Name = "VIP", Icon = "👑",
+	{ Key = "VIP", Id = 2066521876, Price = 399, Name = "VIP", Icon = "👑",
 		Perk = "+25% heist and bounty cash, VIP neon paints, a gold [VIP] chat tag" },
-	{ Key = "BigDuffel", Id = 0, Price = 299, Name = "Big Duffel Bag", Icon = "💰",
+	{ Key = "BigDuffel", Id = 2069383775, Price = 249, Name = "Big Duffel Bag", Icon = "💰",
 		Perk = "Carry 50% more cash before you have to bank" },
-	{ Key = "SWATUnit", Id = 0, Price = 399, Name = "SWAT Unit", Icon = "🚓",
+	{ Key = "SWATUnit", Id = 2067205791, Price = 249, Name = "SWAT Unit", Icon = "🚓",
 		Perk = "The Riot Truck for the police team: shoves cars, blocks roads" },
-	{ Key = "NeonGarage", Id = 0, Price = 249, Name = "Neon Garage", Icon = "✨",
+	{ Key = "NeonGarage", Id = 2071110263, Price = 199, Name = "Neon Garage", Icon = "✨",
 		Perk = "Extra underglow colors for every car" },
-	{ Key = "Hypercar", Id = 0, Price = 599, Name = "Hypercar", Icon = "🏎️",
+	{ Key = "Hypercar", Id = 2067595908, Price = 499, Name = "Hypercar", Icon = "🏎️",
 		-- Honest text: the Riptide R and Storm Petrel are faster, and its stats must never be raised
 		-- above them (that would be pay-to-win).
 		Perk = "The Vortex hypercar (125 mph), yours right away with no saving up" },
@@ -32,11 +32,11 @@ Shop.Passes = {
 
 -- Cash packs (developer products). Cash is the in-game amount granted; Price is Robux (display only).
 Shop.Products = {
-	{ Key = "Cash1", Id = 0, Price = 49, Cash = 5000 },
-	{ Key = "Cash2", Id = 0, Price = 149, Cash = 18000 },
-	{ Key = "Cash3", Id = 0, Price = 399, Cash = 55000 },
-	{ Key = "Cash4", Id = 0, Price = 799, Cash = 120000 },
-	{ Key = "Cash5", Id = 0, Price = 1499, Cash = 250000 },
+	{ Key = "Cash1", Id = 3728075000, Price = 49, Cash = 5000 },
+	{ Key = "Cash2", Id = 3728075068, Price = 149, Cash = 18000 },
+	{ Key = "Cash3", Id = 3728075163, Price = 399, Cash = 55000 },
+	{ Key = "Cash4", Id = 3728075233, Price = 799, Cash = 120000 },
+	{ Key = "Cash5", Id = 3728075305, Price = 1499, Cash = 250000 },
 }
 
 -- Perk numbers (read by the services that pay out).

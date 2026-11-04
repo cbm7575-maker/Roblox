@@ -278,16 +278,24 @@ end
 -- the words, and its normal size kept on the board itself (the locked sign is bigger). Returns the rule.
 local function styleSign(gui, label)
 	local rule = gui:FindFirstChild("Rule")
-	if rule then
+	-- A site that streamed out and back in can come back with the label's own properties reset to the
+	-- server's while our Rule is still there: the sign then showed its colour tags as text ("<font
+	-- color=...>ATM CLOSED</font>", seen in play on Nov 3). So the label is restyled whenever it lost them.
+	if rule and label.RichText then
 		return rule
 	end
-	gui:SetAttribute("NormalSize", gui.Size)
+	if gui:GetAttribute("NormalSize") == nil then
+		gui:SetAttribute("NormalSize", gui.Size)
+	end
 	label.FontFace = Theme.Font.Display
 	label.RichText = true
 	label.TextColor3 = C.Text
 	label.TextStrokeTransparency = 1
 	Theme.Shadow(label, 2)
 	label.Size = UDim2.new(1, 0, 1, -6)
+	if rule then
+		return rule
+	end
 	rule = Instance.new("Frame")
 	rule.Name = "Rule"
 	rule.AnchorPoint = Vector2.new(0.5, 1)

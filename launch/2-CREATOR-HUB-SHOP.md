@@ -35,6 +35,27 @@ them out. The PRD's **Coast Club** monthly subscription isn't built either, so i
 | Cash4 | $120,000 Cash | 799 | `cash4.png` | Adds $120,000 to your bank instantly. |
 | Cash5 | $250,000 Cash | 1,499 | `cash5.png` | Adds $250,000 to your bank instantly. |
 
+## Created Nov 3, 2026 (live in version 5)
+
+All ten were created with these names and descriptions, at the prices from the launch/8 price review,
+with Managed Pricing off, and the IDs are in `src/shared/Config/Shop.lua`:
+
+| Key | ID | Price |
+|---|---|---|
+| VIP | 2066521876 | 399 |
+| BigDuffel | 2069383775 | 249 |
+| SWATUnit | 2067205791 | 249 |
+| NeonGarage | 2071110263 | 199 |
+| Hypercar | 2067595908 | 499 |
+| Cash1 | 3728075000 | 49 |
+| Cash2 | 3728075068 | 149 |
+| Cash3 | 3728075163 | 399 |
+| Cash4 | 3728075233 | 799 |
+| Cash5 | 3728075305 | 1,499 |
+
+They use Roblox's default image for now. To add the icons from `launch/icons/`, open each item in the
+Creator Hub and upload its image. Prices can change there at any time without touching code.
+
 ## Send me the IDs
 
 Each pass and product page shows a long number (the asset or product ID). Send them in this form
