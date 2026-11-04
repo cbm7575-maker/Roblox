@@ -26,6 +26,12 @@
 --     (LawClient.SideSlot; WardrobeUI's OUTFIT tile sits under it). Hidden while the first-join title
 --     screen is up (attribute TitleScreen). WardrobeUI switches the whole "House" ScreenGui off while
 --     its dressing room is open.
+--   * A home with a garage level (the penthouse's P1; player attribute HomeLevel = "Home" or "Garage"):
+--     a GARAGE tile (button "HomeGarage": a car glyph) two slots under LEAVE, past WardrobeUI's OUTFIT,
+--     that takes you down (RequestHouse "Garage"); down there it reads HOME (an up arrow) and takes you
+--     back up ("Upstairs"). A toast the first time you reach the garage says how to drive out. The
+--     owner's "My garage" prompts on that home's street garage doors (HomeGarage) only show for the
+--     owner (a local change: everyone else's are switched off).
 -- For the phone and minimap: HouseClient.HomePosition() -> your front door (Vector3) or nil,
 -- HouseClient.HomeName() -> string or nil, HouseClient.Homes() -> every property (for a list),
 -- HouseClient.RouteTo(id) -> GPS route to a property's door (your own home if id is nil).
@@ -60,13 +66,14 @@ local CARD_W = 360 -- PC; on a phone 42% of the width, 300-360
 -- 1280 px wide window)
 local CARD_W_TOUR = 392
 
-local gui, curtain, card, buyButton, tourButton, cancelButton, leaveButton
+local gui, curtain, card, buyButton, tourButton, cancelButton, leaveButton, garageButton
 -- The home the buy card is showing, and the server's info (trade-in; At = the FOR SALE stand on a tour)
 local cardHome, cardInfo
 local canBuy = false
 local chatHidden = false -- the card hid Roblox's chat window (PC), to show again when it closes
 local fadeToken = 0
 local hinted = false
+local garageHinted = false
 local caps = {} -- the buttons' key caps: { Cap, Keyboard, Gamepad, Pad, Button }
 local prompts = setmetatable({}, { __mode = "k" }) -- front-door prompts seen in Workspace.Homes
 local signs = setmetatable({}, { __mode = "k" }) -- street sign boards seen in Workspace.Homes
@@ -519,11 +526,107 @@ local function placeLeave()
 	leaveButton.Size = UDim2.fromOffset(size.X, size.Y)
 end
 
+-- A car from the side (body, cabin, two wheels): the GARAGE tile.
+local function carGlyph(g)
+	glyphStroke(g, 20, 6, 12, 12)
+	glyphStroke(g, 10, 4, 11, 8)
+	local w1 = glyphStroke(g, 5, 5, 6.5, 16)
+	local w2 = glyphStroke(g, 5, 5, 17.5, 16)
+	Theme.Corners(w1, 3)
+	Theme.Corners(w2, 3)
+end
+
+-- An arrow pointing up: the HOME tile down in the garage.
+local function upGlyph(g)
+	glyphStroke(g, 2.5, 14, 12, 11)
+	glyphStroke(g, 2.5, 8, 9.4, 6.4, -45)
+	glyphStroke(g, 2.5, 8, 14.6, 6.4, 45)
+end
+
+-- The GARAGE / HOME tile (same recipe as LEAVE), its glyph redrawn when the level changes.
+local function buildGarage()
+	garageButton = Instance.new("TextButton")
+	garageButton.Name = "HomeGarage"
+	garageButton.Size = UDim2.fromOffset(52, 52)
+	garageButton.Text = "GARAGE"
+	Theme.Button(garageButton, "Quiet")
+	garageButton.FontFace = Theme.Font.Display
+	garageButton.TextSize = 13
+	garageButton.TextYAlignment = Enum.TextYAlignment.Bottom
+	garageButton.Visible = false
+	Theme.Shadow(garageButton)
+	local pad = Instance.new("UIPadding")
+	pad.PaddingBottom = UDim.new(0, 4)
+	pad.Parent = garageButton
+	garageButton.Parent = gui
+	garageButton.Activated:Connect(function()
+		local down = player:GetAttribute("HomeLevel") == "Garage"
+		Remotes.Event("RequestHouse"):FireServer(down and "Upstairs" or "Garage")
+	end)
+end
+
+local glyphLevel = nil
+local function dressGarage()
+	local level = player:GetAttribute("HomeLevel")
+	if level == glyphLevel then
+		return
+	end
+	glyphLevel = level
+	local old = garageButton:FindFirstChild("Glyph")
+	if old then
+		old:Destroy()
+	end
+	local g = Instance.new("Frame")
+	g.Name = "Glyph"
+	g.AnchorPoint = Vector2.new(0.5, 0)
+	g.Position = UDim2.new(0.5, 0, 0, 5)
+	g.Size = UDim2.fromOffset(24, 20)
+	g.BackgroundTransparency = 1
+	g.Parent = garageButton
+	if level == "Garage" then
+		garageButton.Text = "HOME"
+		upGlyph(g)
+	else
+		garageButton.Text = "GARAGE"
+		carGlyph(g)
+	end
+end
+
+-- Two slots under LEAVE: past WardrobeUI's OUTFIT (LawClient.PlaceSlots counts this tile too).
+local function placeGarage()
+	local touch = Theme.IsTouch()
+	local ok, pos, size = false, nil, nil
+	local module = script.Parent:FindFirstChild("LawClient")
+	local okLaw, LawClient = false, nil
+	if module then
+		okLaw, LawClient = pcall(require, module)
+	end
+	if okLaw and type(LawClient) == "table" and LawClient.SideSlot then
+		ok, pos, size = pcall(LawClient.SideSlot, gui, 2, touch)
+	end
+	if not ok or typeof(pos) ~= "Vector2" or typeof(size) ~= "Vector2" then
+		local s = gui.AbsoluteSize
+		pos, size = Vector2.new(s.X - 72, s.Y * 0.5 + 66 + 2 * 60), Vector2.new(52, 52)
+	end
+	garageButton.Position = UDim2.fromOffset(pos.X, pos.Y)
+	garageButton.Size = UDim2.fromOffset(size.X, size.Y)
+end
+
+local function showGarage()
+	garageButton.Visible = player:GetAttribute("InHome") == true and player:GetAttribute("HomeLevel") ~= nil
+		and player:GetAttribute("TitleScreen") ~= true
+	if garageButton.Visible then
+		dressGarage()
+		placeGarage()
+	end
+end
+
 local function showLeave()
 	leaveButton.Visible = player:GetAttribute("InHome") == true and player:GetAttribute("TitleScreen") ~= true
 	if leaveButton.Visible then
 		placeLeave()
 	end
+	showGarage()
 end
 
 local function buildScreens()
@@ -550,6 +653,7 @@ local function buildScreens()
 	curtain.Parent = fadeGui
 
 	buildLeave()
+	buildGarage()
 end
 
 -- SkyClient's rain follows the camera and falls through any roof: switch it off indoors, in a home or in
@@ -572,7 +676,11 @@ local function onInHome()
 		-- (The server sets Touring before InHome: a tour gets its own toast, onTouring.)
 		if not hinted and player:GetAttribute("Touring") == nil then
 			hinted = true
-			NotifyController.Show("Welcome home! Pick a car in the garage, or walk to the EXIT to go out.", nil, "info")
+			if player:GetAttribute("HomeLevel") ~= nil then
+				NotifyController.Show("Welcome home! Tap GARAGE (or take the elevator) to pick a car, or walk to the EXIT to go out.", nil, "info")
+			else
+				NotifyController.Show("Welcome home! Pick a car in the garage, or walk to the EXIT to go out.", nil, "info")
+			end
 		end
 	end
 end
@@ -593,7 +701,9 @@ end
 
 local function dressPrompt(prompt)
 	local home = Housing.ById[prompt:GetAttribute("HomeId") or ""]
-	if home then
+	if home and prompt.Name == "HomeGarage" then
+		prompt.Enabled = player:GetAttribute("Home") == home.Id -- (the owner's way in: nobody else's)
+	elseif home then
 		prompt.ActionText = player:GetAttribute("Home") == home.Id and "Enter home" or ("View / Buy " .. money(home.Price))
 	end
 end
@@ -616,7 +726,7 @@ end
 
 -- Houses stream in and out: dress each prompt and sign as it arrives.
 local function track(inst)
-	if inst:IsA("ProximityPrompt") and inst.Name == "HomeDoor" then
+	if inst:IsA("ProximityPrompt") and (inst.Name == "HomeDoor" or inst.Name == "HomeGarage") then
 		prompts[inst] = true
 		dressPrompt(inst)
 	elseif inst:IsA("TextLabel") and inst.Name == "Sub" then
@@ -691,6 +801,17 @@ function HouseClient.Init()
 	player:GetAttributeChangedSignal("InApartment"):Connect(indoorRain)
 	player:GetAttributeChangedSignal("Touring"):Connect(onTouring)
 	player:GetAttributeChangedSignal("TitleScreen"):Connect(showLeave)
+	player:GetAttributeChangedSignal("HomeLevel"):Connect(function()
+		showGarage()
+		if player:GetAttribute("HomeLevel") == "Garage" and not garageHinted then
+			garageHinted = true
+			if player:GetAttribute("Touring") ~= nil then
+				NotifyController.Show("The garage: the owner's cars park here. HOME or the elevator takes you back up.", nil, "info")
+			else
+				NotifyController.Show("Your garage! Pick a car and drive it up the EXIT ramp to the street.", nil, "info")
+			end
+		end
+	end)
 	player:GetAttributeChangedSignal("Home"):Connect(function()
 		redressAll()
 		if cardHome then
@@ -723,6 +844,9 @@ function HouseClient.Init()
 		if leaveButton.Visible and os.clock() - lastPlace > 0.5 then
 			lastPlace = os.clock()
 			placeLeave()
+			if garageButton.Visible then
+				placeGarage()
+			end
 		end
 	end)
 

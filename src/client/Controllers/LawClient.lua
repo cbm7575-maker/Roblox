@@ -39,7 +39,7 @@
 -- buttons and ammo counter, the pedals, the hint). Re-placed every update (screen size, input, pedals).
 --   LawClient.SideSlot(screenGui, index, touch) -> position, size (Vector2 pixels from the top-left of
 --     that IgnoreGuiInset ScreenGui) of slot `index` (0 = top). HouseClient and WardrobeUI use it too.
---   LawClient.PlaceSlots() -> how many slots LEAVE HOME and WARDROBE hold right now (from attributes).
+--   LawClient.PlaceSlots() -> how many slots LEAVE HOME, WARDROBE and GARAGE hold right now (attributes).
 -- The server checks every action; this file only shows things and asks.
 
 local ContextActionService = game:GetService("ContextActionService")
@@ -285,6 +285,9 @@ function LawClient.PlaceSlots()
 	local n = home and 1 or 0 -- LEAVE HOME
 	if home or player:GetAttribute("InHideout") == true then
 		n += 1 -- WARDROBE
+	end
+	if home and player:GetAttribute("HomeLevel") ~= nil then
+		n += 1 -- GARAGE / HOME (HouseClient, in a home with a garage level)
 	end
 	return n
 end

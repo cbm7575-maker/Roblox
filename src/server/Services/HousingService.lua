@@ -40,6 +40,17 @@
 --     the land cars you own and can drive on your side. "Drive this" takes you out of the front door
 --     and seats you in that car on the driveway. Invisible walls round the copy's lot keep everyone on
 --     it. Indoors is Look 3.0 too, and softenInterior tones the rooms down a notch.
+--   * A garage level (a build that hands back out.garage: the penthouse's P1, under the tower): its bays
+--     hold the cars, and "Drive this" there (DriveBay, on foot only) sits you in that car right in its bay
+--     (VehicleService.Spawn: it becomes your one car). Drive it up the ramp into the daylight
+--     (out.garage.exit) and, behind a fade, that same car comes up on the street out of the podium's
+--     garage door (Housing.GarageExitCFrames) with you still at the wheel. Getting there: the "Garage" prompts on the
+--     elevator's call panel and the sky lounge's car lift, RequestHouse "Garage" (HouseClient's GARAGE
+--     tile), or, from the street, the owner's "My garage" prompt on the podium's garage doors (HomeGarage;
+--     HouseClient hides it from everyone else). Back up: the P1 elevator's prompt or RequestHouse
+--     "Upstairs" (the tile reads HOME down there); out on foot: P1's street door (Leave home / End tour).
+--     A car still out down there when you go up, leave or go away is put back in its bay. Player
+--     attribute "HomeLevel" = "Home" or "Garage" while inside a home that has one (a tour too), else nil.
 --   * The wardrobe's "Change look" prompt (WardrobePrompt) has no server handler: the owner's
 --     WardrobeUI opens its dressing room from it (and shows its WARDROBE button anywhere inside), and
 --     DisguiseService accepts a new look while InHome is set (IsInside: a tour too, where WardrobeUI's
@@ -58,10 +69,10 @@
 --     anyone inside who turns out to be wanted is put out of the front door (HomeWanted). "Drive this"
 --     is refused while wanted too.
 -- Remote RequestHouse(action, arg): "Buy" (home id), "Enter" (home id), "Tour" (home id), "Leave",
--- "Drive" (car id).
+-- "Drive" (car id), "Garage" (down to the garage level), "Upstairs" (back up from it).
 -- Server -> client: HouseCard { Id, OldId, Refund, At? (the FOR SALE stand, on a tour) },
 -- HouseResult { Kind = "Bought", Id, Refund }, HouseFade ("Out" | "In"). Player attributes "InHome" =
--- true while inside (your own home or a tour), "Touring" = home id while on a tour.
+-- true while inside (your own home or a tour), "Touring" = home id while on a tour, "HomeLevel" (above).
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -117,6 +128,7 @@ local slots = {} -- [slot] = player
 local inside = {} -- [player] = true while in their interior (their own home, or a tour)
 local busy = {} -- [player] = true during a door transition
 local spawned = {} -- [player] = { char, t, done }: the home spawn for the current character
+local garageDoorsAt = {} -- [home id] = { Vector3 }: the lot's garage doors (a home with a garage level)
 
 -- Parts ---------------------------------------------------------------------------------------------
 
@@ -393,7 +405,29 @@ end
 local function setInside(player, on, tourId)
 	inside[player] = on and true or nil
 	player:SetAttribute("Touring", on and tourId or nil)
+	-- (HomeLevel before InHome too: HouseClient reads it when InHome changes.)
+	local rec = on and interiors[player] or nil
+	player:SetAttribute("HomeLevel", rec and rec.garage and (rec.level or "Home") or nil)
 	player:SetAttribute("InHome", on and true or nil)
+end
+
+-- Up in the home or down in its garage level (HomeLevel, for HouseClient's GARAGE / HOME tile).
+local function setLevel(player, rec, level)
+	rec.level = level
+	if inside[player] and interiors[player] == rec then
+		player:SetAttribute("HomeLevel", rec.garage and level or nil)
+	end
+end
+
+-- Near one of the lot's garage doors (a home with a garage level), as near as a front door must be.
+local function nearGarageDoor(player, home)
+	local root = rootOf(player)
+	for _, at in ipairs(root and garageDoorsAt[home.Id] or {}) do
+		if (root.Position - at).Magnitude <= Housing.DoorRange then
+			return true
+		end
+	end
+	return false
 end
 
 local function fade(player, phase)
@@ -431,6 +465,7 @@ local function moveTo(player, cf)
 end
 
 local onDoor, leave, drive, onSale -- defined below (the builders hook prompts to them)
+local toGarage, toHome, onGarageDoor, surface -- the garage level (defined below)
 
 -- Outside ---------------------------------------------------------------------------------------------
 
@@ -924,6 +959,23 @@ local function buildExterior(home)
 		end
 	end
 	door = door or legacyExterior(home)
+	-- The street doors into a garage level (the penthouse's podium): the owner's way in on foot. Everyone
+	-- else's device hides these (HouseClient), and the server only ever lets the owner in.
+	if door and HouseBuilder.Has(home) then
+		local model = homesFolder:FindFirstChild("Home_" .. home.Id)
+		local spots = {}
+		for _, d in ipairs(model and model:GetDescendants() or {}) do
+			if d:IsA("BasePart") and d:GetAttribute("GarageEntry") then
+				table.insert(spots, d.Position)
+				local gp = makePrompt(d, "HomeGarage", "My garage", home.Name)
+				gp:SetAttribute("HomeId", home.Id)
+				gp.Triggered:Connect(function(player)
+					onGarageDoor(player, home)
+				end)
+			end
+		end
+		garageDoorsAt[home.Id] = #spots > 0 and spots or nil
+	end
 	local prompt = makePrompt(door, "HomeDoor", "View / Buy " .. money(home.Price), home.Name)
 	prompt:SetAttribute("HomeId", home.Id)
 	prompt.Triggered:Connect(function(player)
@@ -1306,8 +1358,9 @@ local function garageList(player, side)
 	return list
 end
 
--- A parked, frozen copy of a car for a garage bay, with a "Drive this" prompt.
-local function displayCar(player, id, bayCf)
+-- A parked, frozen copy of a car for a garage bay, with a "Drive this" prompt (DriveThis; DriveBay in a
+-- garage level's bays, where it only shows on foot: PromptGate shows DriveThis from a seat).
+local function displayCar(player, id, bayCf, here)
 	local def = Vehicles.Resolve(id)
 	local templates = ServerStorage:FindFirstChild("VehicleTemplates")
 	local template = templates and templates:FindFirstChild(id)
@@ -1338,7 +1391,7 @@ local function displayCar(player, id, bayCf)
 		car.ModelStreamingMode = Enum.ModelStreamingMode.Default -- part of the owner's persistent interior
 	end)
 	car:PivotTo(bayCf * CFrame.new(0, carLift(def), 0))
-	local prompt = makePrompt(car.PrimaryPart, "DriveThis", "Drive this", def.DisplayName)
+	local prompt = makePrompt(car.PrimaryPart, here and "DriveBay" or "DriveThis", "Drive this", def.DisplayName)
 	prompt.MaxActivationDistance = 14
 	prompt.Triggered:Connect(function(who)
 		if who == player and RateLimit.Allow(player, "House", 2, 3) then
@@ -1348,18 +1401,44 @@ local function displayCar(player, id, bayCf)
 	return car
 end
 
+-- The car they drove off in down in a garage level, back in its bay: the real one goes (if it's still the
+-- one they have out) and, unless `quiet`, its display copy comes back. True if there was one.
+local function parkBack(player, rec, quiet)
+	local car, id = rec.driving, rec.drivingId
+	if not car then
+		return false
+	end
+	rec.driving, rec.drivingId = nil, nil
+	if VehicleService.GetCar(player) == car then
+		VehicleService.Despawn(player.UserId)
+	end
+	local bay = not quiet and id and rec.bayOf and rec.bayOf[id]
+	if bay and rec.model.Parent then
+		local shown = displayCar(player, id, bay.cf, bay.drive)
+		if shown then
+			shown.Parent = rec.cars
+			rec.carsById[id] = shown
+		end
+	end
+	return true
+end
+
 -- Park the player's cars in the bays (again on every visit: they may have bought or unlocked some).
 local function refreshGarage(player, rec)
+	parkBack(player, rec, true)
 	rec.cars:ClearAllChildren()
 	rec.shown = {}
+	rec.carsById, rec.bayOf = {}, {} -- [car id] = its display copy / its bay
 	local list = garageList(player, player:GetAttribute("Side") or "Civilian")
 	local parked = 0
 	for i, bay in ipairs(rec.bays) do
 		local def = list[i]
-		local car = def and displayCar(player, def.Id, bay.cf)
+		local car = def and displayCar(player, def.Id, bay.cf, bay.drive)
 		if car then
 			car.Parent = rec.cars
 			rec.shown[def.Id] = true
+			rec.carsById[def.Id] = car
+			rec.bayOf[def.Id] = bay
 			parked += 1
 		end
 		local gui = bay.pad:FindFirstChild("SignGui")
@@ -1392,6 +1471,7 @@ local function destroyInterior(player)
 		if slots[rec.slot] == player then
 			slots[rec.slot] = nil
 		end
+		pcall(parkBack, player, rec, true) -- (a car of theirs still out in its garage level)
 		poolWater(rec.water, Enum.Material.Air)
 		rec.model:Destroy()
 	end
@@ -1438,6 +1518,35 @@ local function ownInterior(player, home, slot, show)
 			end
 		end)
 	end
+	-- A garage level (see the header): the prompts down to it, back up, and out of its street door.
+	local garage
+	if out.garage then
+		local g = out.garage
+		garage = { spawn = g.spawn, home = g.home or out.spawn, exit = g.exit }
+		local function hook(part, name, action, object, fn)
+			local p = makePrompt(part, name, action, object)
+			p.Triggered:Connect(function(who)
+				if who == player and RateLimit.Allow(player, "House", 2, 3) then
+					fn(player)
+				end
+			end)
+			return p
+		end
+		for _, part in ipairs(g.calls or {}) do
+			hook(part, "GaragePrompt", "Garage", part.Name == "LiftControl" and "Car lift" or "Elevator", toGarage)
+		end
+		if g.lift then
+			hook(g.lift, "UpPrompt", g.upText or "Go up", "Elevator", toHome)
+		end
+		if g.door then
+			garage.leavePrompt = makePrompt(g.door, "StreetDoorPrompt", show and "End tour" or "Leave home", "Street door")
+			garage.leavePrompt.Triggered:Connect(function(who)
+				if who == player then
+					leave(player)
+				end
+			end)
+		end
+	end
 	for _, name in ipairs({ "Rooms", "Decor", "Garage" }) do
 		local f = model:FindFirstChild(name)
 		if f then
@@ -1468,6 +1577,10 @@ local function ownInterior(player, home, slot, show)
 		sale = model:FindFirstChild("ForSale"),
 		saleAt = out.saleAt,
 		water = out.water,
+		garage = garage, -- (nil: no garage level)
+		level = "Home", -- "Home" or "Garage": where in it they stand
+		-- the lowest floor anyone stands on in there (the housekeeping's fell-through check)
+		low = garage and math.min(out.spawn.Position.Y, garage.spawn.Position.Y) or nil,
 	}
 end
 
@@ -1532,8 +1645,41 @@ local function moveIn(player, rec)
 	if rec.leavePrompt then
 		rec.leavePrompt.ActionText = "Leave home"
 	end
+	if rec.garage and rec.garage.leavePrompt then
+		rec.garage.leavePrompt.ActionText = "Leave home"
+	end
 	refreshGarage(player, rec)
 	setInside(player, true)
+end
+
+-- "Drive this" in a garage level's bay: any car of theirs already out down here goes back in its bay, the
+-- display copy goes, and the real car appears in its place with them in the driver's seat (it is their
+-- one car from now on: whatever they had out goes, as with any new car).
+local function driveFromBay(player, rec, id, bay)
+	busy[player] = true
+	local ok, err = pcall(function()
+		parkBack(player, rec)
+		local shown = rec.carsById[id]
+		if shown then
+			shown:Destroy()
+			rec.carsById[id] = nil
+		end
+		local car = VehicleService.Spawn(player, id, { At = bay.cf * CFrame.new(0, 3.2, 0), Sit = true, IgnoreCooldown = true })
+		if car then
+			rec.driving, rec.drivingId = car, id
+		else
+			notify:FireClient(player, "CarNoRoom")
+			local again = displayCar(player, id, bay.cf, true)
+			if again then
+				again.Parent = rec.cars
+				rec.carsById[id] = again
+			end
+		end
+	end)
+	if not ok then
+		warn("[HousingService] drive from the bay failed: " .. tostring(err))
+	end
+	busy[player] = nil
 end
 
 -- Actions ---------------------------------------------------------------------------------------------
@@ -1633,6 +1779,7 @@ local function enter(player, id)
 		task.wait(FADE_TIME)
 		stream(player, rec.spawn.Position)
 		if player.Parent == Players and moveTo(player, rec.spawn) then
+			rec.level = "Home"
 			setInside(player, true)
 		end
 	end)
@@ -1675,6 +1822,7 @@ local function tour(player, id)
 		task.wait(FADE_TIME)
 		stream(player, rec.spawn.Position)
 		if player.Parent == Players and moveTo(player, rec.spawn) then
+			rec.level = "Home"
 			setInside(player, true, home.Id)
 		end
 	end)
@@ -1703,6 +1851,9 @@ leave = function(player)
 			stream(player, cf.Position)
 			moveTo(player, cf)
 			setInside(player, false)
+			if rec then
+				parkBack(player, rec, true) -- (a car left out in the garage level stays home)
+			end
 		else
 			player:LoadCharacter() -- no home to walk out of: back to a normal spawn
 		end
@@ -1727,6 +1878,12 @@ drive = function(player, id)
 	end
 	if (player:GetAttribute("Heat") or 0) > 0 then
 		notify:FireClient(player, "HomeWanted") -- (the housekeeping loop puts them out within 2 s)
+		return
+	end
+	-- A garage level's bay: you sit in it right where it's parked, and drive it out yourself.
+	local bay = rec.bayOf and rec.bayOf[id]
+	if bay and bay.drive and rec.garage then
+		driveFromBay(player, rec, id, bay)
 		return
 	end
 	busy[player] = true
@@ -1780,6 +1937,172 @@ onSale = function(player)
 	sendCard(player, home, rec.saleAt)
 end
 
+-- The garage level (see the header) ---------------------------------------------------------------------
+
+-- Down to the garage level from up in the home (the elevator's call panel, the car lift, the GARAGE tile).
+toGarage = function(player)
+	local rec = interiors[player]
+	if not rec or not rec.garage or not inside[player] or busy[player] or rec.level == "Garage" or not alive(player) then
+		return
+	end
+	busy[player] = true
+	local ok, err = pcall(function()
+		fade(player, "Out")
+		task.wait(FADE_TIME)
+		stream(player, rec.garage.spawn.Position)
+		if player.Parent == Players and inside[player] and interiors[player] == rec and moveTo(player, rec.garage.spawn) then
+			setLevel(player, rec, "Garage")
+		end
+	end)
+	if not ok then
+		warn("[HousingService] down to the garage failed: " .. tostring(err))
+	end
+	fade(player, "In")
+	busy[player] = nil
+end
+
+-- Back up from the garage level (its elevator, the HOME tile): out of a car's seat first, and that car
+-- goes back in its bay.
+toHome = function(player)
+	local rec = interiors[player]
+	if not rec or not rec.garage or not inside[player] or busy[player] or rec.level ~= "Garage" or not alive(player) then
+		return
+	end
+	busy[player] = true
+	local ok, err = pcall(function()
+		fade(player, "Out")
+		task.wait(FADE_TIME)
+		if player.Parent == Players and inside[player] and interiors[player] == rec and moveTo(player, rec.garage.home) then
+			setLevel(player, rec, "Home")
+			parkBack(player, rec)
+		end
+	end)
+	if not ok then
+		warn("[HousingService] up from the garage failed: " .. tostring(err))
+	end
+	fade(player, "In")
+	busy[player] = nil
+end
+
+-- The owner's "My garage" prompt on the street: straight into the garage level, on foot (as the front
+-- door: not while wanted, never a prisoner).
+onGarageDoor = function(player, home)
+	if not RateLimit.Allow(player, "House", 2, 3) then
+		return
+	end
+	local data = DataService.Get(player)
+	if not data or data.home ~= home.Id or busy[player] or inside[player] then
+		return
+	end
+	if player:GetAttribute("Side") == "Prisoner" or not alive(player) or not nearGarageDoor(player, home) then
+		return
+	end
+	if (player:GetAttribute("Heat") or 0) > 0 then
+		notify:FireClient(player, "HomeWanted")
+		return
+	end
+	busy[player] = true
+	local ok, err = pcall(function()
+		local rec = interiorFor(player, home)
+		refreshGarage(player, rec)
+		local to = rec.garage and rec.garage.spawn or rec.spawn -- (the plain fallback inside has no garage)
+		fade(player, "Out")
+		task.wait(FADE_TIME)
+		stream(player, to.Position)
+		if player.Parent == Players and moveTo(player, to) then
+			rec.level = rec.garage and "Garage" or "Home"
+			setInside(player, true)
+		end
+	end)
+	if not ok then
+		warn("[HousingService] garage door failed: " .. tostring(err))
+	end
+	fade(player, "In")
+	busy[player] = nil
+end
+
+-- Is a street exit spot free of other cars (`car` itself doesn't count)?
+local function exitClear(cf, car)
+	local vehicles = Workspace:FindFirstChild("Vehicles")
+	if not vehicles then
+		return true
+	end
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { vehicles }
+	for _, p in ipairs(Workspace:GetPartBoundsInBox(cf * CFrame.new(0, 1, 0), Vector3.new(9, 4, 18), params)) do
+		if not p:IsDescendantOf(car) then
+			return false
+		end
+	end
+	return true
+end
+
+-- A car driven up the ramp into the daylight (the watch in Init): behind a fade the same car, its driver
+-- still at the wheel, comes up on the street out of the garage door (the first free spot of
+-- Housing.GarageExitCFrames, else the last one). Held still (anchored) while it moves, cleared with
+-- VehicleGuard first (a server-side move), then handed back to its driver's device. Never unseated and
+-- seated again: the old car's get-out reply used to land on the new seat and stand the driver up.
+surface = function(player, rec)
+	local home = Housing.ById[rec.homeId]
+	local car = rec.driving
+	if busy[player] or not inside[player] or interiors[player] ~= rec or not home or not car or not car.PrimaryPart then
+		return
+	end
+	busy[player] = true
+	local chassis = car.PrimaryPart
+	local ok, err = pcall(function()
+		fade(player, "Out")
+		chassis.Anchored = true -- (it would roll on into the wall behind the curtain)
+		task.wait(FADE_TIME)
+		if player.Parent ~= Players or not car.Parent then
+			return
+		end
+		local spots = Housing.GarageExitCFrames(home)
+		local at = spots[#spots]
+		for _, cf in ipairs(spots) do
+			if exitClear(cf, car) then
+				at = cf
+				break
+			end
+		end
+		stream(player, at.Position)
+		if player.Parent ~= Players or not car.Parent then
+			return
+		end
+		pcall(function()
+			require(ServerScriptService.Services.VehicleGuard).Allow(car, 4)
+		end)
+		car:PivotTo(at)
+		chassis.AssemblyLinearVelocity = Vector3.zero
+		chassis.AssemblyAngularVelocity = Vector3.zero
+		rec.driving, rec.drivingId = nil, nil
+		setInside(player, false)
+		chassis.Anchored = false
+		local seat = car:FindFirstChild("DriverSeat")
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if seat and hum and seat.Occupant == hum then
+			chassis:SetNetworkOwner(player)
+		elseif seat and hum and hum.Health > 0 then
+			-- (Not along for the ride after all: stand them by it and sit them in.)
+			moveTo(player, at * CFrame.new(-7, 0.5, 0))
+			task.wait()
+			if seat.Occupant == nil then
+				seat:Sit(hum)
+			end
+		end
+		task.wait(0.15)
+	end)
+	if not ok then
+		warn("[HousingService] up to the street failed: " .. tostring(err))
+	end
+	if chassis.Parent and chassis.Anchored then
+		chassis.Anchored = false -- (never left frozen)
+	end
+	fade(player, "In")
+	busy[player] = nil
+end
+
 -- Home spawn ------------------------------------------------------------------------------------------
 
 -- A character that may spawn at home: a free-roam citizen (not a cop, not a prisoner) who owns a home
@@ -1803,6 +2126,7 @@ local function goInside(player, home, char)
 		task.wait(FADE_TIME)
 		stream(player, rec.spawn.Position)
 		if player.Parent == Players and player.Character == char and spawnsHome(player) and moveTo(player, rec.spawn) then
+			rec.level = "Home"
 			setInside(player, true)
 		end
 	end)
@@ -1957,6 +2281,10 @@ local function onRequest(player, action, arg)
 			return
 		end
 		drive(player, arg)
+	elseif action == "Garage" then
+		toGarage(player)
+	elseif action == "Upstairs" then
+		toHome(player)
 	end
 end
 
@@ -2033,11 +2361,42 @@ function HousingService.Init()
 					local flat = Vector3.new(root.Position.X - s.X, 0, root.Position.Z - s.Z).Magnitude
 					if flat > 150 then
 						setInside(player, false)
-					elseif root.Position.Y < s.Y - 30 then
+					elseif root.Position.Y < (rec.low or s.Y) - 30 then
 						moveTo(player, rec.spawn)
+						if rec.garage then
+							setLevel(player, rec, "Home")
+						end
 					end
 				elseif not rec then
 					setInside(player, false)
+				end
+			end
+		end
+	end)
+
+	-- Garage levels: a car of theirs driven into the daylight at the top of the ramp (out.garage.exit, a
+	-- world box) with them at the wheel comes up on the street (surface). A car that's gone (removed,
+	-- replaced) is forgotten here; its bay fills again on the next visit.
+	task.spawn(function()
+		while true do
+			task.wait(0.1)
+			for player, rec in pairs(interiors) do
+				local car = rec.driving
+				if car and rec.garage and inside[player] and not busy[player] then
+					local chassis = car.Parent and car.PrimaryPart
+					if not chassis or VehicleService.GetCar(player) ~= car then
+						rec.driving, rec.drivingId = nil, nil
+					else
+						local box = rec.garage.exit
+						local p = box.cf:PointToObjectSpace(chassis.Position)
+						local half = box.size / 2
+						local seat = car:FindFirstChild("DriverSeat")
+						local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+						if math.abs(p.X) <= half.X and math.abs(p.Y) <= half.Y and math.abs(p.Z) <= half.Z
+							and seat and hum and seat.Occupant == hum then
+							task.spawn(surface, player, rec)
+						end
+					end
 				end
 			end
 		end

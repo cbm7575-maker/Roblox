@@ -16,7 +16,9 @@
 --   "Bungalow"  Palm Hills Bungalow: an Old Florida cottage with a porch, a garden and a garage out back.
 --   "Ranch"     Palm Hills Ranch: one long storey, a wide porch, a 3-car garage, a family back yard.
 --   "Penthouse" Solana Heights Penthouse: a downtown tower; inside, the top-floor penthouse with a sky
---               garage behind glass and a roof terrace with a pool.
+--               lounge behind glass and a roof terrace with a pool, and P1, a big underground garage
+--               (elevator, or the podium's garage doors from the street) whose cars drive up a ramp
+--               and out onto the street.
 --   "Villa"     Marina Row Villa: a two-storey Mediterranean villa, a pool terrace on the marina.
 --   "Mansion"   Flamingo Beach Mansion: a three-level modern beach house, an infinity pool, a 7-car
 --               showroom garage and 7 more bays in the collection under it (14 in all).
@@ -24,6 +26,8 @@
 -- Layout below). Layout (optional, lot space) overrides Housing.Layout for that home: Door = the bottom
 -- middle of the front door on the front wall's outer face, DoorStep = where you appear outside it,
 -- Driveway = car spots (centres on the ground, noses to the street; the last one on the verge).
+-- GarageExit (optional) = where a car driven up out of an underground garage comes out, tried in order
+-- (the Driveway spots when there are none).
 -- Stories = floors above the ground (the buy card and phone just read Blurb). GarageSlots = bays inside.
 -- The list is kept cheapest first: the phone's HOME page and the map list homes in this order.
 --
@@ -112,14 +116,16 @@ Housing.List = {
 		Price = 180000,
 		Position = Vector3.new(500, 0, 50),
 		Facing = Vector3.new(0, 0, 1), -- south, to the street at z = 150
-		GarageSlots = 4,
-		Blurb = "The top floor of a downtown tower: a pool terrace in the sky and a glass sky garage for four cars.",
+		GarageSlots = 10,
+		Blurb = "The top floor of a downtown tower: a pool terrace in the sky, a glass sky lounge and a private underground garage for ten cars.",
 		Style = "Penthouse",
 		Stories = 6,
 		Layout = {
 			Door = Vector3.new(-20, 0.6, -14),
 			DoorStep = Vector3.new(-20, 0.2, -20),
 			Driveway = { Vector3.new(18, 0.3, -25), Vector3.new(38, 0.3, -25), Vector3.new(28, 0, -46) },
+			-- Out of the right-hand garage door first, then the left one, then the verge.
+			GarageExit = { Vector3.new(38, 0.3, -25), Vector3.new(18, 0.3, -25), Vector3.new(28, 0, -46) },
 		},
 		Wall = Color3.fromRGB(206, 190, 255),
 		Accent = Color3.fromRGB(250, 250, 255),
@@ -225,6 +231,17 @@ function Housing.DrivewayCFrames(home)
 	local frame = Housing.Frame(home)
 	local list = {}
 	for _, p in ipairs(Housing.Spot(home, "Driveway")) do
+		table.insert(list, frame * CFrame.new(p + Vector3.new(0, 3.2, 0)))
+	end
+	return list
+end
+
+-- Where a car driven up out of the home's underground garage comes out (chassis height, noses to the
+-- street), in the order to try them.
+function Housing.GarageExitCFrames(home)
+	local frame = Housing.Frame(home)
+	local list = {}
+	for _, p in ipairs(Housing.Spot(home, "GarageExit") or Housing.Spot(home, "Driveway")) do
 		table.insert(list, frame * CFrame.new(p + Vector3.new(0, 3.2, 0)))
 	end
 	return list

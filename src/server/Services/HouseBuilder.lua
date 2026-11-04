@@ -29,9 +29,12 @@
 --
 -- What a build hands back (out): model, door (the front door part: HomeDoor prompt on the lot, the exit
 -- with LeavePrompt inside), sign (lot: the street sign board), spawn (inside: CFrame for the root),
--- bays ({ cf, pad }), closet, garageTitle / signSub (the garage sign's labels), saleBoard / saleAt (a
+-- bays ({ cf, pad, drive }), closet, garageTitle / signSub (the garage sign's labels), saleBoard / saleAt (a
 -- show copy's FOR SALE stand), cars (Folder for the display cars), water ({ cf, size } world boxes of
 -- Terrain water for the pools, inside only: HousingService fills and clears them), parts, lights.
+-- A home with a garage level of its own (the penthouse's P1) also hands back garage (inside: where you
+-- arrive down there and back up, the box a car drives into to come up on the street, the parts that get
+-- the elevator prompts; see Houses.Penthouse); its street doors on the lot carry the attribute GarageEntry.
 
 local CollectionService = game:GetService("CollectionService")
 local ServerStorage = game:GetService("ServerStorage")
@@ -766,6 +769,10 @@ end
 -- it, and clears it with the copy); the edge is a limestone coping. On the lot the city ground can't
 -- be dug: a shallow basin with a raised coping and a glass water surface (nobody swims at the lot).
 -- o.light = the pool light's colour (after dark), o.tile, o.step (a bench to climb out, default on).
+-- o.spill (studs, a multiple of 4): the water also runs that far under the deck all round, so the Terrain
+-- surface stays flat right up to the tiles (a narrow pool's water otherwise rounds off at its edges and
+-- looks half empty); the deck's slab must reach that far past the basin, solid, to hide it. o.below: the
+-- water's surface sits that far under the deck (it would fight with the deck's top where it spills).
 function Kit:Pool(x0, x1, z0, z1, depth, o)
 	o = o or {}
 	local ax, bx, az, bz = math.min(x0, x1), math.max(x0, x1), math.min(z0, z1), math.max(z0, z1)
@@ -784,13 +791,14 @@ function Kit:Pool(x0, x1, z0, z1, depth, o)
 			self:Box("PoolStep", ax + 3, ax + 5, -d, -d + 1.6, az, bz, tile, M.CeramicTiles)
 		end
 		-- Water from the floor up to the deck (snapped to the 4-stud grid in world space).
-		local a = self.cf * Vector3.new(ax, -d, az)
-		local b = self.cf * Vector3.new(bx, 0, bz)
+		local sp = o.spill or 0
+		local a = self.cf * Vector3.new(ax - sp, -d, az - sp)
+		local b = self.cf * Vector3.new(bx + sp, 0, bz + sp)
 		local function snap(v)
 			return math.floor(v / 4 + 0.5) * 4
 		end
 		local lo = Vector3.new(snap(math.min(a.X, b.X)), snap(math.min(a.Y, b.Y)), snap(math.min(a.Z, b.Z)))
-		local hi = Vector3.new(snap(math.max(a.X, b.X)), snap(math.max(a.Y, b.Y)), snap(math.max(a.Z, b.Z)))
+		local hi = Vector3.new(snap(math.max(a.X, b.X)), snap(math.max(a.Y, b.Y)) - (o.below or 0), snap(math.max(a.Z, b.Z)))
 		if hi.X > lo.X and hi.Y > lo.Y and hi.Z > lo.Z then
 			table.insert(self.out.water, { cf = CFrame.new((lo + hi) / 2), size = hi - lo })
 		end
@@ -1662,7 +1670,9 @@ end
 
 -- A parking bay (inside only): a 12 x 18 concrete pad on the floor at y, its centre (x, z), the car's
 -- nose toward -Z of the bay's own frame (yaw), white side lines on top, EMPTY BAY painted on it.
-function Kit:Bay(x, y, z, yaw)
+-- o.drive = true: a bay you drive away from (an underground garage with a way out, out.garage): "Drive
+-- this" sits you in the car right there instead of on the driveway outside.
+function Kit:Bay(x, y, z, yaw, o)
 	if not self.inside then
 		return
 	end
@@ -1672,7 +1682,7 @@ function Kit:Bay(x, y, z, yaw)
 	f:Deco("BayLine", 5.7, 6, 0.06, 0.08, -9, 9, rgb(232, 232, 226), M.SmoothPlastic)
 	local text = signGui(pad, Enum.NormalId.Top, "EMPTY BAY", nil, rgb(200, 200, 196))
 	text.Parent.Enabled = not self.show
-	table.insert(self.out.bays, { cf = f.cf * CFrame.new(0, 0.06, 0), pad = pad })
+	table.insert(self.out.bays, { cf = f.cf * CFrame.new(0, 0.06, 0), pad = pad, drive = o and o.drive == true or nil })
 	return pad
 end
 
