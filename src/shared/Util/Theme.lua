@@ -175,9 +175,20 @@ function Theme.Place(obj, name, touch)
 end
 
 -- The phone layout is in use: a touch screen with no mouse (same test the drive HUD uses).
+-- Studio only: the local player's attribute PreviewTouch = true (DriveUI's phone preview) turns the
+-- phone layout on for the whole HUD, so it can be checked on a PC (Studio's Device Simulator still
+-- reports a mouse). Live servers never look at it.
 function Theme.IsTouch()
 	local uis = game:GetService("UserInputService")
-	return uis.TouchEnabled and not uis.MouseEnabled
+	if uis.TouchEnabled and not uis.MouseEnabled then
+		return true
+	end
+	local rs = game:GetService("RunService")
+	if rs:IsStudio() and rs:IsClient() then
+		local lp = game:GetService("Players").LocalPlayer
+		return lp ~= nil and lp:GetAttribute("PreviewTouch") == true
+	end
+	return false
 end
 
 function Theme.Corners(obj, px)

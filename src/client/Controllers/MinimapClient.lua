@@ -11,6 +11,20 @@
 -- heists $), green = the Hideout (bank your cash), blue = Police HQ, grey = shops and services, white =
 -- your home, purple = crewmates, orange = Florida moments. The GPS / race route is a gold line. A small
 -- N sits on the edge, pointing north (-Z, CityGen).
+-- Other players: crewmates are purple discs with their first initial (pinned to the edge, as always).
+-- Everyone else you may see is a small plain dot (10 px, no letter, the blips' dark edge, drawn under
+-- the place blips): white, or police blue for a player on the Cop side. Dots only show while that
+-- player is on the map (never pinned to the edge). Position: their character's root while it is
+-- streamed in (followed every frame), else the server's player attribute "MapPos" = "x,z" (CrewService,
+-- every 1.5 s; crewmates use "CrewPos"). Who is hidden from whom (MinimapClient.PlayerKind, which the
+-- big map uses too), for the cops-and-robbers balance:
+--   * never a prisoner (Side "Prisoner") or anyone inside a home (InHome, or on a tour: Touring), since
+--     home interiors may sit somewhere else in the world;
+--   * on the Cop side you don't see wanted players (Heat > 0): cops find suspects themselves;
+--   * while YOU are wanted you don't see player cops: the chase radar below decides what you see;
+--   * crewmates are not touched by these rules (they show as before).
+-- A tap or click anywhere on the map opens the big map (MapClient, via MinimapClient.OnTap): an
+-- invisible button over the map's box, re-placed with it and gone whenever the map is hidden.
 -- How it's drawn: the map is a set of flat parts inside a ViewportFrame, filmed by a top-down camera
 -- that turns with the player's camera (so "up" is where you're looking) and climbs when you drive
 -- fast (zoom out). A ViewportFrame clips cleanly on every device. Blips are 2D labels on top,
@@ -38,6 +52,16 @@
 --   MinimapClient.Bottom() -> the first free y (same pixels) on the RIGHT edge of the screen: under the
 --     Status, Pills and Buttons zones. (It used to be the bottom of the map when the map sat top-right;
 --     the map has moved to the left side, so a right-edge column wants this.)
+-- For the big map (MapClient), which draws the same city the same way:
+--   MinimapClient.BuildMap(parent) -> model, box, complete: a fresh copy of the map's flat parts
+--     (ground, buildings, roads, in the map's palette) parented to `parent`; box = { minX, maxX, minZ,
+--     maxZ } around them in studs (nil while there's no data); complete = false while the shapes or the
+--     road graph haven't arrived yet (build again later).
+--   MinimapClient.StyleView(viewportFrame): the map's sea colour and light on another ViewportFrame.
+--   MinimapClient.PlayerKind(p) -> "crew" | "cop" | "player" | nil (not shown to you: see above).
+--   MinimapClient.PlayerPos(p) -> position, root (root nil when it comes from CrewPos / MapPos), or nil.
+--   MinimapClient.OnTap(fn): fn() runs when the minimap is tapped or clicked (the button only takes
+--     taps once something listens).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -120,6 +144,9 @@ local copKeys = setmetatable({}, { __mode = "k" }) -- [car] = its blip key
 local copCount = 0
 local keepOut = {} -- GuiObjects found from KEEP_OUT (refreshed once a second)
 local cardStacks = {} -- the holders found from CARD_STACKS (refreshed with keepOut)
+local tapButton -- the invisible button over the map (OnTap)
+local onTap -- what a tap on the map does (MinimapClient.OnTap), nil until something listens
+local PLAYER_DOT = 10 -- pixels: other players' plain dots
 
 local function viewport()
 	local camera = Workspace.CurrentCamera
@@ -168,11 +195,14 @@ local function segment(parent, a, b, width, y, color)
 	return flatPart(parent, cf, width, len + width * 0.5, y, color)
 end
 
-local function buildStatic()
+-- The city's flat parts in a new Model (not parented yet): ground tiles, buildings and roads in the
+-- map's palette. Also says whether all the data was there (shapes and road graph).
+local function buildModel()
 	local model = Instance.new("Model")
 	model.Name = "Map"
+	local raw = ReplicatedStorage:GetAttribute("MapShapes")
 	local ok, data = pcall(function()
-		return HttpService:JSONDecode(ReplicatedStorage:GetAttribute("MapShapes") or "{}")
+		return HttpService:JSONDecode(raw or "{}")
 	end)
 	if ok and data then
 		for _, t in ipairs(data.t or {}) do
@@ -195,6 +225,30 @@ local function buildStatic()
 			end
 		end
 	end
+	return model, raw ~= nil and ok and #RoadGraph.Nodes > 0
+end
+
+-- The box round a model's flat parts { minX, maxX, minZ, maxZ } (each part's turned footprint), or nil.
+local function landBox(model)
+	local minX, maxX, minZ, maxZ
+	for _, p in ipairs(model:GetChildren()) do
+		if p:IsA("BasePart") then
+			local cf, s = p.CFrame, p.Size
+			local ex = math.abs(cf.RightVector.X) * s.X / 2 + math.abs(cf.LookVector.X) * s.Z / 2
+			local ez = math.abs(cf.RightVector.Z) * s.X / 2 + math.abs(cf.LookVector.Z) * s.Z / 2
+			local x, z = cf.X, cf.Z
+			minX, maxX = math.min(minX or x - ex, x - ex), math.max(maxX or x + ex, x + ex)
+			minZ, maxZ = math.min(minZ or z - ez, z - ez), math.max(maxZ or z + ez, z + ez)
+		end
+	end
+	if not minX then
+		return nil
+	end
+	return { minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ }
+end
+
+local function buildStatic()
+	local model = buildModel()
 	model.Parent = view
 	-- Culling list: only parts near the player stay in the ViewportFrame (see cull()).
 	for _, p in ipairs(model:GetChildren()) do
@@ -221,6 +275,16 @@ local function cull(pos)
 	end
 end
 
+-- The map's look on a ViewportFrame: sea past the land, and light from straight above that adds up to
+-- exactly the palette's colours on the flat tops.
+local function styleView(vf)
+	vf.BackgroundColor3 = COLORS.water -- past the land: sea
+	vf.BorderSizePixel = 0
+	vf.Ambient = Color3.fromRGB(165, 165, 165)
+	vf.LightColor = Color3.fromRGB(90, 90, 90)
+	vf.LightDirection = Vector3.new(0, -1, 0)
+end
+
 local function build()
 	gui = Instance.new("ScreenGui")
 	gui.Name = "Minimap"
@@ -230,11 +294,7 @@ local function build()
 
 	view = Instance.new("ViewportFrame")
 	view.Name = "Map"
-	view.BackgroundColor3 = COLORS.water -- past the land: sea
-	view.BorderSizePixel = 0
-	view.Ambient = Color3.fromRGB(165, 165, 165)
-	view.LightColor = Color3.fromRGB(90, 90, 90)
-	view.LightDirection = Vector3.new(0, -1, 0)
+	styleView(view)
 	view.Parent = gui
 	Theme.Corners(view)
 	cam = Instance.new("Camera")
@@ -291,6 +351,25 @@ local function build()
 	nc.CornerRadius = UDim.new(0.5, 0)
 	nc.Parent = north
 
+	-- The whole map is one invisible button (OnTap: the big map). It sits in this gui, so it goes when the
+	-- map is switched off (prison, title screen), and fit() places it on the map's box. Not there until
+	-- something listens, so until then a tap on the map reaches the world as it always did.
+	tapButton = Instance.new("TextButton")
+	tapButton.Name = "Open"
+	tapButton.BackgroundTransparency = 1
+	tapButton.BorderSizePixel = 0
+	tapButton.Text = ""
+	tapButton.AutoButtonColor = false
+	tapButton.Selectable = false -- (a gamepad's UI selection never wanders onto it)
+	tapButton.ZIndex = 30
+	tapButton.Visible = onTap ~= nil
+	tapButton.Parent = gui
+	tapButton.Activated:Connect(function()
+		if onTap then
+			task.spawn(onTap)
+		end
+	end)
+
 	-- Chase arrows: their own full-screen layer (the minimap's gui is just the map's corner).
 	chaseGui = Instance.new("ScreenGui")
 	chaseGui.Name = "ChaseArrows"
@@ -322,6 +401,7 @@ local function fit()
 	local touch = Theme.IsTouch()
 	Theme.Place(view, "Minimap", touch)
 	Theme.Place(overlay, "Minimap", touch)
+	Theme.Place(tapButton, "Minimap", touch)
 	local screen = screenSize()
 	local _, _, w, h = zoneBox("Minimap", touch, screen)
 	mapW, mapH = math.max(w, 1), math.max(h, 1)
@@ -399,6 +479,46 @@ local function radarShowing()
 		and (mode ~= "Seen" or player:GetAttribute("HeatSpotted") == true)
 end
 
+-- How another player shows on the maps for you (see the header): "crew" (your crewmates, as always),
+-- "cop" (a player cop), "player" (anyone else), or nil (not shown to you).
+local function playerKind(p)
+	if p == player then
+		return nil
+	end
+	local crew = player:GetAttribute("Crew")
+	if crew and p:GetAttribute("Crew") == crew then
+		return "crew"
+	end
+	local side = p:GetAttribute("Side")
+	if side == "Prisoner" or p:GetAttribute("InHome") == true or p:GetAttribute("Touring") ~= nil then
+		return nil -- in prison, or inside a home (interiors may sit somewhere else in the world)
+	end
+	if side == "Cop" then
+		-- While you're wanted the chase radar alone decides which cops you see.
+		return (player:GetAttribute("Heat") or 0) <= 0 and "cop" or nil
+	end
+	if player:GetAttribute("Side") == "Cop" and (p:GetAttribute("Heat") or 0) > 0 then
+		return nil -- cops find wanted players themselves
+	end
+	return "player"
+end
+
+-- Where another player is: their character's root while it's streamed in (returned too, to follow it
+-- every frame), else the server's last "x,z": CrewPos for crewmates (as before), MapPos for the rest.
+local function playerPos(p)
+	local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+	if root then
+		return root.Position, root
+	end
+	local crew = player:GetAttribute("Crew")
+	local attr = (crew and p:GetAttribute("Crew") == crew and p:GetAttribute("CrewPos")) or p:GetAttribute("MapPos")
+	local x, z = string.match(type(attr) == "string" and attr or "", "(-?%d+),(-?%d+)")
+	if x then
+		return Vector3.new(tonumber(x), 0, tonumber(z)), nil
+	end
+	return nil, nil
+end
+
 local function refreshBlips()
 	for _, b in pairs(blips) do
 		b.seen = false
@@ -464,6 +584,20 @@ local function refreshBlips()
 					blip("crew_" .. p.UserId, pos, okC and first or "?", C.Purple, 16, true)
 					blips["crew_" .. p.UserId].track = root
 				end
+			end
+		end
+	end
+	-- Everyone else you may see (playerKind: who is hidden from whom): a small plain dot, white or police
+	-- blue, only while they're on the map, under the place blips. Followed every frame while streamed in.
+	for _, p in ipairs(Players:GetPlayers()) do
+		local kind = playerKind(p)
+		if kind == "player" or kind == "cop" then
+			local pos, root = playerPos(p)
+			if pos then
+				local key = "pl_" .. p.UserId
+				blip(key, pos, "", kind == "cop" and C.Police or C.Text, PLAYER_DOT, false)
+				blips[key].track = root
+				blips[key].frame.ZIndex = 9
 			end
 		end
 	end
@@ -714,6 +848,34 @@ function MinimapClient.Bottom()
 		bottom = math.max(bottom, y + h)
 	end
 	return math.floor(bottom + 0.5)
+end
+
+-- (see the header) For the big map: the same city, look and player rules as this map.
+function MinimapClient.BuildMap(parent)
+	pcall(RoadGraph.LoadPublished) -- (cheap once loaded: Init's loop usually has it already)
+	local model, complete = buildModel()
+	local box = landBox(model)
+	model.Parent = parent
+	return model, box, complete == true
+end
+
+function MinimapClient.StyleView(vf)
+	styleView(vf)
+end
+
+function MinimapClient.PlayerKind(p)
+	return playerKind(p)
+end
+
+function MinimapClient.PlayerPos(p)
+	return playerPos(p)
+end
+
+function MinimapClient.OnTap(fn)
+	onTap = fn
+	if tapButton then
+		tapButton.Visible = fn ~= nil
+	end
 end
 
 function MinimapClient.Init()

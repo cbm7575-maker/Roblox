@@ -201,8 +201,11 @@ function CrewService.AreFriends(a, b)
 end
 
 -- May `rider` sit in `owner`'s passenger seat? Crewmates and Roblox friends may (VehicleService adds the
--- side, prison and reach rules). Studio's test players (Player1, Player2: negative UserIds) count as
--- friends, so riding together can be tried there.
+-- side, prison and reach rules), and so may anyone the owner has let in this session (RideService: an
+-- accepted INVITE or "let in?" card puts the rider on the owner's "RideIds" attribute, ",id,id,").
+-- Studio's test players (Player1, Player2: negative UserIds) count as friends, so riding together can
+-- be tried there; set the Workspace attribute "RideAsStrangers" = true to treat them as strangers
+-- instead (to try the HOP IN / INVITE cards in a two-player test).
 function CrewService.MayRide(rider, owner)
 	if rider == owner then
 		return false
@@ -210,7 +213,12 @@ function CrewService.MayRide(rider, owner)
 	if CrewService.SameCrew(rider, owner) or CrewService.AreFriends(rider, owner) then
 		return true
 	end
+	local ids = owner:GetAttribute("RideIds")
+	if type(ids) == "string" and string.find(ids, "," .. tostring(rider.UserId) .. ",", 1, true) then
+		return true
+	end
 	return RunService:IsStudio() and rider.UserId < 0 and owner.UserId < 0
+		and game:GetService("Workspace"):GetAttribute("RideAsStrangers") ~= true
 end
 
 -- The player attribute "FriendIds" (see the header): ",id,id," for the friends of this player in this
@@ -321,7 +329,9 @@ function CrewService.Init()
 	end)
 	publish()
 	-- Crewmates stream out when far away, so publish each crew member's position (player attribute
-	-- "CrewPos" = "x,z") for the minimap.
+	-- "CrewPos" = "x,z") for the minimap. Every player's goes out too, as "MapPos" = "x,z" (the same
+	-- 1.5 s beat): the minimap and the big map draw other players from it while their character is
+	-- streamed out (MinimapClient / MapClient decide who is shown to whom). nil while there's no body.
 	task.spawn(function()
 		while true do
 			task.wait(1.5)
@@ -330,6 +340,10 @@ function CrewService.Init()
 					local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
 					p:SetAttribute("CrewPos", root and string.format("%d,%d", root.Position.X, root.Position.Z) or nil)
 				end
+			end
+			for _, p in ipairs(Players:GetPlayers()) do
+				local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+				p:SetAttribute("MapPos", root and string.format("%d,%d", root.Position.X, root.Position.Z) or nil)
 			end
 		end
 	end)

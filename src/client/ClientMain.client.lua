@@ -48,8 +48,10 @@ local ORDER = {
 	"ShopClient",
 	"OfferClient", -- right-moment pass offers (needs HUDController, NotifyController, SettingsClient)
 	"MinimapClient",
+	"MapClient", -- the big map: tap the minimap (or M) to see the whole city and set a waypoint (needs MinimapClient, GPSClient)
 	"ProgressClient",
 	"CrewClient",
+	"RideClient", -- riding together: HOP IN for anyone's car (strangers ask the driver), INVITE from the driver's seat
 	"MissionClient",
 	"BigScoreClient", -- the crew heist's strip, checklist, marker, prompts and sounds (needs HUDController, GPSClient, NotifyController; SoundClient looked up softly)
 	"PedClient",

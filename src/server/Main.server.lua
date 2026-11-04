@@ -19,6 +19,7 @@ local ORDER = {
 	"ProgressService",
 	"JourneyService", -- goal chains after the tutorial (Road to the Coast)
 	"CrewService",
+	"RideService", -- HOP IN with strangers (a "let them in?" card) and INVITE from the driver's seat (after CrewService)
 	"FriendsService", -- invite / join friends, co-play bonus
 	"EventService",
 	"MissionService",

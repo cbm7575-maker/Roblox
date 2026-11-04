@@ -102,10 +102,13 @@
 --     isn't holding back, so the button never asks for a hold the prompt can't start. (PromptGate is
 --     required softly: if the module is missing or doesn't load, nothing is held back, and this file
 --     neither waits for it nor fails with it.)
---   * Next to a crewmate's or Roblox friend's car with a free passenger seat (VehicleVisuals.RideSeat: the
---     server's rules), within K.RIDE_RANGE of that seat: a RIDE button, F or gamepad X. It asks the server
---     (RequestRide, VehicleService checks again) and you're sat in the passenger seat at once. The car's
---     own "Ride" bubble (E) still works too. Never offered while seated.
+--   * Next to another player's car with a free passenger seat (VehicleVisuals.RideSeat: the server's
+--     rules), within K.RIDE_RANGE of that seat: a HOP IN button, F or gamepad X. It asks the server
+--     (RequestRide, VehicleService checks again). A crewmate's or Roblox friend's car, or one whose owner
+--     has let you in, sits you in the passenger seat at once. A stranger's car (while they drive it or
+--     stand by it) says "ASK DRIVER" under HOP IN: the press sends its owner a "let them in?" card
+--     (RideService, RideClient) and a yes sits you down. The car's own bubble (E) does the same. Never
+--     offered while seated.
 --   * Boats: your own boat's "Drive" bubble is NOT held back (it reaches CarBuilder.BoatReach, 60 studs):
 --     boats wait off the end of the dock, well past GET IN's 12 studs and the server's 16, so from the
 --     dock that bubble (E, gamepad X or a tap) is the way on board. GET IN still works when you swim up.
@@ -293,6 +296,7 @@ local S = {
 	controls = nil, -- Roblox's ControlModule, found on first use (false: not there)
 	locomotion = nil, -- LocomotionClient, looked for on first use (false: not there)
 	wardrobe = nil, -- WardrobeUI, looked for on first use (false: not there); refresh asks its IsOpen
+	bigMap = nil, -- MapClient (the big map), looked for on first use (false: not there); refresh asks its IsOpen
 	effectsGroup = nil, -- SettingsClient's "Effects" SoundGroup, found on first use (false: none)
 	seatNow = nil, -- the seat this character sat in at its last seat change (seatChanged)
 	riseAt = nil, -- os.clock() we stepped out of a car (straightening up until K.RISE_TIME later)
@@ -489,19 +493,22 @@ local function findTarget(pos, skipCar, enterRange, stealRange, seated)
 				end
 			end
 		end
-		-- A crewmate's or friend's car (usually with them at the wheel): RIDE in its passenger seat. On foot
-		-- only (the seated hint leaves crews alone: they stop side by side all the time).
+		-- Another player's car (usually with them at the wheel): HOP IN to its passenger seat. A crewmate's,
+		-- a friend's or one whose owner let us in seats us at once; anyone else's asks its owner first
+		-- (ask: RideService's "let them in?" card). On foot only (the seated hint leaves riders alone:
+		-- cars stop side by side all the time).
+		local ask = nil
 		if not kind and not seated and seat and seat:IsA("VehicleSeat") and VehicleVisuals
 			and car:GetAttribute("OwnerUserId") ~= player.UserId then
-			local okRide, pseat = pcall(VehicleVisuals.RideSeat, car, downed)
+			local okRide, pseat, asking = pcall(VehicleVisuals.RideSeat, car, downed, true)
 			if okRide and pseat then
-				kind, range, at = "ride", K.RIDE_RANGE, pseat
+				kind, range, at, ask = "ride", K.RIDE_RANGE, pseat, asking == true
 			end
 		end
 		if kind then
 			local d = (at.Position - pos).Magnitude
 			if d <= range and (not bestDist or d < bestDist) then
-				best = { car = car, kind = kind, prompt = prompt, dist = d }
+				best = { car = car, kind = kind, prompt = prompt, dist = d, ask = ask }
 				bestDist = d
 			end
 		end
@@ -1612,6 +1619,18 @@ local function refresh()
 			S.wardrobe = okW and type(mod) == "table" and type(mod.IsOpen) == "function" and mod or false
 		end
 		local dressing = S.wardrobe ~= false and S.wardrobe.IsOpen() == true
+		-- The big map (MapClient) covers the screen and takes the taps: no E / F / button behind it either.
+		if S.bigMap == nil then
+			local module = script.Parent:FindFirstChild("MapClient")
+			local okM, mod = false, nil
+			if module then
+				okM, mod = pcall(require, module)
+			end
+			S.bigMap = okM and type(mod) == "table" and type(mod.IsOpen) == "function" and mod or false
+		end
+		if S.bigMap ~= false and S.bigMap.IsOpen() == true then
+			dressing = true -- (the same rule: nothing is offered while it's up)
+		end
 		if not stunned and not ImpactClient.IsKnocked() and not PhoneUI.IsOpen() and not dressing then
 			S.target = findTarget(root.Position, nil, K.ENTER_RANGE, K.STEAL_RANGE)
 			-- Just stepped out of this car (5 s, and for as long as we hold a lock for the player after
@@ -1743,8 +1762,11 @@ local function render()
 			color, main = K.MINT, "GET IN"
 			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")
 		elseif t.kind == "ride" then
-			color, main = K.MINT, "RIDE"
+			color, main = K.MINT, "HOP IN"
 			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")
+			if t.ask then
+				key = key .. (key ~= "" and " · " or "") .. "ASK DRIVER" -- (a stranger's car: the owner says yes first)
+			end
 		elseif t.kind == "jack" then
 			color, main = K.PINK, "JACK"
 			key = mode == "keyboard" and "F" or (mode == "gamepad" and "X" or "")

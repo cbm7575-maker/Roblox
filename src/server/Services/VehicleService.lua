@@ -14,11 +14,13 @@
 --     somewhere (a "GetOutFirst" toast says so, at most one every 3 s). A boat's prompts reach
 --     CarBuilder.BoatReach (boats moor off the end of the docks); launching one while you stand on foot
 --     within that reach of its pad sits you straight in it.
---   * Who rides with whom (Ride prompt, and RequestRide(car) from InteractClient's RIDE button / F): the
---     owner's crewmates and Roblox friends (CrewService.MayRide; Studio's test players count as friends),
---     on the owner's side (cops with cops, citizens with citizens), never a prisoner, from within reach
---     with no wall between (boats: over the dock's rails), into a free passenger seat (not one a taxi
---     fare sits in).
+--   * Who rides with whom (Ride prompt, and RequestRide(car) from InteractClient's HOP IN button / F): the
+--     owner's crewmates and Roblox friends, and anyone the owner has let in this session (CrewService.MayRide;
+--     Studio's test players count as friends), on the owner's side (cops with cops, citizens with
+--     citizens), never a prisoner, from within reach with no wall between (boats: over the dock's rails),
+--     into a free passenger seat (not one a taxi fare sits in). A stranger who passes the rest asks the
+--     owner instead (RideService's "let them in?" card); VehicleService.TryRide(who, car, reach) seats
+--     someone after a yes.
 --   * Taxi fares (JobService): VehicleService.SeatNPC(car, model) sits a non-player rider in the free
 --     passenger seat for everyone to see (a posed statue: no Humanoid, massless, parented into the car;
 --     seat attribute NPCRider = true), VehicleService.ReleaseNPC(model) lets it go again.
@@ -674,11 +676,14 @@ local function getOutFirst(who)
 end
 
 -- Sit `who` in `seat` (a car's passenger seat) if they may ride with that car's owner: the owner's
--- crewmate or Roblox friend (CrewService.MayRide), on the owner's side, never a prisoner (the vent is the
--- only way out), on foot and not knocked over or tasered, within reach, with no wall between (boats: the
--- dock's rail doesn't count), the seat free (a taxi fare sits in it, or someone else). Returns true when
--- seated. Only "get out first" is said out loud: anyone else simply sees no bubble and no RIDE button.
-local function tryRide(who, car, seat)
+-- crewmate or Roblox friend, or someone the owner let in (CrewService.MayRide), on the owner's side, never
+-- a prisoner (the vent is the only way out), on foot and not knocked over or tasered, within reach, with
+-- no wall between (boats: the dock's rail doesn't count), the seat free (a taxi fare sits in it, or
+-- someone else). Returns true when seated. Only "get out first" is said out loud here.
+-- Someone who passes every rule but the first (a stranger at the door: HOP IN, F or the bubble) asks the
+-- owner instead: RideService.Ask sends the owner a "let them in?" card, unless noAsk (RideService seating
+-- someone after a yes). reach: studs from the seat (nil = RIDE_REACH, or BOAT_REACH for a boat).
+local function tryRide(who, car, seat, reach, noAsk)
 	if typeof(car) ~= "Instance" or not car:IsA("Model") or car.Parent ~= Workspace.Vehicles
 		or typeof(seat) ~= "Instance" or not seat:IsA("Seat") or seat.Parent ~= car then
 		return false
@@ -708,11 +713,11 @@ local function tryRide(who, car, seat)
 		may = crew.SameCrew(who, owner)
 	end
 	local side = who:GetAttribute("Side")
-	if not may or side == "Prisoner" or side ~= owner:GetAttribute("Side") then
+	if side == "Prisoner" or side ~= owner:GetAttribute("Side") then
 		return false
 	end
 	local boat = car:GetAttribute("Boat") == true
-	if (root.Position - seat.Position).Magnitude >= (boat and BOAT_REACH or RIDE_REACH) then
+	if (root.Position - seat.Position).Magnitude >= (reach or (boat and BOAT_REACH or RIDE_REACH)) then
 		return false
 	end
 	-- No riding through walls or fences. People don't block it: a seated driver's character stays
@@ -737,8 +742,28 @@ local function tryRide(who, car, seat)
 	if Workspace:Raycast(from, to - from, los) then
 		return false
 	end
+	if not may then
+		-- A stranger at the door: ask the owner (RideService says what happens next).
+		if not noAsk then
+			local okRide, ride = pcall(require, script.Parent:FindFirstChild("RideService"))
+			if okRide and type(ride) == "table" and type(ride.Ask) == "function" then
+				ride.Ask(who, owner, car)
+			end
+		end
+		return false
+	end
 	seat:Sit(hum)
 	return true
+end
+
+-- Sit `who` in `car`'s passenger seat if the riding rules allow it now (tryRide, without asking the
+-- owner). reach: studs from the seat (nil = the usual). RideService calls it after a yes. Returns true
+-- when seated.
+function VehicleService.TryRide(who, car, reach)
+	if typeof(car) ~= "Instance" or not car:IsA("Model") then
+		return false
+	end
+	return tryRide(who, car, car:FindFirstChild("PassengerSeat"), reach, true)
 end
 
 -- opts: { Sit = bool, PadSide = role name (spawn on that role's nearest pad), IgnoreCooldown = bool,

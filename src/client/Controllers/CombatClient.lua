@@ -18,7 +18,7 @@
 --     player in reach you could hit, and the server is asked ("Punch", them).
 --   * A gun is "out" while its Tool is in your hand, you are on foot and on your feet (not swimming,
 --     not at home) and no panel is open (phone, gun shop, dealer card, house buy card, dressing room,
---     side picker). Fists don't swing behind one of those either. While it is out:
+--     side picker, big map). Fists don't swing behind one of those either. While it is out:
 --       - It is held low in both hands (PoseClient "LowReady") and comes up to the eye (PoseClient "Aim",
 --         pointed where the camera looks, kicked by every shot) while you aim or fire and for 0.8 s after
 --         the last shot; it goes back down for the reload. PoseClient.Broadcast tells everyone else which
@@ -1048,9 +1048,10 @@ end
 -- A panel that needs the mouse and the screen: a gun is never "out" behind one.
 -- (The house buy card too: with a pistol in hand the mouse stayed locked to the crosshair behind it, so
 -- BUY and CANCEL couldn't be clicked and the click went off as a shot at the house.)
+-- (The big map too: it is dragged and clicked all over, and the mouse must be free for it.)
 local function panelOpen()
 	return shop.open or pickerOpen() or controllerOpen("PhoneUI") or controllerOpen("WardrobeUI") or controllerOpen("DealerClient")
-		or controllerOpen("HouseClient")
+		or controllerOpen("HouseClient") or controllerOpen("MapClient")
 end
 
 -- Knocked over (by the server, or by a traffic car on this device only) or tasered.
@@ -1607,7 +1608,8 @@ local function updateBackpack()
 	if controllerOpen("WardrobeUI") then
 		return -- the dressing room hides the hotbar and puts it back itself
 	end
-	local want = hotbarWanted() and not shop.open and mode ~= "touch"
+	-- (Not behind the big map either: it fills the screen, and the hotbar would sit on top of it.)
+	local want = hotbarWanted() and not shop.open and not controllerOpen("MapClient") and mode ~= "touch"
 	local ok, on = pcall(StarterGui.GetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.Backpack)
 	if ok and on ~= want then
 		pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.Backpack, want)
@@ -3827,7 +3829,7 @@ function CombatClient.Equipped()
 end
 
 -- May the tools be switched right now? A citizen or a cop on foot and on their feet, not at home, not
--- picking a side, no panel open (phone, gun shop, dressing room, dealer card, house buy card).
+-- picking a side, no panel open (phone, gun shop, dressing room, dealer card, house buy card, big map).
 function CombatClient.CanSwitch()
 	return hotbarWanted() and not downNow() and not panelOpen()
 end

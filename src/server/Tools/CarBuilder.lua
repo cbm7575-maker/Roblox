@@ -953,7 +953,7 @@ function CarBuilder.Build(id, opts)
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = seat
 
-	-- Passenger seat: crewmates and Roblox friends ride along (VehicleService checks who; CanTouch off so
+	-- Passenger seat: crewmates, Roblox friends and players the owner let in ride along (VehicleService checks who; CanTouch off so
 	-- nobody sits by bumping into it).
 	local pseat = Instance.new("Seat")
 	pseat.Name = "PassengerSeat"
@@ -967,7 +967,7 @@ function CarBuilder.Build(id, opts)
 	weld(chassis, pseat)
 	local ride = Instance.new("ProximityPrompt")
 	ride.Name = "RidePrompt"
-	ride.ActionText = "Ride"
+	ride.ActionText = "Hop in" -- (VehicleVisuals says "Ask to hop in" on a stranger's car, on that device)
 	ride.ObjectText = cfg.DisplayName
 	ride.KeyboardKeyCode = Enum.KeyCode.E
 	ride.GamepadKeyCode = Enum.KeyCode.ButtonX
