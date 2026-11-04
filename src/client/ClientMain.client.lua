@@ -11,6 +11,11 @@ local UserInputService = game:GetService("UserInputService")
 
 local controllers = script.Parent:WaitForChild("Controllers")
 
+-- Phones play sideways (owner, Nov 3: the game came up vertical). LandscapeSensor turns with the phone
+-- between the two sideways ways but never stands up; the place's StarterGui had Sensor, which let a
+-- phone held upright play in portrait.
+Players.LocalPlayer:WaitForChild("PlayerGui").ScreenOrientation = Enum.ScreenOrientation.LandscapeSensor
+
 local ORDER = {
 	"DriveController",
 	"PromptGate", -- hides on-foot prompts (Rob, Pick lock...) while you sit in any seat

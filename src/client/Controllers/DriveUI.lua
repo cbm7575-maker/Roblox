@@ -17,8 +17,10 @@
 --     stopped: just above EXIT on a PC (key cap R, or the D-pad's up arrow), a tile just left of the
 --     Buttons row on a phone. Its word is orange: something is wrong.
 --   * Driving on a touch device: GAS and BRAKE pedals, NITRO, DRIFT, HORN and SMOKE buttons (frame
---     "Touch"). Steering stays on Roblox's thumbstick (it feeds the seat's SteerFloat). DRIFT turns gold
---     inside the drift zone (player attribute InDriftZone).
+--     "Touch"). DRIFT turns gold inside the drift zone (player attribute InDriftZone). Steering: two
+--     big ◀ ▶ hold buttons under a STEER caption, bottom left (frame "Steer"; DriveController eases
+--     them like the A / D keys), and a toast says so on the first drive of the session. Roblox's
+--     thumbstick still steers too (it feeds the seat's SteerFloat), for anyone who drags there instead.
 --   * Riding as a passenger: just EXIT (and the car's name).
 --   * Keyboard / gamepad players: a controls strip (frame "ControlsHint": two rows of key caps on a flat
 --     panel) the first time they drive each session (20 s) and again whenever they drive into the drift
@@ -85,6 +87,10 @@ K.SLOT_HEIGHT = 40 -- the radio's row
 K.LIST_GAP = 6
 K.GAP = 12 -- the controls strip and the car's name keep this far from the HUD pieces around them
 K.PEDAL_ALPHA = 0.45 -- how see-through an idle pedal is
+-- The phone's steering buttons: a block this share of the screen height wide and tall (it stays clear of
+-- the cluster from small phones to tablets), 20 px in from the bottom-left corner.
+K.STEER_W, K.STEER_H = 0.44, 0.21
+K.STEER_HINT = "Steer with ◀ ▶ on the left. GAS and BRAKE are on the right."
 K.TILE_GAP = 8 -- between the tiles of the phone's Buttons row (HUDController's TILE_GAP)
 K.SEAT_GAP = 8 -- between EXIT and FLIP (or the hint in FLIP's place)
 K.NAME_DELAY = 0.6 -- seconds after you sit down before the car's name shows (the door has shut by then)
@@ -120,7 +126,7 @@ K.NAME_CLEAR = {
 
 -- The pieces, set once by build():
 --   gui, cluster, readout, speed, unit, driftTag, nitroWord, nitroBar, nitroFill
---   touch (the pedal block), smoke, drift
+--   touch (the pedal block), smoke, drift, steer (the steering block)
 --   exit, exitRow, exitKey, exitGlyph, exitPad / flip, flipRow, flipKey
 --   strip (the controls strip), keyRows, padRows
 --   nameFrame, nameLabel, classLabel, nameShadow, classShadow
@@ -142,8 +148,9 @@ local S = {
 	nameAlpha = 1, -- the fade the name is drawn with now (0 = fully shown)
 	nameH = 47, -- how tall the name's box is on this device (place)
 	hud = nil, -- HUDController, found on first use (false: not there)
+	steerHinted = false, -- the steering toast has had its first-drive showing this session
 }
-local held = { Gas = false, Brake = false }
+local held = { Gas = false, Brake = false, Left = false, Right = false }
 local idleText = {} -- [button] = text colour while it isn't pressed
 local pressed = {} -- [button] = true while a hold button is down
 local resets = {} -- one function per hold button: lets go of it
@@ -845,6 +852,36 @@ local function build()
 		Remotes.Event("RequestSmoke"):FireServer()
 	end)
 
+	-- Steering, bottom left (owner, Nov 3: on a phone "I don't know how to steer the car": the thumbstick
+	-- only shows once you drag on that side). Two hold buttons under a STEER caption.
+	local steerFrame = Instance.new("Frame")
+	steerFrame.Name = "Steer"
+	steerFrame.AnchorPoint = Vector2.new(0, 1)
+	steerFrame.Position = UDim2.new(0, 20, 1, -20)
+	steerFrame.Size = UDim2.fromScale(K.STEER_W, K.STEER_H)
+	steerFrame.SizeConstraint = Enum.SizeConstraint.RelativeYY
+	steerFrame.BackgroundTransparency = 1
+	steerFrame.Visible = false
+	steerFrame.Parent = gui
+	ui.steer = steerFrame
+	local left = button(steerFrame, "Left", "◀", UDim2.fromScale(0.47, 1), UDim2.fromScale(0.47, 1), nil, true)
+	local right = button(steerFrame, "Right", "▶", UDim2.fromScale(0.47, 1), UDim2.fromScale(1, 1), nil, true)
+	table.insert(resets, holdable(left, function(d)
+		held.Left = d
+	end))
+	table.insert(resets, holdable(right, function(d)
+		held.Right = d
+	end))
+	local steerWord = Instance.new("TextLabel")
+	steerWord.Name = "Caption"
+	steerWord.AnchorPoint = Vector2.new(0.5, 1)
+	steerWord.Position = UDim2.new(0.5, 0, 0, -4)
+	steerWord.Size = UDim2.new(1, 0, 0, 16)
+	Theme.Text(steerWord, 13, "Bold")
+	steerWord.Text = "STEER"
+	steerWord.TextColor3 = C.Dim
+	steerWord.Parent = steerFrame
+
 	-- EXIT and FLIP (placeSeat puts them in the Exit zone; other controllers find them by these names:
 	-- InteractClient through DriveUI.ExitButton, MinimapClient and ActivityClient by "Exit" / "Flip").
 	ui.exit, ui.exitRow, ui.exitKey = seatButton("Exit", "EXIT", C.Text)
@@ -966,12 +1003,25 @@ local function update()
 			S.controlsShown = true
 			S.controlsUntil = now + K.CONTROLS_SECONDS
 		end
+		-- ...and on a phone, a toast for the steering buttons (NotifyController starts after us: found now).
+		if driving and not S.steerHinted and isTouch() then
+			S.steerHinted = true
+			local module = script.Parent:FindFirstChild("NotifyController")
+			local ok, notify = false, nil
+			if module then
+				ok, notify = pcall(require, module)
+			end
+			if ok and type(notify) == "table" and type(notify.Show) == "function" then
+				pcall(notify.Show, K.STEER_HINT, C.Gold, "info")
+			end
+		end
 		if not driving then
 			held.Gas, held.Brake = false, false
 			for _, r in ipairs(resets) do
 				r()
 			end
 			DriveController.Input.Throttle = nil
+			DriveController.Input.SteerButton = 0
 		end
 	end
 	-- The car we sit in (a bench or a chair is no car): a new one gets its name on screen in a moment.
@@ -1012,11 +1062,13 @@ local function update()
 	if not driving then
 		-- Passengers only get EXIT (and the car's name): the rest is the driver's.
 		ui.cluster.Visible, ui.touch.Visible, ui.strip.Visible, ui.flip.Visible = false, false, false, false
+		ui.steer.Visible = false
 		updateName(now, touch, view)
 		return
 	end
 	ui.cluster.Visible = true
 	ui.touch.Visible = touch
+	ui.steer.Visible = touch
 	-- (one thing at a time on the cluster: InteractClient's name card first, then the strip)
 	local stripOn = not touch and now < S.controlsUntil and liveBox(K.NAME_CARD) == nil
 	if stripOn then
@@ -1030,8 +1082,10 @@ local function update()
 	updateName(now, touch, view) -- (after the strip: the name stands on it)
 	if touch then
 		DriveController.Input.Throttle = (held.Gas and 1 or 0) - (held.Brake and 1 or 0)
+		DriveController.Input.SteerButton = (held.Right and 1 or 0) - (held.Left and 1 or 0)
 	else
 		DriveController.Input.Throttle = nil
+		DriveController.Input.SteerButton = 0
 	end
 	local chassis = car and car.PrimaryPart
 	-- The real speed over the ground (in a drift the car moves faster than its nose does). Labels are

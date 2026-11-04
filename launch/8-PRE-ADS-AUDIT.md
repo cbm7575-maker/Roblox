@@ -45,6 +45,20 @@ back in (HeistClient).
 Not testable here: a phone (Studio's simulator shows the desktop HUD), a gamepad, and a real Robux
 purchase.
 
+**Version 6 (Nov 3, later):** the owner played on a phone and reported two problems.
+- **It played vertical.** StarterGui.ScreenOrientation was Sensor. It's now LandscapeSensor, set in the
+  place and again in ClientMain.
+- **There was no clear way to steer.** Phones now get two big ◀ ▶ STEER buttons at the bottom left, eased
+  like the keyboard's A and D. The first drive of a session shows a toast: "Steer with ◀ ▶ on the left.
+  GAS and BRAKE are on the right." Roblox's thumbstick still works too.
+
+Both were tested in Studio's phone preview (`PreviewTouch`):
+- After GAS took the car to 72, holding ▶ turned it right 124 degrees in 1.5 s, and holding ◀ turned it
+  left 100 degrees.
+- No errors.
+
+Play once on a real phone to confirm.
+
 ---
 
 Do it in this order: A (Creator Hub), B (load into Studio), C (the five tests), D (publish), E (ads).

@@ -4,8 +4,8 @@
 -- this controller gathers input, runs the physics every step, and handles the chase camera,
 -- wheel visuals and the drive actions (handbrake, nitro, exit, flip).
 -- Input: the VehicleSeat's ThrottleFloat/SteerFloat (keyboard, gamepad and touch through Roblox's
--- default controls) unless DriveController.Input overrides them (phone pedals, DriveUI).
---   * Keyboard steering is eased: A / D give -1 / 0 / 1, so the wheel is turned toward that at a
+-- default controls) unless DriveController.Input overrides them (phone pedals and steering buttons, DriveUI).
+--   * Keyboard steering is eased (and the phone's steering buttons with it): A / D give -1 / 0 / 1, so the wheel is turned toward that at a
 --     speed-sensitive rate (quick when slow, calmer when fast, quickest back to centre and while the
 --     handbrake is held). Sticks and the phone thumbstick are already smooth and pass straight through.
 --   * Drifting (CarPhysics has the model): handbrake + steer swings the tail out, then throttle +
@@ -64,6 +64,7 @@ local DriveController = {}
 DriveController.Input = {
 	Throttle = nil, -- -1..1, overrides the seat when set
 	Steer = nil, -- -1..1
+	SteerButton = 0, -- -1, 0 or 1: the phone's steering buttons (DriveUI), eased like the A / D keys
 	Handbrake = false,
 	Nitro = false,
 }
@@ -259,10 +260,11 @@ local function steerKeyDown()
 end
 
 -- Keys steer in jumps (-1, 0, 1), which made the car twitch: turn the wheel toward the key instead.
--- A stick or the phone thumbstick (anything that isn't a held steering key) passes through untouched.
+-- The phone's steering buttons are keys too. A stick or the phone thumbstick (anything that isn't a held
+-- steering key or button) passes through untouched.
 local function easeSteer(s, raw, dt, handbrake)
 	if raw ~= 0 then
-		s.KeySteer = math.abs(raw) == 1 and steerKeyDown()
+		s.KeySteer = math.abs(raw) == 1 and (steerKeyDown() or DriveController.Input.SteerButton ~= 0)
 	end
 	if not s.KeySteer then
 		s.SteerOut = raw
@@ -308,6 +310,9 @@ local function physicsStep(dt)
 		local rt, rs = rawInput()
 		throttle = (throttle == 0 and i.Throttle == nil) and rt or throttle
 		steer = (steer == 0 and i.Steer == nil) and rs or steer
+	end
+	if steer == 0 and i.Steer == nil and i.SteerButton ~= 0 then
+		steer = i.SteerButton -- (the thumbstick wins while a thumb is on it)
 	end
 	if i.Steer == nil then
 		steer = easeSteer(s, steer, dt, i.Handbrake)
