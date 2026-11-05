@@ -543,3 +543,12 @@ Each milestone ends with a Studio play test (PC and phone layout) and a short no
 - the cover charge and VIP booth bought by a second player.
 
 The details are in launch/17, 19 and 20.
+
+## 22. Owner decisions (Nov 5, 2026)
+
+- **Earnings:** keep the raised Boat Rentals and Nightclub trickle. All five businesses pay back in about 7.8 h online:
+  - Boat Rentals: $256 → $590 a minute.
+  - Nightclub: $375 → $875 a minute by day, ×2 at night.
+- **Owning all five:** keep the level-5 total (about $2,300 a minute by day, $3,200 at night). Tune it after the private live test, once real players show how fast they get there. `RateScale` is the one setting that turns every trickle down.
+- **Map letter:** the Nightclub stays a pink **V**.
+- **The back room** stays small (about $34 a minute averaged over a day at level 1). The Print Shop remains the main dirty-money business.
