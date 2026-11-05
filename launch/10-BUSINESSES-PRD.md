@@ -535,12 +535,13 @@ Each milestone ends with a Studio play test (PC and phone layout) and a short no
 - A second player's cold brew paid the owner 70%.
 - No server errors.
 
-**Still to test:**
-- full routes (tour rings and docking);
-- the jet ski rental;
-- paparazzi;
-- a launder drop's payout in Studio;
-- the cover charge and VIP booth bought by a second player.
+**Afternoon test:**
+- A full boat tour docked and paid.
+- The jet ski rental works and pays the owner 70%. A spawn bug (the jet ski wedged under the dock) was found and fixed.
+- The cover charge and VIP booth each pay the owner 70%.
+- Paparazzi chase and can be lost, and the red carpet pays.
+
+**Still to test:** a launder drop's payout driven in Studio. The offline checks cover it.
 
 The details are in launch/17, 19 and 20.
 

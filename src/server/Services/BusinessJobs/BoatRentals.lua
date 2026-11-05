@@ -300,7 +300,28 @@ local function lockBoat(boat, userId, what, onSit)
 		local char = who.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if who.UserId == boat:GetAttribute("BizDriverUserId") and hum and hum.Health > 0 and hum.SeatPart == nil and seat.Occupant == nil then
+			-- A floating boat is held still while they sit (the seat weld would drag it to where they stand: onto
+			-- the dock), then handed back to their device.
+			local hold = not chassis.Anchored
+			if hold then
+				chassis.Anchored = true
+				pcall(function()
+					char:PivotTo(seat.CFrame * CFrame.new(0, 2.5, 0))
+				end)
+			end
 			seat:Sit(hum)
+			if hold then
+				task.delay(0.4, function()
+					if chassis.Parent then
+						chassis.Anchored = false
+						if boat:GetAttribute("DriverUserId") == who.UserId then
+							pcall(function()
+								chassis:SetNetworkOwner(who)
+							end)
+						end
+					end
+				end)
+			end
 		end
 	end)
 	return seat
@@ -1490,7 +1511,24 @@ function BoatRentals.Service(player, def, A)
 	S.rentals[player.UserId] = { boat = boat, untilT = untilT, warned = false, outSince = nil, def = def }
 	player:SetAttribute("BizRentalUntil", untilT)
 	if seat and hum.Parent and hum.Health > 0 and hum.SeatPart == nil then
+		-- Held still while the renter is seated: a floating jet ski is otherwise dragged by the seat weld to where
+		-- the renter stands (the stand, up on the deck) and wedges under the planks (Studio test, Nov 5 2026).
+		local chassis = boat.PrimaryPart
+		chassis.Anchored = true
+		pcall(function()
+			hum.Parent:PivotTo(seat.CFrame * CFrame.new(0, 2.5, 0))
+		end)
 		seat:Sit(hum)
+		task.delay(0.4, function()
+			if chassis.Parent then
+				chassis.Anchored = false
+				if boat:GetAttribute("DriverUserId") == player.UserId then
+					pcall(function()
+						chassis:SetNetworkOwner(player)
+					end)
+				end
+			end
+		end)
 	end
 	A.result(player, { Kind = "Rented", Id = def.Id, Price = price, Until = untilT, Owner = paidTo, Label = RE.Label })
 	Telemetry.Custom(player, "BizRental_" .. def.Id, price)

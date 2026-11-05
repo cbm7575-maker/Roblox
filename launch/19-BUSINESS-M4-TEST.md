@@ -196,3 +196,20 @@ Run them in the **server** Command Bar through DebugService's `NCCmd` door, as i
 - The phone layout of the tour strip.
 
 **One open question:** on the first tour, the player died a few seconds into a hard turn at full speed. Nothing on the server killed them; the only kill code is combat, which logs. The likely cause is falling out of the world. Two more tours with the same driving were fine. If it happens again, note where.
+
+## 12. Two-player Studio test, Nov 5 2026 (afternoon)
+
+**A full tour (route Marina, scripted):**
+- The boat went stop to stop with legal waits per leg, so the speed check passed.
+- MARINA ROW SLIPS (pass), THE SEA DREAM (photo), THE CARGO CRANES and DOLPHIN WATCH (pass) all counted, with the tourists at 100%.
+- Docking paid about $829 (Player1's cash rose $934, which includes $105 from the jet ski).
+
+**Jet ski rental (Player2 renting from Player1's dock):**
+- The rental toast read "Jet ski rented for 9:59! (-$150) Ride it anywhere on the water. Player1 says thanks."
+- The owner got $105 and the RENTAL timer showed.
+- `rentleft` ended it: "Time's up: your jet ski rental is over. Thanks for riding!"
+
+**Bug found and fixed:**
+- **What happened:** a new rental wouldn't move forward. The seat weld dragged the floating jet ski from its slot to where the renter stood (the stand, up on the deck), and it wedged under the planks at x 1713 instead of slot 1 at x 1730.
+- **The fix (`BoatRentals.Service`):** the jet ski is anchored while the renter is put on it, then let go and handed to their device. The same is done for the Drive prompt on any floating boat (`lockBoat`).
+- **Re-tested:** it spawned in slot 1 and rode straight out to sea at 67 mph. A jet ski reset into its slot reached ~110 studs/s.

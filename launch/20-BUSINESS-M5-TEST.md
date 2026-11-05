@@ -233,3 +233,20 @@ Run them in the **server** Command Bar through DebugService's `NCCmd` door, as b
 - **The cover charge and VIP booth bought by a second player.**
 - **Back-room raids.**
 - **The exit route:** a street-light pole sits in the lane west of the club, and a limo driven straight out of the bay hits it. Steering around it works. Moving the bay or the pole would make the exit cleaner.
+
+## 14. Two-player Studio test, Nov 5 2026 (afternoon)
+
+**Cover charge:** Player2 paid $50 at the bouncer and walked into the club. Player1, the featured owner, got $35 (70%). The club strip showed with no GPS readout behind it, so the GPSClient fix works.
+
+**VIP booth:**
+- The rope's prompt read "VIP booth $250 · 15 minutes · you and your crew".
+- Booking it showed "The VIP booth is yours and your crew's for 14:59! (-$250)" and a "YOUR VIP BOOTH" timer.
+- Player1 got $175 (70%).
+
+**Paparazzi (scripted ride with legal waits):**
+- One paparazzi SUV appeared 3 s after the VIP (DJ Marlo) got in and closed to ~30 studs.
+- The strip read "PAPARAZZI · LOSE THE PAPARAZZI!!", and the camera flashes drained comfort (100% → ~37% while standing still next to them).
+- After the limo got 1,100+ studs away, the SUV drove off after the hold.
+- The red carpet showed the "★ RED CARPET" stamp and paid $2,397 ★★ ("for ★★★: faster, a smoother ride"), with NIGHT ×1.25.
+
+**Test-only note:** jumping the limo next to a VIP standing by a wall destroyed it ("Job over: the limo is gone"). That was the shortcut's placement, not the game; with a clear spot it worked.
