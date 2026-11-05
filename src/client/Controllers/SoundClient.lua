@@ -1813,7 +1813,12 @@ function SoundClient.Init()
 		SoundClient.Play("Cuffs")
 	end)
 	on("TaserFx", function(_, target)
-		local root = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+		local root
+		if typeof(target) == "Instance" and target:IsA("Player") then
+			root = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+		elseif typeof(target) == "Instance" and target:IsA("Model") then
+			root = target:FindFirstChild("HumanoidRootPart") -- (a robber bot's body)
+		end
 		if root then -- far-away (streamed-out) tasers stay silent
 			SoundClient.Play("Zap", root)
 		end

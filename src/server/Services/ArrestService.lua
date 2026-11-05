@@ -15,6 +15,10 @@
 --          with nobody that close the heat stays and the chase carries on against the new body.
 --   Patrol pay: every cop earns $80 per minute on duty, while really patrolling (IsActiveCop: moved
 --          ACTIVE_MOVE studs, or used the taser, spikes or cuffs, in the last ACTIVE_FOR seconds).
+--   Robber bots (RobberBotService, NPC robbers for cops to chase): the same taser (RequestTaser with the
+--          bot's body Model), spikes (their car carries RobberBot) and cuffs (CuffDriver on their car;
+--          BotCuffPrompt on their body). RobberBotService decides whether a bot can be zapped or cuffed
+--          and pays the cop through RewardCop, the same bounty, XP and BOUNTY stamp as a player arrest.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -77,6 +81,19 @@ local function prison()
 	return require(ServerScriptService.Services.PrisonService)
 end
 
+-- RobberBotService starts after us (and requires us): looked up when first needed.
+local robberBotService
+local function robberBots()
+	if robberBotService == nil then
+		local module = ServerScriptService.Services:FindFirstChild("RobberBotService")
+		local ok, res = pcall(function()
+			return module and require(module)
+		end)
+		robberBotService = (ok and type(res) == "table") and res or false
+	end
+	return robberBotService or nil
+end
+
 -- Every few seconds (Init): has each cop moved ACTIVE_MOVE studs from where they last counted as moving?
 -- A cop seen for the first time (just joined, or just put the uniform on) starts as patrolling.
 local function trackCops()
@@ -125,6 +142,30 @@ local function freeArrestRewarded(cop, target)
 	return true
 end
 
+-- The cop's side of an arrest: the bounty (VIP bonus on top), arrest XP and the Arrests stat (when
+-- `rewarded`), the analytics event and the BOUNTY stamp naming who they caught. Returns what was paid.
+local function rewardCop(cop, bounty, paidStars, name, rewarded)
+	if cop:GetAttribute("Pass_VIP") then
+		bounty = math.floor(bounty * (1 + Shop.VIPCashBonus))
+	end
+	EconomyService.AddCash(cop, bounty, "bounty")
+	if rewarded then
+		require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "Arrest", paidStars)
+		cop:SetAttribute("Arrests", (cop:GetAttribute("Arrests") or 0) + 1)
+	end
+	require(ServerScriptService.Services.Telemetry).Custom(cop, "Arrest", paidStars)
+	bountyEarned:FireClient(cop, { Amount = bounty, Name = name })
+	return bounty
+end
+
+-- A robber bot's arrest (RobberBotService): every bot star is a paid star (nobody can stage them).
+function ArrestService.RewardCop(cop, bounty, stars, name)
+	if typeof(cop) ~= "Instance" or not cop:IsA("Player") or not isCop(cop) then
+		return 0
+	end
+	return rewardCop(cop, math.max(0, math.floor(tonumber(bounty) or 0)), math.max(0, tonumber(stars) or 0), tostring(name), true)
+end
+
 -- gaveUp: their body already went down with police right there (GaveUp below), so there is no live
 -- body to ask for; everything else about the arrest is the same.
 function ArrestService.Arrest(target, cop, gaveUp)
@@ -149,16 +190,7 @@ function ArrestService.Arrest(target, cop, gaveUp)
 	EconomyService.TakeCarried(target, "arrested")
 	HeatService.Clear(target, "arrested")
 	if cop then
-		if cop:GetAttribute("Pass_VIP") then
-			bounty = math.floor(bounty * (1 + Shop.VIPCashBonus))
-		end
-		EconomyService.AddCash(cop, bounty, "bounty")
-		if paidStars > 0 or freeArrestRewarded(cop, target) then
-			require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "Arrest", paidStars)
-			cop:SetAttribute("Arrests", (cop:GetAttribute("Arrests") or 0) + 1)
-		end
-		require(ServerScriptService.Services.Telemetry).Custom(cop, "Arrest", paidStars)
-		bountyEarned:FireClient(cop, { Amount = bounty, Name = target.DisplayName })
+		rewardCop(cop, bounty, paidStars, target.DisplayName, paidStars > 0 or freeArrestRewarded(cop, target))
 	end
 	target:SetAttribute("TimesCaught", (target:GetAttribute("TimesCaught") or 0) + 1)
 	caught:FireClient(target, { Heat = heat, By = cop and cop.DisplayName or "Police", Surrendered = surrendered })
@@ -309,6 +341,43 @@ local function tryCuff(cop, target)
 	end
 end
 
+-- A full cuff hold on a robber bot (its body, or its car's CuffDriver): the cop's own checks here, the
+-- bot's in RobberBotService (`cuff`(cop) -> ok, Notify key worth telling the cop when it says no).
+local function tryCuffBot(cop, cuff)
+	copActed(cop)
+	if not isCop(cop) then
+		return
+	end
+	if seeingStars(cop) then
+		tellCop(cop, "CopDazed")
+		return
+	end
+	local ok, why = cuff(cop)
+	if not ok and why then
+		tellCop(cop, why)
+	end
+end
+
+-- A Cuff prompt on a robber bot's body (RobberBotService), held and timed like the players' own (only
+-- cops see it: LawClient). onHeld(cop) -> ok, why after a full hold; onHoldBegan(cop) when a cop starts.
+function ArrestService.BotCuffPrompt(parent, objectText, onHeld, onHoldBegan)
+	local prompt = addCuffPrompt(parent, "CuffPrompt", objectText)
+	local heldLongEnough = timeHolds(prompt)
+	if onHoldBegan then
+		prompt.PromptButtonHoldBegan:Connect(function(cop)
+			if isCop(cop) then
+				onHoldBegan(cop)
+			end
+		end)
+	end
+	prompt.Triggered:Connect(function(cop)
+		if heldLongEnough(cop) then
+			tryCuffBot(cop, onHeld)
+		end
+	end)
+	return prompt
+end
+
 -- A pose everyone sees on this player (RagdollService's "Pose" attribute; looks only, nil clears it).
 -- Guarded: without that service nothing changes.
 local function setPose(player, pose)
@@ -366,6 +435,14 @@ local function onCar(car)
 		local target = occupant and Players:GetPlayerFromCharacter(occupant.Parent)
 		if target then
 			tryCuff(cop, target)
+		elseif car:GetAttribute("RobberBot") then
+			-- A robber bot at the wheel (posed in the seat, so the seat has no occupant).
+			local bots = robberBots()
+			if bots and type(bots.CuffCar) == "function" then
+				tryCuffBot(cop, function(c)
+					return bots.CuffCar(c, car)
+				end)
+			end
 		end
 	end)
 end
@@ -399,7 +476,44 @@ end
 local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 
+-- The taser on a robber bot's body (RequestTaser with its Model): the same rate, range and clear line as on
+-- a player; RobberBotService says whether it can be zapped (wanted, on foot, not already down) and stuns it.
+local function onTaserBot(cop, model)
+	if not RateLimit.Allow(cop, "Taser", 0.4, 1) or not isCop(cop) then
+		return
+	end
+	if seeingStars(cop) then
+		tellCop(cop, "CopDazed")
+		return
+	end
+	local bots = robberBots()
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not bots or not root or not root:IsA("BasePart") or not bots.CanTase(model) then
+		return
+	end
+	local copRoot, copHum = aliveRoot(cop)
+	if not copRoot or copHum.SeatPart then
+		return
+	end
+	local offset = root.Position - copRoot.Position
+	if offset.Magnitude > TASER_RANGE then
+		return
+	end
+	losParams.FilterDescendantsInstances = { cop.Character, model, Workspace:FindFirstChild("Vehicles") }
+	if Workspace:Raycast(copRoot.Position, offset, losParams) then
+		return
+	end
+	bots.Stun(model, STUN_SECONDS, cop)
+	copActed(cop)
+	taserFx:FireAllClients(cop, model)
+	require(game:GetService("ServerScriptService").Services.ProgressService).Event(cop, "TaserHit")
+end
+
 local function onTaser(cop, target)
+	if typeof(target) == "Instance" and target:IsA("Model") and target:GetAttribute("RobberBot") ~= nil then
+		onTaserBot(cop, target)
+		return
+	end
 	if typeof(target) ~= "Instance" or not target:IsA("Player") then
 		return
 	end
@@ -519,11 +633,14 @@ local function spikeTick()
 	if not folder then
 		return
 	end
+	local bots = robberBots()
 	for _, car in ipairs(folder:GetChildren()) do
 		local driverId = car:GetAttribute("DriverUserId")
 		local driver = driverId and Players:GetPlayerByUserId(driverId)
 		local chassis = car.PrimaryPart
-		if driver and chassis and isWanted(driver) then
+		-- (a robber bot's car: wanted while the bot drives it, RobberBotService.CarWanted)
+		local botCar = not driver and car:GetAttribute("RobberBot") ~= nil and bots ~= nil and bots.CarWanted(car)
+		if chassis and ((driver and isWanted(driver)) or botCar) then
 			for _, s in ipairs(spikes) do
 				if not s.hit[car] then
 					local rel = s.part.CFrame:PointToObjectSpace(chassis.Position)
@@ -535,7 +652,9 @@ local function spikeTick()
 						local toughness = car:GetAttribute("Toughness") or 2
 						local seconds = FLAT_SECONDS - (toughness - 1) * 1.5
 						car:SetAttribute("FlatUntil", now() + seconds)
-						notify:FireClient(driver, "TiresPopped")
+						if driver then
+							notify:FireClient(driver, "TiresPopped")
+						end
 					end
 				end
 			end

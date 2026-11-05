@@ -43,6 +43,7 @@ local ORDER = {
 	"CombatService", -- guns and knockouts + the Coast Arms shop (before MapService so the GPS lists the shop)
 	"RaceService",
 	"RaceAIService", -- NPC racers for RaceService's street races (drives them on Heartbeat)
+	"RobberBotService", -- 2 NPC robbers for player cops to chase (after ArrestService and RaceAIService, which drives their cars)
 	"StuntService",
 	"DriftService",
 	"JobService",

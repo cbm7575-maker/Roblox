@@ -403,6 +403,12 @@ local HANDLERS = {
 	Escaped = function(d)
 		post("@CoastFeed", textOr(d.Name, "Someone") .. " gave the cops the slip!", C.Brand)
 	end,
+	-- A robber bot (RobberBotService) broke into a parked car; its alarm is ringing there.
+	BotCarjack = function()
+		if player:GetAttribute("Side") == "Cop" then
+			post("DISPATCH", "car theft reported, alarm ringing! Respond now.", C.Danger, true)
+		end
+	end,
 	TrackerPing = function(d)
 		if player:GetAttribute("Side") == "Cop" then
 			post("DISPATCH", "stolen " .. textOr(d.Model, "car") .. " tracker is pinging. Check your map!", C.Danger, true)

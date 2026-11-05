@@ -26,13 +26,17 @@
 --   * A car that errors stops (RaceService sees Position() return nil and takes it out of the race).
 -- API (RaceService):
 --   RaceAIService.Plan(key, start, checkpoints) -> legs   (cached by key)
---   RaceAIService.Spawn{ CFrame, Name, Legs, Lane, Top, Avoid } -> bot { car, ... } (held still)
+--   RaceAIService.Spawn{ CFrame, Name, Legs, Lane, Top, Avoid, Car?, Paint? } -> bot { car, ... } (held still)
+--     (Car: this model id instead of one picked by Top; Paint: its colour. RobberBotService uses both.)
 --   RaceAIService.Release(bot)       GO
 --   RaceAIService.Target(bot, index) the next checkpoint is `index` (RaceService counted the last one)
 --   RaceAIService.SetPace(bot, f)    x Top (catching up / easing off)
 --   RaceAIService.Done(bot)          across the line: roll to a stop
 --   RaceAIService.Position(bot) -> Vector3, or nil once it is gone or broken
 --   RaceAIService.Remove(bot)
+-- Also (RobberBotService, NPC robbers that drive round the city rather than race):
+--   RaceAIService.Route(bot, legs)   drive these legs from the first (also after Done: it drives on)
+--   RaceAIService.SetTop(bot, top)   a new top speed (studs/s, never over the car's own)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -603,11 +607,11 @@ function RaceAIService.Spawn(spec)
 		RaceAIService.Init() -- (normally Main starts us; never drive nobody)
 	end
 	S.CarBuilder = S.CarBuilder or require(ServerStorage.Tools.CarBuilder)
-	local id = pickCar(spec.Top or 120, spec.Avoid)
+	local id = (type(spec.Car) == "string" and Vehicles.ById[spec.Car]) and spec.Car or pickCar(spec.Top or 120, spec.Avoid)
 	if spec.Avoid then
 		spec.Avoid[id] = true
 	end
-	local ok, car = pcall(S.CarBuilder.Build, id)
+	local ok, car = pcall(S.CarBuilder.Build, id, typeof(spec.Paint) == "Color3" and { Paint = spec.Paint } or nil)
 	if not ok or typeof(car) ~= "Instance" or not car.PrimaryPart then
 		warn("[RaceAIService] couldn't build " .. tostring(id) .. ": " .. tostring(car))
 		return nil
@@ -688,6 +692,26 @@ end
 
 function RaceAIService.SetPace(bot, f)
 	bot.pace = math.clamp(tonumber(f) or 1, 0.5, 1.5)
+end
+
+-- Drive `legs` (RaceAIService.Plan) from the first, from wherever the car is now; a car that was told
+-- Done drives on.
+function RaceAIService.Route(bot, legs)
+	if bot.removed or type(legs) ~= "table" or not legs[1] then
+		return
+	end
+	bot.legs = legs
+	bot.index = 1
+	bot.done = false
+	bot.stuckFor, bot.offFor, bot.offTwice = 0, 0, false
+	loadPath(bot)
+end
+
+function RaceAIService.SetTop(bot, top)
+	top = tonumber(top)
+	if top and top > 0 then
+		bot.top = math.min(top, bot.maxSpeed)
+	end
 end
 
 function RaceAIService.Done(bot)

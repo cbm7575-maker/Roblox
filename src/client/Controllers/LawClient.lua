@@ -25,6 +25,10 @@
 --   * The stamps: CUFFED (with a mugshot headline), BOUNTY +$X (or ARRESTED when the stars carried no
 --     bounty), BREAKOUT.
 --   * Prisoners: the release countdown in the Banner zone (Theme.Zone), with the breakout hint under it.
+-- Robber bots (RobberBotService; Shared.Util.RobberBots): a cop sees a wanted bot exactly as a wanted
+-- player: the same marker from its record's attributes, Cuff on its body and on its car's driver's seat
+-- (only while it is wanted and in that seat), and TASER aims at its body (RequestTaser with the Model).
+-- A bot that gives up shows its hands (body attribute Pose, played with PoseClient).
 -- While the first-join title screen is up (player attribute TitleScreen) none of it shows. WardrobeUI
 -- switches the whole "LawUI" ScreenGui off while its dressing room is open; T and G do nothing then.
 -- THE SIDE COLUMN: situational buttons live under the Buttons zone, right-aligned with it, never in a
@@ -52,6 +56,7 @@ local Workspace = game:GetService("Workspace")
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 local RobloxMenu = require(ReplicatedStorage.Shared.Util.RobloxMenu)
+local RobberBots = require(ReplicatedStorage.Shared.Util.RobberBots)
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 
@@ -88,7 +93,8 @@ local gui, taserButton, spikeButton, spikeCount, prisonLabel, handsButton
 local cuffBar = {} -- the BEING CUFFED panel's pieces (build) and the progress it last showed (updateCuff)
 local surrenderCapped = false -- LocomotionClient holds our feet still (hands up)
 local keyCaps = {} -- the T and G caps beside the tiles
-local markers = {} -- [player] = { beacon = Part, label, clues, circle = Part }
+local markers = {} -- [player, or a robber bot's record] = { beacon = Part, label, clues, circle = Part }
+local botPoses = {} -- [robber bot body] = { name, handle } (PoseClient)
 local markerFolder
 
 local function now()
@@ -374,21 +380,32 @@ local function taserTarget()
 	end
 	local camLook = Workspace.CurrentCamera.CFrame.LookVector
 	local best, bestScore
+	local function consider(who, r)
+		local offset = r.Position - root.Position
+		local dist = offset.Magnitude
+		if dist <= TASER_RANGE and dist > 0 then
+			local facing = offset.Unit:Dot(camLook)
+			local score = dist - facing * 12
+			if not bestScore or score < bestScore then
+				best, bestScore = who, score
+			end
+		end
+	end
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player and isWanted(p) and p.Character then
 			local r = p.Character:FindFirstChild("HumanoidRootPart")
 			local h = p.Character:FindFirstChildOfClass("Humanoid")
 			if r and h and h.Health > 0 and not h.SeatPart then
-				local offset = r.Position - root.Position
-				local dist = offset.Magnitude
-				if dist <= TASER_RANGE then
-					local facing = offset.Unit:Dot(camLook)
-					local score = dist - facing * 12
-					if not bestScore or score < bestScore then
-						best, bestScore = p, score
-					end
-				end
+				consider(p, r)
 			end
+		end
+	end
+	-- Wanted robber bots on foot: their body Model is the target.
+	for _, rec in ipairs(RobberBots.List()) do
+		local body = RobberBots.IsWanted(rec) and RobberBots.Body(rec)
+		local r = body and body:FindFirstChild("HumanoidRootPart")
+		if r then
+			consider(body, r)
 		end
 	end
 	return best
@@ -640,39 +657,54 @@ local function clearMarker(p)
 	end
 end
 
+-- One suspect's marker: `key` the player (or a robber bot's record), `holder` what carries the wanted
+-- attributes (the same object for both), `root` the body or car to follow while spotted (nil if not here).
+local function drawMarker(key, holder, lastSeen, root)
+	local m = marker(key)
+	local heat = holder:GetAttribute("Heat") or 1
+	local spotted = holder:GetAttribute("HeatSpotted") == true
+	local pos = lastSeen
+	-- While spotted, follow the real character (or car) if it's streamed in (smoother than LastSeen).
+	if spotted and root then
+		pos = root.Position
+	end
+	m.beacon.Position = pos
+	-- Suspect Card: whatever the cameras and cops have seen.
+	local clues = {}
+	if holder:GetAttribute("SuspectCar") then
+		table.insert(clues, holder:GetAttribute("SuspectCar"))
+	end
+	if holder:GetAttribute("SuspectOutfit") then
+		table.insert(clues, holder:GetAttribute("SuspectOutfit"))
+	end
+	-- The word says how fresh the sighting is (red while a cop sees them); the stars stay white.
+	local word = spotted and "WANTED" or "LAST SEEN"
+	m.label.Text = '<font color="#' .. (spotted and C.Danger or C.Dim):ToHex() .. '">' .. word .. "</font>  "
+		.. string.rep("★", heat)
+	m.clues.Text = table.concat(clues, "  ·  ")
+	local radius = 150 + 50 * heat
+	m.circle.Transparency = spotted and 1 or 0.85
+	m.circle.Size = Vector3.new(1, radius * 2, radius * 2)
+	m.circle.CFrame = CFrame.new(lastSeen.X, 0.3, lastSeen.Z) * CFrame.Angles(0, 0, math.rad(90))
+end
+
 local function updateMarkers()
 	local amCop = side() == "Cop"
 	for _, p in ipairs(Players:GetPlayers()) do
 		local lastSeen = p:GetAttribute("LastSeen")
 		if amCop and p ~= player and isWanted(p) and typeof(lastSeen) == "Vector3" then
-			local m = marker(p)
-			local heat = p:GetAttribute("Heat") or 1
-			local spotted = p:GetAttribute("HeatSpotted") == true
-			local pos = lastSeen
-			-- While spotted, follow the real character if it's streamed in (smoother than LastSeen).
-			if spotted and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-				pos = p.Character.HumanoidRootPart.Position
-			end
-			m.beacon.Position = pos
-			-- Suspect Card: whatever the cameras and cops have seen.
-			local clues = {}
-			if p:GetAttribute("SuspectCar") then
-				table.insert(clues, p:GetAttribute("SuspectCar"))
-			end
-			if p:GetAttribute("SuspectOutfit") then
-				table.insert(clues, p:GetAttribute("SuspectOutfit"))
-			end
-			-- The word says how fresh the sighting is (red while a cop sees them); the stars stay white.
-			local word = spotted and "WANTED" or "LAST SEEN"
-			m.label.Text = '<font color="#' .. (spotted and C.Danger or C.Dim):ToHex() .. '">' .. word .. "</font>  "
-				.. string.rep("★", heat)
-			m.clues.Text = table.concat(clues, "  ·  ")
-			local radius = 150 + 50 * heat
-			m.circle.Transparency = spotted and 1 or 0.85
-			m.circle.Size = Vector3.new(1, radius * 2, radius * 2)
-			m.circle.CFrame = CFrame.new(lastSeen.X, 0.3, lastSeen.Z) * CFrame.Angles(0, 0, math.rad(90))
+			drawMarker(p, p, lastSeen, p.Character and p.Character:FindFirstChild("HumanoidRootPart"))
 		else
 			clearMarker(p)
+		end
+	end
+	-- Robber bots: the same marker from their record (Shared.Util.RobberBots).
+	for _, rec in ipairs(RobberBots.List()) do
+		local lastSeen = rec:GetAttribute("LastSeen")
+		if amCop and RobberBots.IsWanted(rec) and typeof(lastSeen) == "Vector3" then
+			drawMarker(rec, rec, lastSeen, RobberBots.Root(rec))
+		else
+			clearMarker(rec)
 		end
 	end
 	for p in pairs(markers) do
@@ -701,13 +733,23 @@ local function updatePrompts()
 		local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
 		setPrompt(root and root:FindFirstChild("CuffPrompt"), amCop and p ~= player and isWanted(p))
 	end
+	-- Robber bots on foot (Workspace.RobberBots): Cuff for cops while the bot is wanted.
+	local bodies = Workspace:FindFirstChild(RobberBots.FOLDER)
+	for _, body in ipairs(bodies and bodies:GetChildren() or {}) do
+		local root = body:FindFirstChild("HumanoidRootPart")
+		setPrompt(root and root:FindFirstChild("CuffPrompt"), amCop and RobberBots.IsWanted(RobberBots.Of(body)))
+	end
 	local vehicles = Workspace:FindFirstChild("Vehicles")
 	if vehicles then
 		for _, car in ipairs(vehicles:GetChildren()) do
 			local seat = car:FindFirstChild("DriverSeat")
 			local driverId = car:GetAttribute("DriverUserId")
 			local driver = driverId and Players:GetPlayerByUserId(driverId)
-			setPrompt(seat and seat:FindFirstChild("CuffDriver"), amCop and driver ~= nil and driver ~= player and isWanted(driver))
+			-- (a wanted robber bot at the wheel counts like a wanted driver)
+			local bot = car:GetAttribute(RobberBots.ATTR) ~= nil and RobberBots.Of(car)
+			local botDriving = bot and RobberBots.IsWanted(bot) and bot:GetAttribute("OnFoot") ~= true
+			setPrompt(seat and seat:FindFirstChild("CuffDriver"), amCop and ((driver ~= nil and driver ~= player and isWanted(driver))
+				or botDriving == true))
 			-- Hot cars: only citizens on foot can pick the lock, and only before someone has stolen it.
 			setPrompt(seat and seat:FindFirstChild("PickLockPrompt"), side() == "Civilian" and not seated
 				and car:GetAttribute("ThiefUserId") == nil)
@@ -851,6 +893,9 @@ local function zap(from, target, missAt)
 		a = from:FindFirstChild("RightHand") or from:FindFirstChild("HumanoidRootPart")
 	end
 	local b = hit and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not hit and typeof(target) == "Instance" and target:IsA("Model") then
+		b = target:FindFirstChild("HumanoidRootPart") -- (a robber bot's body)
+	end
 	if not a or not (b or typeof(missAt) == "Vector3") then
 		return
 	end
@@ -878,6 +923,35 @@ local function zap(from, target, missAt)
 	end)
 end
 
+-- Robber bots' poses (their body attribute Pose, e.g. HandsUp when they give up), played with PoseClient.
+local function updateBotPoses()
+	local bodies = Workspace:FindFirstChild(RobberBots.FOLDER)
+	for _, body in ipairs(bodies and bodies:GetChildren() or {}) do
+		local want = body:GetAttribute("Pose")
+		local shown = botPoses[body]
+		if (shown and shown.name or nil) ~= want then
+			if shown and shown.handle then
+				pcall(function()
+					shown.handle:Stop()
+				end)
+			end
+			local handle
+			local module = want and script.Parent:FindFirstChild("PoseClient")
+			if module then
+				pcall(function()
+					handle = require(module).Play(body, want)
+				end)
+			end
+			botPoses[body] = want and { name = want, handle = handle } or nil
+		end
+	end
+	for body in pairs(botPoses) do
+		if not body.Parent then
+			botPoses[body] = nil
+		end
+	end
+end
+
 function LawClient.Init()
 	build()
 	task.spawn(function()
@@ -892,6 +966,7 @@ function LawClient.Init()
 				updatePrompts()
 				updateMarkers()
 				updateUI()
+				updateBotPoses()
 			end)
 			if not ok then
 				warn("[LawClient] " .. tostring(err))
