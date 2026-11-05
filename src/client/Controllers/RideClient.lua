@@ -20,6 +20,8 @@
 --     with the car's owner for the rest of the session, and sits them in the passenger seat at once when
 --     they're close. The card goes after the server's seconds or when the server closes it, and steps
 --     aside (keeping its time) while a HUD stamp uses its spot and on the first-join title screen.
+--     The same card brings RideService's crew offer: "CREW UP?" ("Add <name> to your crew?", once they've
+--     ridden with you a little; INVITE / NOT NOW: a yes sends them the crew invite), with a pink accent.
 --   * Toasts for each step (RideService "Toast" { Key, Name }: the words are in TOASTS).
 -- Hidden in prison and on the title screen (player attributes Side == "Prisoner", TitleScreen).
 
@@ -504,13 +506,20 @@ local function cardButton(card, name, words, kind, yes)
 	return b
 end
 
--- d = RideService's "Card": Kind ("Ask" | "Invite"), FromUserId, FromName, Expires.
+-- Each card kind's words: the tag, the line (%s = the other player's name), YES and NO.
+local CARD_WORDS = {
+	Ask = { "HOP IN?", "%s wants to hop in your car", "LET IN", "NO" },
+	Invite = { "RIDE INVITE", "%s invites you to hop in", "HOP IN", "NO THANKS" },
+	Crew = { "CREW UP?", "Add %s to your crew?", "INVITE", "NOT NOW" },
+}
+
+-- d = RideService's "Card": Kind ("Ask" | "Invite" | "Crew"), FromUserId, FromName, Expires.
 local function showCard(d)
 	if type(d) ~= "table" or type(d.FromUserId) ~= "number" then
 		return
 	end
 	closeCard()
-	local ask = d.Kind == "Ask"
+	local words = CARD_WORDS[d.Kind] or CARD_WORDS.Invite
 	local name = tostring(d.FromName or "Someone")
 	local card = Instance.new("Frame")
 	card.Name = "RideCard"
@@ -523,7 +532,7 @@ local function showCard(d)
 	accent.Name = "Accent"
 	accent.Position = UDim2.fromOffset(0, 8)
 	accent.Size = UDim2.new(0, 2, 1, -16)
-	accent.BackgroundColor3 = C.Gold
+	accent.BackgroundColor3 = d.Kind == "Crew" and C.Brand or C.Gold
 	accent.BorderSizePixel = 0
 	accent.Parent = card
 	local tag = Instance.new("TextLabel")
@@ -532,7 +541,7 @@ local function showCard(d)
 	tag.TextColor3 = C.Gold
 	tag.TextXAlignment = Enum.TextXAlignment.Left
 	tag.Size = UDim2.new(1, -32, 0, 16)
-	tag.Text = ask and "HOP IN?" or "RIDE INVITE"
+	tag.Text = words[1]
 	tag.Parent = card
 	local line = Instance.new("TextLabel")
 	line.Name = "Line"
@@ -542,10 +551,10 @@ local function showCard(d)
 	line.TextWrapped = true
 	line.TextTruncate = Enum.TextTruncate.AtEnd
 	line.Size = UDim2.new(1, -32, 0, 36)
-	line.Text = name .. (ask and " wants to hop in your car" or " invites you to hop in")
+	line.Text = string.format(words[2], name)
 	line.Parent = card
-	cardButton(card, "Yes", ask and "LET IN" or "HOP IN", "Primary", true)
-	cardButton(card, "No", ask and "NO" or "NO THANKS", "Quiet", false)
+	cardButton(card, "Yes", words[3], "Primary", true)
+	cardButton(card, "No", words[4], "Quiet", false)
 	ui.card = card
 	fitCard()
 	card.Visible = cardWanted()

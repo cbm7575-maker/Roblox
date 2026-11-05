@@ -2173,7 +2173,24 @@ local crew = {
 	bigScoreLine = nil, -- THE BIG SCORE's status label on the page as drawn (the 0.5 s loop rewrites its words)
 	bigScoreKey = nil, -- ...and what that line meant then (a change redraws the page: START / QUIT follow it)
 	quitArmedUntil = 0, -- os.clock() until which QUIT waits for its second tap
+	leaveArmedUntil = 0, -- os.clock() until which LEAVE CREW waits for its second tap
 }
+
+-- The crew job's preps done (CrewService's "CrewPreps": ",id,id," or "" for none; nil without a crew):
+-- done, how many there are, and the raw list.
+function crew.prepCount()
+	local list = player:GetAttribute("CrewPreps")
+	local preps = (Missions.CrewJob and Missions.CrewJob.Preps) or {}
+	local done = 0
+	if type(list) == "string" then
+		for _, id in ipairs(preps) do
+			if string.find(list, "," .. id .. ",", 1, true) then
+				done += 1
+			end
+		end
+	end
+	return done, #preps, list
+end
 
 -- THE BIG SCORE's line: could this player start it right now? Worked out here from what the server
 -- publishes (BigScoreService checks it all again, and a refusal comes with a toast that says why).
@@ -2195,6 +2212,12 @@ function crew.bigScoreStatus()
 	local need, rank = def.MinRank or 3, player:GetAttribute("CivRank") or 1
 	if rank < need then
 		return "Unlocks at free-roam rank " .. need .. " (you're " .. rank .. ").", C.Purple, false, false, "rank"
+	end
+	-- The crew job: every crew prep first (no crew: the crew count below says what's missing).
+	local prepsDone, prepsTotal, prepList = crew.prepCount()
+	if type(prepList) == "string" and prepsDone < prepsTotal then
+		return "Do your crew preps first: " .. prepsDone .. "/" .. prepsTotal .. " done (above).", C.Orange, false, false,
+			"preps" .. prepsDone
 	end
 	local t = Workspace:GetServerTimeNow()
 	local readyAt = player:GetAttribute("BigScoreReadyAt")
@@ -2371,13 +2394,68 @@ function PAGES.Crew()
 	W.note(s, (myCrew and "Rob together: +20% cash when a crewmate is close." or "Invite players to rob together (+20% cash) and ride in each other's cars.")
 		.. (player:GetAttribute("FriendBonus") and "  Friend here: +10%!" or ""), 1, nil, Enum.TextXAlignment.Center).Name = "Info"
 	local order = 2
+	-- THE CREW HEIST (CrewService): the preps that unlock THE BIG SCORE, played by the crew together (START sends
+	-- RequestCrew "Prep"; the server says why not if it can't), and RESUME HEIST / PAUSE HEIST (the plan on
+	-- everyone's screen, CrewClient). Without a crew, what a crew would get.
+	local job = Missions.CrewJob or { Preps = {} }
+	local prepsDone, prepsTotal, prepList = crew.prepCount()
+	local prepRunning = player:GetAttribute("CrewPrepRun")
+	if myCrew and type(prepList) == "string" then
+		local paused = player:GetAttribute("CrewPaused") == true
+		W.head(s, "CREW HEIST: " .. string.upper(job.Name or "The Big Score") .. "   " .. prepsDone .. "/" .. prepsTotal .. " PREPS"
+			.. (paused and "   (PAUSED)" or ""), order, C.Gold)
+		order += 1
+		local toggle = W.button(s, "PauseHeist", paused and "RESUME HEIST" or "PAUSE HEIST", paused and "Primary" or "Quiet",
+			function()
+				Remotes.Event("RequestCrew"):FireServer("Pause", not paused)
+				if paused then
+					PhoneUI.Close() -- (the plan comes back on the screen)
+				end
+			end)
+		toggle.Size = UDim2.new(1, 0, 0, touch)
+		toggle.LayoutOrder = order
+		order += 1
+		if paused then
+			W.note(s, "Your crew's heist is on hold. Progress is saved: RESUME HEIST puts the plan back on screen.", order).Name =
+				"PausedNote"
+			order += 1
+		end
+		for _, id in ipairs(job.Preps or {}) do
+			local m = Missions.ById[id]
+			if m then
+				local isDone = string.find(prepList, "," .. id .. ",", 1, true) ~= nil
+				local onIt = prepRunning == id
+				W.item(s, {
+					Name = "Prep" .. id, Order = order,
+					Title = m.Name .. (isDone and "  ✓" or ""), TitleColor = isDone and C.Cash or nil,
+					Sub = m.Blurb,
+					Meta = isDone and "Done" or onIt and "Your crew is on it now"
+						or (money(m.Cash) .. " each  ·  together  ·  " .. math.floor(m.TimeLimit / 60) .. " min"),
+					MetaColor = isDone and C.Dim or onIt and C.Gold or C.Cash,
+					Button = (not isDone and not onIt and player:GetAttribute("Side") == "Civilian") and "START" or nil,
+					ButtonName = "Start", Kind = "Primary", Width = 84,
+					OnTap = function()
+						Remotes.Event("RequestCrew"):FireServer("Prep", id)
+						PhoneUI.Close()
+					end,
+				})
+				order += 1
+			end
+		end
+	elseif not myCrew then
+		W.head(s, "CREW HEIST", order, C.Gold)
+		order += 1
+		W.note(s, "Crew up (2 to 4 players) to get a crew heist: " .. prepsTotal .. " preps you drive together unlock The Big"
+			.. " Score. Tip: give someone a ride, then add them to your crew.", order).Name = "JobNote"
+		order += 1
+	end
 	-- THE BIG SCORE (BigScoreService): whether you could start it right now (PhoneUI.Init's 0.5 s loop
 	-- keeps the line's countdown fresh) and START, or QUIT (two taps: it can end the job for the whole
 	-- crew) while you're on it. Cops get the line without a button.
 	local heist = Heists.BigScore or {}
 	local status, statusColor, ready, running, key = crew.bigScoreStatus()
 	local armed = running and crew.quitArmedUntil > os.clock()
-	local bars, each = heist.Bars or 12, heist.BarValue or 8000
+	local bars = heist.Bars or 12
 	W.head(s, "THE BIG SCORE", order, C.Gold)
 	order += 1
 	local bigButton
@@ -2385,7 +2463,9 @@ function PAGES.Crew()
 		Name = "BigScore", Order = order,
 		Title = "Rob the Solana Gold Reserve",
 		Sub = "Hack an armored van, open the gate together, drill the vault, load up to " .. bars .. " gold bars and get the van to"
-			.. " the Hideout. Crew of " .. (heist.CrewMin or 2) .. "-" .. (heist.CrewMax or 4) .. ", up to " .. money(bars * each) .. "+.",
+			.. " the Hideout. Crew of " .. (heist.CrewMin or 2) .. "-" .. (heist.CrewMax or 4) .. ": a full van pays "
+			.. money(Heists.BigScoreCut(2)) .. " each for 2, " .. money(Heists.BigScoreCut(heist.CrewMax or 4)) .. " each for "
+			.. (heist.CrewMax or 4) .. ".",
 		Meta = status, MetaColor = statusColor,
 		Button = (running or player:GetAttribute("Side") == "Civilian") and (running and (armed and "SURE?" or "QUIT") or "START") or nil,
 		ButtonName = running and "Quit" or "Start",
@@ -2428,15 +2508,49 @@ function PAGES.Crew()
 	if myCrew then
 		W.head(s, "YOUR CREW", order)
 		order += 1
-		for _, p in ipairs(Players:GetPlayers()) do
-			if p:GetAttribute("Crew") == myCrew then
-				W.item(s, { Name = "Mate" .. p.UserId, Order = order, Title = p.DisplayName .. (p == player and "  (you)" or "") })
+		-- The saved crew (CrewService's "CrewRoster"), whether they're here or not; whoever is here as a fallback.
+		local okRoster, roster = pcall(HttpService.JSONDecode, HttpService, player:GetAttribute("CrewRoster") or "[]")
+		local listed = false
+		for _, entry in ipairs(okRoster and type(roster) == "table" and roster or {}) do
+			local uid = type(entry) == "table" and tonumber(entry.i)
+			if uid then
+				local p = Players:GetPlayerByUserId(uid)
+				local here = p ~= nil and p:GetAttribute("Crew") == myCrew
+				W.item(s, {
+					Name = "Mate" .. uid, Order = order,
+					Title = tostring(entry.n or "?") .. (uid == player.UserId and "  (you)" or ""),
+					Sub = uid ~= player.UserId and (here and "Here now" or "Not in this server") or nil,
+					SubColor = here and C.Cash or C.Dim,
+				})
 				order += 1
+				listed = true
 			end
 		end
-		W.gap(s, order, 8)
+		if not listed then
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p:GetAttribute("Crew") == myCrew then
+					W.item(s, { Name = "Mate" .. p.UserId, Order = order, Title = p.DisplayName .. (p == player and "  (you)" or "") })
+					order += 1
+				end
+			end
+		end
+		W.note(s, "Your crew is saved: it's still your crew next time you play.", order).Name = "Saved"
 		order += 1
-		local leave = W.button(s, "Leave", "LEAVE CREW", "Quiet", function()
+		-- Two taps: leaving a crew of two breaks it up, crew job and all.
+		local leaveArmed = crew.leaveArmedUntil > os.clock()
+		local leave
+		leave = W.button(s, "Leave", leaveArmed and "TAP AGAIN TO LEAVE" or "LEAVE CREW", leaveArmed and "Danger" or "Quiet", function()
+			if crew.leaveArmedUntil <= os.clock() then
+				crew.leaveArmedUntil = os.clock() + 3
+				leave.Text = "TAP AGAIN TO LEAVE"
+				task.delay(3.05, function()
+					if leave.Parent and crew.leaveArmedUntil <= os.clock() then
+						leave.Text = "LEAVE CREW"
+					end
+				end)
+				return
+			end
+			crew.leaveArmedUntil = 0
 			Remotes.Event("RequestCrew"):FireServer("Leave")
 		end)
 		leave.Size = UDim2.new(1, 0, 0, touch)
@@ -3521,6 +3635,8 @@ function PhoneUI.Init()
 			refreshIf("Crew") -- the play-together progress (FriendsService)
 		elseif name == "BigScore" or name == "BigScoreReadyAt" or name == "CivRank" then
 			refreshIf("Crew") -- THE BIG SCORE's line and its START / QUIT
+		elseif name == "CrewPreps" or name == "CrewRoster" or name == "CrewPrepRun" or name == "CrewPaused" then
+			refreshIf("Crew") -- the crew job's preps and the saved crew (CrewService)
 		elseif name == "Cash" and S.open then
 			refreshStatus()
 			refreshIf("Tune") -- prices turn green the moment they're affordable, and AUTO TUNE's plan grows

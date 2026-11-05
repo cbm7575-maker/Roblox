@@ -18,6 +18,12 @@
 --   * A NO, no answer within EXPIRE seconds, or either player leaving closes the card and tells the asker.
 --     The same ask (the same two players, the same way round) is then refused for COOLDOWN seconds.
 --   One card may wait on a player at a time, and each player may have one ask out at a time.
+-- Crew offer (the same card, Kind "Crew"; nobody else is asked or told anything):
+--   * CREW UP? (Kind "Crew", FromUserId = the rider): once another player has sat in your passenger seat
+--     for CREW_OFFER_AFTER seconds while you drive your own car, and CrewService.CanCrewUp says it makes
+--     sense (not crewmates already, room in your crew, same side), you get a card offering to invite them
+--     to your crew (it waits OFFER_EXPIRE seconds). Once per rider per session. A YES sends them CrewService's crew invite (JOIN / NO
+--     THANKS on their screen); a NO or no answer just closes it.
 -- Remote "RideInvite", server -> client:
 --   "Card" { Kind = "Ask" | "Invite", FromUserId, FromName, Expires }   show the card
 --   "Gone" { FromUserId }                                                close it (lapsed, or the asker left)
@@ -46,7 +52,13 @@ local S = {
 	refused = setmetatable({}, { __mode = "k" }), -- [asker] = { [userId] = os.clock() of the no / lapse }
 	allowed = {}, -- [owner] = { [userId] = true }: who the owner has let in this session
 	serial = 0,
+	riding = {}, -- [rider] = { owner, since = os.clock() }: who sits in whose passenger seat (CREW UP?)
+	crewOffered = {}, -- [owner] = { [riderUserId] = true }: CREW UP? already offered this session
 }
+
+local CREW_OFFER_AFTER = 12 -- seconds a rider sits in your passenger seat before CREW UP? comes up
+local OFFER_EXPIRE = 30 -- seconds the CREW UP? card waits (a driver needs longer than a HOP IN? card's EXPIRE)
+local OFFER_KINDS = { Crew = true }
 
 local event -- the "RideInvite" remote
 
@@ -107,9 +119,14 @@ local function ownerNear(owner, car)
 	return root ~= nil and chassis ~= nil and (root.Position - chassis.Position).Magnitude <= OWNER_NEAR
 end
 
-local function mayRide(rider, owner)
+local function crewService()
 	local okCrew, crew = pcall(require, script.Parent:FindFirstChild("CrewService"))
-	return okCrew and type(crew) == "table" and type(crew.MayRide) == "function" and crew.MayRide(rider, owner) == true
+	return okCrew and type(crew) == "table" and crew or nil
+end
+
+local function mayRide(rider, owner)
+	local crew = crewService()
+	return crew ~= nil and type(crew.MayRide) == "function" and crew.MayRide(rider, owner) == true
 end
 
 -- Did `target` say no to `asker` (or not answer) less than COOLDOWN seconds ago?
@@ -148,6 +165,9 @@ local function close(target, why)
 	end
 	if target.Parent == Players then
 		event:FireClient(target, "Gone", { FromUserId = c.from.UserId })
+	end
+	if OFFER_KINDS[c.kind] then
+		return -- (a crew offer: nobody else is waiting on it)
 	end
 	if why == "No" or why == "Expired" then
 		S.refused[c.from] = S.refused[c.from] or {}
@@ -189,6 +209,65 @@ local function send(target, from, kind, car)
 			close(target, "Expired")
 		end
 	end)
+end
+
+-- A crew offer card (see the header) for `target`, about `from`. No toast, no "ask out" for `from`.
+local function sendOffer(target, from, kind)
+	S.serial += 1
+	local serial = S.serial
+	S.cards[target] = { from = from, kind = kind, serial = serial }
+	event:FireClient(target, "Card", { Kind = kind, FromUserId = from.UserId, FromName = from.DisplayName, Expires = OFFER_EXPIRE })
+	task.delay(OFFER_EXPIRE, function()
+		local c = S.cards[target]
+		if c and c.serial == serial then
+			close(target, "Expired")
+		end
+	end)
+end
+
+-- CREW UP?: who rides with whom, and the card once a ride has lasted CREW_OFFER_AFTER seconds.
+local function watchRiders()
+	local t = os.clock()
+	for _, rider in ipairs(Players:GetPlayers()) do
+		local _, hum = aliveRoot(rider)
+		local seat = hum and hum.SeatPart
+		local car = seat and seat.Name == "PassengerSeat" and seat.Parent
+		local ownerId = car and car:IsA("Model") and car.Parent == vehicles() and car:GetAttribute("OwnerUserId")
+		local owner = type(ownerId) == "number" and Players:GetPlayerByUserId(ownerId) or nil
+		if owner and owner ~= rider and drivingOwnCar(owner) == car then
+			local r = S.riding[rider]
+			if not r or r.owner ~= owner then
+				S.riding[rider] = { owner = owner, since = t }
+			elseif not r.done and t - r.since >= CREW_OFFER_AFTER and not S.cards[owner] then
+				-- (a card already on the driver's screen: look again next time)
+				r.done = true
+				S.crewOffered[owner] = S.crewOffered[owner] or {}
+				local crew = crewService()
+				if not S.crewOffered[owner][rider.UserId] and crew and type(crew.CanCrewUp) == "function"
+					and crew.CanCrewUp(owner, rider) then
+					S.crewOffered[owner][rider.UserId] = true
+					sendOffer(owner, rider, "Crew")
+				end
+			end
+		else
+			S.riding[rider] = nil
+		end
+	end
+end
+
+-- A YES on the crew offer card (`c` is off the books already).
+local function answerOffer(target, c)
+	local crew = crewService()
+	if not crew or c.from.Parent ~= Players or target.Parent ~= Players then
+		return
+	end
+	if c.kind == "Crew" and type(crew.Invite) == "function" then
+		local sent, why = crew.Invite(target, c.from)
+		local key = sent and "CrewInviteSent" or why
+		if key then
+			Remotes.Event("Notify"):FireClient(target, key)
+		end
+	end
 end
 
 -- (see the header) A stranger at the door of `owner`'s car asks to hop in. VehicleService.tryRide has
@@ -248,6 +327,10 @@ local function answer(target, fromUserId, yes)
 		return
 	end
 	S.cards[target] = nil
+	if OFFER_KINDS[c.kind] then
+		answerOffer(target, c)
+		return
+	end
 	if S.outgoing[c.from] == target then
 		S.outgoing[c.from] = nil
 	end
@@ -290,6 +373,8 @@ local function onLeave(p)
 	end
 	S.outgoing[p] = nil
 	S.allowed[p] = nil
+	S.riding[p] = nil
+	S.crewOffered[p] = nil
 	for owner, set in pairs(S.allowed) do
 		if set[p.UserId] then
 			set[p.UserId] = nil
@@ -310,6 +395,15 @@ function RideService.Init()
 		end
 	end)
 	Players.PlayerRemoving:Connect(onLeave)
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			local ok, err = pcall(watchRiders)
+			if not ok then
+				warn("[RideService] riders: " .. tostring(err))
+			end
+		end
+	end)
 end
 
 return RideService

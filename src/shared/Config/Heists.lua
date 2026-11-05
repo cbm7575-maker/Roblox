@@ -104,7 +104,10 @@ Heists.BigScore = {
 	-- Pay
 	Bars = 12,
 	BarValue = 8000,
-	MemberBonus = 0.1, -- the pot grows 10% for each crew member beyond 2
+	-- Bigger crews earn more each (owner, Nov 4: a group heist should pay more): a crew of 2 splits the
+	-- gold's value; each member beyond 2 brings one more such share AND raises everyone's cut by
+	-- MemberBonus. A full van: 2 = $48,000 each, 3 = $55,200 each, 4 = $62,400 each (Heists.BigScoreCut).
+	MemberBonus = 0.15,
 	NightBonus = 1.25,
 	XPTier = 4, -- ProgressService.Event(p, "Heist", 4) = 160 XP
 	-- Heat
@@ -165,6 +168,20 @@ do
 	for _, key in ipairs({ "ReserveCenter", "Street", "ConsoleAPos", "ConsoleBPos", "VaultDoorPos", "DrillPos", "GoldPilePos", "VanBayPos" }) do
 		B[key] = (B.ReserveCF * CFrame.new(D[key])).Position
 	end
+end
+
+-- The Big Score's whole pot for `bars` gold bars and a crew of `n` (before the night bonus): see
+-- MemberBonus. A crew of one (Studio's solo test) gets the plain value.
+function Heists.BigScorePot(bars, n)
+	local B = Heists.BigScore
+	n = math.max(1, n or 2)
+	return bars * B.BarValue * math.max(1, n / 2) * (1 + B.MemberBonus * math.max(0, n - 2))
+end
+
+-- Each member's cut of a full van for a crew of `n` (no night or VIP bonus): $48,000 for 2.
+function Heists.BigScoreCut(n)
+	n = math.max(2, n or 2)
+	return math.floor(Heists.BigScorePot(Heists.BigScore.Bars, n) / n)
 end
 
 -- "Coastal Bank or Sea Dream": the big heists' names, for lock hints (DealerClient, HeistClient).

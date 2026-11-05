@@ -4,6 +4,9 @@
 --     or more, not wanted, not on a mission, race or job shift (attributes Mission, RacingId, JobKind) and
 --     past their own cooldown; their crew (CrewService) must bring CrewMin Civilians past their cooldowns
 --     (Studio: 1). The roster is the asker plus those crewmates, CrewMax at most. "Quit" takes you off it.
+--     The crew must have done all its crew preps first (CrewService.HeistUnlocked: the crew job's driving
+--     chores, Config.Missions.CrewPreps); else CrewJob "Toast" NeedPreps { Done, Total } says so. A pass
+--     clears the preps of the roster's crew for the next score (CrewService.ScoreDone).
 --   * Steps (player attribute "BigScore" = the step while on the roster; ReplicatedStorage attribute
 --     "BigScoreBusy" = true while a crew runs it):
 --       1 Hack the armored van at the Ironclad depot (hold VanHold on its lock): the hacker gets VanHeat
@@ -27,7 +30,8 @@
 --       6 Starts by itself once the van is LeaveRadius studs from the reserve with gold in it (or all of it
 --         is loaded): drive it into the Hideout pad (HideoutService.IsInside) while no cop can see the
 --         driver ("BigScoreLoseCops" every few seconds until then).
---   * Pass: pot = bars x BarValue x (1 + MemberBonus per member beyond 2) x NightBonus after dark, split
+--   * Pass: pot = Heists.BigScorePot(bars, members) x NightBonus after dark (bigger crews earn more each:
+--     every member beyond 2 adds a share and raises everyone's cut by MemberBonus), split
 --     evenly between the roster members still in the server (a VIP's own cut +25%). Banked Cash (it's
 --     safe), Heist XP of tier XPTier, +1 BigHeists (once their save has loaded), heat cleared for members
 --     inside the pad, Feed "BigScoreDone", then Cooldown each and the van goes after a few seconds.
@@ -741,7 +745,7 @@ end
 -- What the van's gold pays right now (see the header).
 local function potNow()
 	local n = #members()
-	local pot = S.bars * CFG.BarValue * (1 + CFG.MemberBonus * math.max(0, n - 2))
+	local pot = Heists.BigScorePot(S.bars, n)
 	if Workspace:GetAttribute("IsNight") then
 		pot *= CFG.NightBonus
 	end
@@ -1413,6 +1417,11 @@ local function pass()
 		R.event:FireClient(p, "Done", { Cut = cut, XP = xp, Total = pot, Bars = bars, Crew = #list })
 	end
 	R.feed:FireAllClients("BigScoreDone", { Total = pot, Crew = crew })
+	-- The crew job starts over: new preps for the next score.
+	local okJob, errJob = pcall(svc("CrewService").ScoreDone, list)
+	if not okJob then
+		warn("[BigScoreService] crew job: " .. tostring(errJob))
+	end
 	endRun()
 end
 
@@ -1689,6 +1698,10 @@ local function canStart(p)
 	if (p:GetAttribute("CivRank") or 1) < CFG.MinRank then
 		return nil, "BigScoreRank"
 	end
+	local okJob, unlocked, done, total = pcall(svc("CrewService").HeistUnlocked, p)
+	if okJob and unlocked == false then
+		return nil, "NeedPreps", done, total
+	end
 	local t = now()
 	if t < (S.readyAt[p.UserId] or 0) then
 		return nil, "BigScoreCooldown"
@@ -1760,9 +1773,13 @@ local function onRequest(p, action)
 	if action ~= "Start" then
 		return
 	end
-	local roster, why = canStart(p)
+	local roster, why, done, total = canStart(p)
 	if not roster then
-		R.notify:FireClient(p, why)
+		if why == "NeedPreps" then
+			Remotes.Event("CrewJob"):FireClient(p, "Toast", { Key = "NeedPreps", Done = done, Total = total })
+		else
+			R.notify:FireClient(p, why)
+		end
 		return
 	end
 	if not startRun(roster) then

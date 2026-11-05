@@ -8,6 +8,16 @@
 -- the moment its player stops being a free-roam player (joins the police, goes to prison).
 -- Anti-teleport: a goal only counts once enough time has passed to drive there from the last goal
 -- at MAX_TRAVEL (faster than any car with nitro). Early arrivals are ignored, not failed.
+-- Crew preps (Missions.CrewPreps, the crew job behind The Big Score): MissionService.StartCrew(players,
+-- id, crewId, onDone) puts a whole crew on one shared mission (CrewService checks who's free first). Each
+-- of them gets the usual "Mission" attribute and events, so MissionClient draws it as it draws any
+-- mission. The steps are shared: a goal counts once Missions.CrewJob.Together of them (not wanted) are at
+-- it at the same time (fewer on a smaller crew: Studio's crew of one); a Collect point the same. While
+-- only some of them have made it, or a wanted one is at the goal, the crew hears so (remote "CrewJob"
+-- "Toast" Together / Wanted, every CREW_TOAST_GAP s at most). Being wanted doesn't fail a prep, it just
+-- doesn't count. It fails for all of them on the clock, a QUIT from any of them, or one of them leaving
+-- the game, the crew or free roam. A step with WithinSpeed pulls the clock down as it starts (a timed
+-- getaway). Passed: each one gets the prep's Cash and XP; then onDone(passed, players).
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -27,9 +37,13 @@ local MissionService = {}
 
 local MAX_TRAVEL = 300 -- studs/s: a bit above the fastest car, fully tuned, on nitro (297: Config.Garage)
 
-local active = {} -- [player] = { m, step, deadline, got = {}, holdSince, from, fromRadius, stepAt }
+local CREW_TOAST_GAP = 6 -- seconds between two "wait for your crew" / "lose the cops" toasts on a crew prep
+
+-- [player] = { m, step, deadline, got = {}, holdSince, from, fromRadius, stepAt }; a crew prep's members
+-- all point at one shared table that also has crew = { players }, crewId, need, onDone, tooSlow, toastAt.
+local active = {}
 local lastEnd = {} -- [player] = os.clock()
-local missionEvent, notify
+local missionEvent, notify, crewJob
 
 local function now()
 	return Workspace:GetServerTimeNow()
@@ -74,9 +88,44 @@ local function publish(player)
 	player:SetAttribute("Mission", HttpService:JSONEncode({ id = s.m.Id, step = s.step, deadline = s.deadline, got = got }))
 end
 
+-- A crew prep is over, for every one of them (see the header).
+local function finishCrew(s, ok, reason)
+	if s.over then
+		return
+	end
+	s.over = true
+	for _, p in ipairs(s.crew) do
+		if active[p] == s then
+			active[p] = nil
+		end
+		lastEnd[p] = os.clock()
+		if p.Parent == Players then
+			publish(p)
+			if ok then
+				EconomyService.AddCash(p, s.m.Cash, "crewprep:" .. s.m.Id)
+				local okXP, err = pcall(require(ServerScriptService.Services.ProgressService).Event, p, "Mission", s.m.XP)
+				if not okXP then
+					warn("[MissionService] crew prep XP: " .. tostring(err))
+				end
+				Telemetry.Custom(p, "CrewPrep_" .. s.m.Id, s.m.Cash)
+				missionEvent:FireClient(p, "Done", { Name = s.m.Name, Cash = s.m.Cash, XP = s.m.XP, First = true, Crew = true })
+			else
+				missionEvent:FireClient(p, "Failed", { Name = s.m.Name, Reason = reason, Crew = true })
+			end
+		end
+	end
+	if s.onDone then
+		task.spawn(s.onDone, ok == true, s.crew)
+	end
+end
+
 local function finish(player, ok, reason)
 	local s = active[player]
 	if not s then
+		return
+	end
+	if s.crew then
+		finishCrew(s, ok, reason == "Quit" and (player.DisplayName .. " quit the prep") or reason)
 		return
 	end
 	active[player] = nil
@@ -119,11 +168,150 @@ local function tooSoon(s, target, radius)
 	return os.clock() - s.stepAt < gap / MAX_TRAVEL
 end
 
+-- Tell the whole crew something about the goal (CrewClient has the words), not too often.
+local function crewToast(s, key)
+	if os.clock() - (s.toastAt or 0) < CREW_TOAST_GAP then
+		return
+	end
+	s.toastAt = os.clock()
+	for _, p in ipairs(s.crew) do
+		if p.Parent == Players then
+			crewJob:FireClient(p, "Toast", { Key = key })
+		end
+	end
+end
+
+-- How many of `list` ({ pos, slow }) are within `radius` of `target` (only the slow ones, for a Hold).
+local function countNear(list, target, radius, slowOnly)
+	local n = 0
+	for _, sp in ipairs(list) do
+		if (sp.pos - flat(target)).Magnitude <= radius and (not slowOnly or sp.slow) then
+			n += 1
+		end
+	end
+	return n
+end
+
+-- One crew prep (see the header). Runs once per tick for the shared state, whoever's entry finds it.
+local function tickCrew(s)
+	for _, p in ipairs(s.crew) do
+		local why
+		if p.Parent ~= Players then
+			why = p.DisplayName .. " left the game"
+		elseif p:GetAttribute("Side") ~= "Civilian" then
+			why = p.DisplayName .. (p:GetAttribute("Side") == "Cop" and " joined the police" or " got locked up")
+		elseif p:GetAttribute("Crew") ~= s.crewId then
+			why = p.DisplayName .. " left the crew"
+		end
+		if why then
+			finishCrew(s, false, why)
+			return
+		end
+	end
+	if now() > s.deadline then
+		finishCrew(s, false, s.tooSlow or "Time's up")
+		return
+	end
+	-- Where the crew is: the ones who aren't wanted count, the wanted ones only get a "lose the cops" toast.
+	local spots, wanted = {}, {}
+	for _, p in ipairs(s.crew) do
+		local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if root and not p:GetAttribute("InHome") then
+			local spot = { pos = flat(root.Position), slow = root.AssemblyLinearVelocity.Magnitude < 10 }
+			table.insert((p:GetAttribute("Heat") or 0) > 0 and wanted or spots, spot)
+		end
+	end
+	if not s.from then
+		-- (nobody had a body outside a home at the start: travel is timed from the first one out)
+		local first = spots[1] or wanted[1]
+		if not first then
+			return
+		end
+		s.from, s.fromRadius, s.stepAt = first.pos, 0, os.clock()
+	end
+	local step = s.m.Steps[s.step]
+	local advance, short, wantedThere = false, false, false
+	if step.Kind == "Goto" or step.Kind == "Hold" then
+		local hold = step.Kind == "Hold"
+		local n = countNear(spots, step.Pos, step.Radius, hold)
+		local ready = n >= s.need and not tooSoon(s, step.Pos, step.Radius)
+		short = n > 0 and n < s.need
+		wantedThere = countNear(wanted, step.Pos, step.Radius, false) > 0
+		if hold then
+			if ready then
+				s.holdSince = s.holdSince or os.clock()
+				advance = os.clock() - s.holdSince >= step.Seconds
+			else
+				s.holdSince = nil
+			end
+		else
+			advance = ready
+		end
+	elseif step.Kind == "Collect" then
+		local changed, all = false, true
+		for i, point in ipairs(step.Points) do
+			if not s.got[i] then
+				local n = countNear(spots, point, step.Radius, false)
+				if n >= s.need and not tooSoon(s, point, step.Radius) then
+					s.got[i] = true
+					changed = true
+					s.from, s.fromRadius, s.stepAt = flat(point), step.Radius, os.clock()
+				else
+					short = short or (n > 0 and n < s.need)
+					wantedThere = wantedThere or countNear(wanted, point, step.Radius, false) > 0
+					all = false
+				end
+			end
+		end
+		advance = all
+		if changed and not all then
+			for _, p in ipairs(s.crew) do
+				publish(p)
+				missionEvent:FireClient(p, "Collected", {})
+			end
+		end
+	end
+	if advance then
+		s.step += 1
+		s.holdSince = nil
+		s.got = {}
+		if step.Pos then
+			s.from, s.fromRadius = flat(step.Pos), step.Radius
+		end
+		s.stepAt = os.clock()
+		local nextStep = s.m.Steps[s.step]
+		if not nextStep then
+			finishCrew(s, true)
+			return
+		end
+		if nextStep.WithinSpeed and nextStep.Pos then
+			-- A timed leg: the clock jumps down to what this trip allows (straight-line, from the last goal).
+			local gap = math.max(0, (flat(nextStep.Pos) - s.from).Magnitude - s.fromRadius - nextStep.Radius)
+			s.deadline = math.min(s.deadline, now() + math.ceil(gap / nextStep.WithinSpeed + (nextStep.WithinSlack or 0)))
+			s.tooSlow = nextStep.TooSlow
+		end
+		for _, p in ipairs(s.crew) do
+			publish(p)
+			missionEvent:FireClient(p, "Step", { Text = nextStep.Text })
+		end
+	elseif short then
+		crewToast(s, "Together")
+	elseif wantedThere then
+		crewToast(s, "Wanted")
+	end
+end
+
 local function tick()
 	local t = now()
+	local seen = {}
 	for player, s in pairs(active) do
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		if not player.Parent then
+		if s.crew then
+			if not seen[s] then
+				seen[s] = true
+				tickCrew(s)
+			end
+		elseif not player.Parent then
 			active[player] = nil
 		elseif t > s.deadline then
 			finish(player, false, "Time's up")
@@ -206,8 +394,8 @@ local function onRequest(player, action, id)
 		return
 	end
 	local m = Missions.ById[id]
-	if not m then
-		return
+	if not m or m.Crew then
+		return -- (crew preps start from the CREW app, through CrewService)
 	end
 	if active[player] then
 		-- START on the phone during a mission closed the phone and nothing happened: say why.
@@ -244,9 +432,44 @@ function MissionService.Active(player)
 	return active[player] ~= nil
 end
 
+-- (see the header) Crew prep `id` for these players, who CrewService has checked are one crew (crewId),
+-- here, in free roam and free. onDone(passed, players) runs as it ends. True when it started.
+function MissionService.StartCrew(players, id, crewId, onDone)
+	local m = Missions.ById[id]
+	if not m or not m.Crew or type(players) ~= "table" or #players == 0 then
+		return false
+	end
+	for _, p in ipairs(players) do
+		if active[p] or p.Parent ~= Players then
+			return false
+		end
+	end
+	Missions.Resolve(m)
+	local from
+	for _, p in ipairs(players) do
+		local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if root and not p:GetAttribute("InHome") then
+			from = flat(root.Position)
+			break
+		end
+	end
+	local s = {
+		m = m, step = 1, deadline = now() + m.TimeLimit, got = {}, from = from, fromRadius = 0, stepAt = os.clock(),
+		crew = table.clone(players), crewId = crewId, onDone = onDone,
+		need = math.min(#players, (Missions.CrewJob and Missions.CrewJob.Together) or 2),
+	}
+	for _, p in ipairs(players) do
+		active[p] = s
+		publish(p)
+		missionEvent:FireClient(p, "Started", { Name = m.Name, Text = m.Steps[1].Text })
+	end
+	return true
+end
+
 function MissionService.Init()
 	missionEvent = Remotes.Event("MissionEvent")
 	notify = Remotes.Event("Notify")
+	crewJob = Remotes.Event("CrewJob")
 	Remotes.Event("RequestMission").OnServerEvent:Connect(onRequest)
 	Players.PlayerRemoving:Connect(function(p)
 		active[p] = nil

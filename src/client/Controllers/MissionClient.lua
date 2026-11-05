@@ -20,7 +20,10 @@
 --     missing). While it is up (HUDController.IntroUp) the banner and the step line make way: the bars
 --     cover the top and the bottom, and the intro says the step itself.
 --   * Cinematic stamps (HUDController.Stamp): MISSION PASSED in gold with the reward line
---     ("+$500   +50 XP") and the Passed sting, MISSION FAILED in red with the reason; and
+--     ("+$500   +50 XP") and the Passed sting, MISSION FAILED in red with the reason (a crew prep, the
+--     crew job's shared mission from CrewService: PREP DONE / PREP FAILED under a small CREW JOB, and
+--     CREW PREP instead of MISSION on the PC banner's tag; its Place / Places spots come from
+--     Missions.Resolve, as on the server); and
 --     CROWD FAVOURITE in gold for the car meet's best ride (CarMeetResult).
 -- Hidden on the first-join title screen (local attribute TitleScreen, set by TeamUI).
 
@@ -146,7 +149,7 @@ local function drawTitle()
 	if Theme.IsTouch() then
 		titleLabel.Text = displayText(C.Gold, name)
 	else
-		titleLabel.Text = displayText(C.Gold, "MISSION") .. "   " .. name
+		titleLabel.Text = displayText(C.Gold, m.Crew and "CREW PREP" or "MISSION") .. "   " .. name
 	end
 end
 
@@ -212,7 +215,8 @@ local function refresh()
 	state = s
 	lastTimer, lastStep = nil, nil -- the next Heartbeat rewrites both
 	showPieces()
-	local m = Missions.ById[s.id]
+	-- (a crew prep's places: the same spots the server worked out from MapService's list)
+	local m = Missions.Resolve(Missions.ById[s.id])
 	local current = m and m.Steps[s.step]
 	if not current then
 		return
@@ -394,10 +398,10 @@ function MissionClient.Init()
 			elseif kind == "Step" then
 				NotifyController.Show("Next: " .. info.Text, C.Gold)
 			elseif kind == "Done" then
-				HUDController.Stamp("MISSION PASSED", not info.First and "Repeat pay" or nil, C.Gold, nil,
-					{ Cash = info.Cash, XP = info.XP })
+				HUDController.Stamp(info.Crew and "PREP DONE" or "MISSION PASSED", not info.First and "Repeat pay" or nil, C.Gold,
+					info.Crew and "CREW JOB" or nil, { Cash = info.Cash, XP = info.XP })
 			elseif kind == "Failed" then
-				HUDController.Stamp("MISSION FAILED", info.Reason, C.Danger)
+				HUDController.Stamp(info.Crew and "PREP FAILED" or "MISSION FAILED", info.Reason, C.Danger)
 			end
 		end)
 	end)

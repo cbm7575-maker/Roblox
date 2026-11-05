@@ -17,6 +17,23 @@
 --   * Name tags over crewmates' heads (BillboardGui "CrewTag", through walls, local only): the name in
 --     small white Body text with a soft shadow and a thin pink bar under it (crew = the brand accent).
 --     Hidden on the first-join title screen (local attribute TitleScreen, set by TeamUI).
+--   * The crew job (remote "CrewJob" from CrewService, MissionService and BigScoreService): a gold CREW UP!
+--     stamp when you form or join a crew (NEW CREW JOB over it, the job and how to unlock it under it), a
+--     BIG SCORE UNLOCKED stamp once every crew prep is done, and toasts for the rest (your saved crew is
+--     back, a prep done, preps reset after a score, a crewmate left, the crew broke up, and why a prep or
+--     the Big Score can't start: JOB_TOASTS).
+--   * The invite card says when joining means leaving the crew you're in (Switch).
+--   * The heist plan (frame "HeistPlan"): while you're in a crew whose heist isn't paused (CrewService's
+--     CrewPreps / CrewPaused), in free roam, not wanted and not busy (a mission or prep, the Big Score, a
+--     race, a job shift), the crew heist's steps are on screen: the preps, then THE BIG SCORE itself, done
+--     ones ticked, the next one boxed in gold. START plays the next step (RequestCrew "Prep", or
+--     RequestBigScore "Start" once every prep is done); PAUSE HEIST puts the crew's heist on hold
+--     (RequestCrew "Pause": it leaves every crewmate's screen, progress kept) until RESUME HEIST in the
+--     phone's CREW app. PC: a panel at the left edge, half way down (the Big Score's own checklist uses
+--     that spot during the job, when this one is hidden), stepping aside while a toast or Coast Feed post
+--     reaches over it. Phones: one 60 px row in the invite card's band ("THE BIG SCORE 1/4", "Next: ...",
+--     START, PAUSE HEIST). Either steps aside for a stamp, the crew invite, a ride card, a pass offer
+--     and the open phone.
 --   CrewClient.Crewmates() -> the other players in your crew
 
 local Players = game:GetService("Players")
@@ -26,6 +43,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
+local Heists = require(ReplicatedStorage.Shared.Config.Heists)
+local Missions = require(ReplicatedStorage.Shared.Config.Missions)
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 
@@ -47,6 +66,47 @@ local CHECK_EVERY = 0.2 -- seconds between checks for a stamp over the card
 
 local gui, card
 local tags = {} -- [player] = BillboardGui
+
+local JOB_NAME = (Missions.CrewJob and Missions.CrewJob.Name) or "The Big Score"
+
+-- The heist plan's sizes (pixels) and what it shows.
+local PLAN = {
+	PREPS = (Missions.CrewJob and Missions.CrewJob.Preps) or {},
+	X = 20, -- PC: from the left edge
+	W = 260, -- PC panel width
+	PAD = 10,
+	HEAD_H = 22,
+	SUB_H = 16,
+	ROW_H = 22,
+	BUTTON_H = 30,
+	TOUCH_W = 420, -- phones: one row, narrowing to TOUCH_MIN_W before it covers the minimap
+	TOUCH_MIN_W = 330,
+	START_W = 70,
+	PAUSE_W = 96,
+	PAUSE_HIDE = 4, -- seconds the plan stays hidden after PAUSE HEIST while the server answers
+	-- Card stacks that can reach the PC panel (paths under PlayerGui): every card showing counts.
+	CARD_STACKS = { { "Toasts", "Holder" }, { "CoastFeed", "Holder" } },
+}
+-- What a full van pays each member: a crew of 2, and the most (a full crew of 4): bigger crews earn more.
+PLAN.CUT = Heists.BigScoreCut(2)
+PLAN.CUT_MAX = Heists.BigScoreCut((Heists.BigScore and Heists.BigScore.CrewMax) or 4)
+PLAN.CUT_SHORT = "$" .. math.floor(PLAN.CUT / 1000) .. "K+ each"
+local plan = {} -- frame, title, sub, rows = { { row, ring, tick, dot, label } }, start, pause, touch, pausedAt
+
+-- CrewJob "Toast" keys in words (%d %d = Done, Total) and the toast's style.
+local JOB_TOASTS = {
+	NoCrew = { "Crew up first: give someone a ride, or invite them from PHONE > CREW.", "crew" },
+	AllDone = { "Every crew prep is done: start The Big Score from PHONE > CREW.", "crew" },
+	PrepDone = { "Your crew already did that prep.", "info" },
+	PrepRunning = { "Your crew is already on a prep.", "info" },
+	CivOnly = { "Crew preps are for free-roam players.", "info" },
+	WantedStart = { "Lose the cops first, then start the prep.", "warning" },
+	Busy = { "Finish what you're doing first.", "info" },
+	NeedMate = { "A crew prep needs a crewmate here and free to do it with you.", "warning" },
+	Together = { "Stick together: it counts once your crew is there with you.", "crew" },
+	Wanted = { "Lose the cops: it doesn't count while you're wanted.", "warning" },
+	NeedPreps = { "Do your crew preps first: %d of %d done (PHONE > CREW).", "warning" },
+}
 
 function CrewClient.Crewmates()
 	local list = {}
@@ -251,7 +311,7 @@ local function showInvite(info)
 	line.TextWrapped = true
 	line.TextTruncate = Enum.TextTruncate.AtEnd
 	line.Size = UDim2.new(1, -32, 0, 36)
-	line.Text = tostring(info.FromName) .. " wants you in their crew"
+	line.Text = tostring(info.FromName) .. " wants you in their crew" .. (info.Switch and " (you'd leave yours)" or "")
 	line.Parent = card
 	local mine = card
 	local function answer(action)
@@ -277,6 +337,398 @@ local function showInvite(info)
 	end)
 end
 
+------------------------------------------------------------------ the heist plan
+
+-- The crew heist's steps (the preps, then the Big Score itself) as of the attributes CrewService sets:
+-- a list of { id, name, done, running, finale }, the index of the next step, and how many preps are done.
+local function planSteps()
+	local list = player:GetAttribute("CrewPreps")
+	local running = player:GetAttribute("CrewPrepRun")
+	local steps, nextIndex, done = {}, nil, 0
+	for i, id in ipairs(PLAN.PREPS) do
+		local m = Missions.ById[id]
+		local isDone = type(list) == "string" and string.find(list, "," .. id .. ",", 1, true) ~= nil
+		steps[i] = { id = id, name = m and m.Name or id, done = isDone, running = running == id }
+		if isDone then
+			done += 1
+		elseif not nextIndex then
+			nextIndex = i
+		end
+	end
+	table.insert(steps, { id = "BigScore", name = JOB_NAME, finale = true, done = false })
+	return steps, nextIndex or #steps, done
+end
+
+local function planText(parent, name, size, kind)
+	local l = Instance.new("TextLabel")
+	l.Name = name
+	Theme.Text(l, size, kind)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.RichText = true
+	l.Parent = parent
+	return l
+end
+
+local function planStroke(parent, x, y, length, angle)
+	local f = Instance.new("Frame")
+	f.Name = "Stroke"
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.Position = UDim2.fromOffset(x, y)
+	f.Size = UDim2.fromOffset(length, 2)
+	f.Rotation = angle
+	f.BackgroundColor3 = C.Cash
+	f.BorderSizePixel = 0
+	f.Parent = parent
+end
+
+-- "$96,000"
+local function cash(n)
+	local digits = tostring(math.floor(n))
+	local out = string.reverse((string.gsub(string.reverse(digits), "(%d%d%d)", "%1,")))
+	if string.sub(out, 1, 1) == "," then
+		out = string.sub(out, 2)
+	end
+	return "$" .. out
+end
+
+-- START: the next prep for the crew, or the Big Score itself once they're all done (the servers check it
+-- all again and say why not). PAUSE HEIST: the crew's heist goes on hold (the plan hides at once).
+local function planStart()
+	local steps, n = planSteps()
+	local step = steps[n]
+	if step.running then
+		return
+	end
+	if step.finale then
+		Remotes.Event("RequestBigScore"):FireServer("Start")
+	else
+		Remotes.Event("RequestCrew"):FireServer("Prep", step.id)
+	end
+end
+
+local function planPause()
+	plan.pausedAt = os.clock()
+	plan.frame.Visible = false
+	Remotes.Event("RequestCrew"):FireServer("Pause", true)
+end
+
+local function buildPlan()
+	local f = Instance.new("Frame")
+	f.Name = "HeistPlan"
+	f.Active = true -- taps on it don't reach the world behind it
+	f.Visible = false
+	Theme.Panel(f, 0.2)
+	f.Parent = gui
+	plan.frame = f
+	local accent = Instance.new("Frame")
+	accent.Name = "Accent"
+	accent.Position = UDim2.fromOffset(0, 8)
+	accent.Size = UDim2.new(0, 2, 1, -16)
+	accent.BackgroundColor3 = C.Gold
+	accent.BorderSizePixel = 0
+	accent.Parent = f
+	plan.title = planText(f, "Title", 16, "Display")
+	plan.sub = planText(f, "Sub", 12, "Body")
+	plan.sub.TextColor3 = C.Dim
+	plan.rows = {}
+	for i = 1, #PLAN.PREPS + 1 do
+		local row = Instance.new("Frame")
+		row.Name = "Step" .. i
+		row.BackgroundTransparency = 1
+		row.Parent = f
+		-- The box: a thin ring; a green tick once the step is done, a small gold square in it for the next one.
+		local box = Instance.new("Frame")
+		box.Name = "Box"
+		box.AnchorPoint = Vector2.new(0, 0.5)
+		box.Position = UDim2.fromScale(0, 0.5)
+		box.Size = UDim2.fromOffset(14, 14)
+		box.BackgroundTransparency = 1
+		box.BorderSizePixel = 0
+		box.Parent = row
+		Theme.Corners(box, 3)
+		local ring = Instance.new("UIStroke")
+		ring.Thickness = 1.5
+		ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		ring.Color = C.Dim
+		ring.Parent = box
+		local tick = Instance.new("Frame")
+		tick.Name = "Tick"
+		tick.BackgroundTransparency = 1
+		tick.Size = UDim2.fromScale(1, 1)
+		tick.Visible = false
+		tick.Parent = box
+		planStroke(tick, 4, 9, 5.5, 45) -- (the fonts have no tick glyph: two strokes)
+		planStroke(tick, 8.5, 7, 10.5, -49)
+		local dot = Instance.new("Frame")
+		dot.Name = "Dot"
+		dot.AnchorPoint = Vector2.new(0.5, 0.5)
+		dot.Position = UDim2.fromScale(0.5, 0.5)
+		dot.Size = UDim2.fromOffset(6, 6)
+		dot.BackgroundColor3 = C.Gold
+		dot.BorderSizePixel = 0
+		dot.Visible = false
+		dot.Parent = box
+		local label = planText(row, "Text", 13, "Body")
+		label.Position = UDim2.fromOffset(22, 0)
+		label.Size = UDim2.new(1, -22, 1, 0)
+		plan.rows[i] = { row = row, ring = ring, tick = tick, dot = dot, label = label }
+	end
+	plan.start = button(f, "Start", "START", "Primary", planStart)
+	plan.pause = button(f, "Pause", "PAUSE HEIST", "Quiet", planPause)
+end
+
+-- The words and boxes for the steps as they stand (only when something changed).
+local function drawPlan()
+	if not plan.frame then
+		return
+	end
+	local steps, n, done = planSteps()
+	local nextStep = steps[n]
+	local total = #steps
+	local rankNeed = (Heists.BigScore and Heists.BigScore.MinRank) or 3
+	local lowRank = (player:GetAttribute("CivRank") or 1) < rankNeed
+	if plan.touch then
+		local size = plan.title.TextSize + 2
+		plan.title.Text = string.format('<font face="Oswald" weight="bold" size="%d" color="#%s">%s</font>  %s', size,
+			C.Gold:ToHex(), string.upper(JOB_NAME), done .. "/" .. total)
+		local words = nextStep.running and ("Crew on it: " .. nextStep.name)
+			or nextStep.finale and ("Ready: hit the Gold Reserve" .. (lowRank and (" at rank " .. rankNeed) or "!"))
+			or ("Next: " .. nextStep.name)
+		plan.sub.Text = words .. "  ·  " .. PLAN.CUT_SHORT
+	else
+		plan.title.Text = string.upper(JOB_NAME)
+		plan.title.TextColor3 = C.Gold
+		plan.sub.Text = "The Gold Reserve: " .. cash(PLAN.CUT) .. "-" .. cash(PLAN.CUT_MAX) .. " each"
+		for i, step in ipairs(steps) do
+			local r = plan.rows[i]
+			local here = i == n
+			r.tick.Visible = step.done
+			r.dot.Visible = here
+			r.ring.Color = here and C.Gold or (step.done and C.Cash or C.Dim)
+			r.ring.Transparency = here and 0 or 0.45
+			local words = step.name
+			if step.running then
+				words ..= "  (your crew is on it)"
+			elseif step.finale and not here then
+				words ..= "  (after the preps)"
+			elseif step.finale and lowRank then
+				words ..= "  (rank " .. rankNeed .. ")"
+			end
+			r.label.Text = words
+			r.label.FontFace = here and Theme.Font.Bold or Theme.Font.Body
+			r.label.TextColor3 = here and C.Text or C.Dim
+			r.label.TextTransparency = step.done and 0.35 or 0
+		end
+	end
+	plan.start.Text = nextStep.running and "ON IT" or (nextStep.finale and not plan.touch and "START HEIST" or "START")
+	plan.start.AutoButtonColor = not nextStep.running
+	plan.start.BackgroundTransparency = nextStep.running and 0.5 or 0
+end
+
+-- Size and place the plan for this screen (see the header).
+local function placePlan()
+	local f = plan.frame
+	local screen = gui.AbsoluteSize
+	if not f or screen.X < 1 then
+		return
+	end
+	local touch = Theme.IsTouch()
+	plan.touch = touch
+	local pad = PLAN.PAD
+	if touch then
+		-- One row in the invite card's band: [THE BIG SCORE 1/4 / Next: Gear Up ...] [START] [PAUSE HEIST]
+		local buttonH = Theme.Touch
+		local h = 8 + buttonH + 8
+		local lx, _, lw = zoneBox("Minimap", true, screen)
+		local left = lx + lw + GAP
+		local right = zoneBox("Status", true, screen) - GAP
+		if right - left < PLAN.TOUCH_MIN_W then
+			left = EDGE
+		end
+		local w = math.min(PLAN.TOUCH_W, math.max(PLAN.TOUCH_MIN_W, right - left), screen.X - 2 * EDGE)
+		local x = math.clamp(screen.X / 2, left + w / 2, math.max(left + w / 2, right - w / 2))
+		local _, sy, _, sh = zoneBox("Stamp", true, screen)
+		local _, by, _, bh = zoneBox("Banner", true, screen)
+		local _, ly = zoneBox("Action", true, screen)
+		local minTop = by + bh + GAP_Y
+		local y = math.clamp(sy + sh / 2 - h / 2, minTop, math.max(minTop, ly - GAP_Y - h))
+		f.AnchorPoint = Vector2.new(0.5, 0)
+		f.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
+		f.Size = UDim2.fromOffset(w, h)
+		local reserved = 14 + 10 + PLAN.START_W + 6 + PLAN.PAUSE_W + 8
+		plan.title.TextSize = 13
+		plan.title.Position = UDim2.fromOffset(14, 8)
+		plan.title.Size = UDim2.new(1, -reserved, 0, 18)
+		plan.sub.TextSize = 12
+		plan.sub.Position = UDim2.fromOffset(14, 30)
+		plan.sub.Size = UDim2.new(1, -reserved, 0, 16)
+		for _, r in ipairs(plan.rows) do
+			r.row.Visible = false
+		end
+		plan.pause.AnchorPoint = Vector2.new(1, 0.5)
+		plan.pause.Position = UDim2.new(1, -8, 0.5, 0)
+		plan.pause.Size = UDim2.fromOffset(PLAN.PAUSE_W, buttonH)
+		plan.start.AnchorPoint = Vector2.new(1, 0.5)
+		plan.start.Position = UDim2.new(1, -(8 + PLAN.PAUSE_W + 6), 0.5, 0)
+		plan.start.Size = UDim2.fromOffset(PLAN.START_W, buttonH)
+	else
+		-- A panel at the left edge, half way down (where the Big Score's own checklist goes during the job).
+		local rowsH = #plan.rows * PLAN.ROW_H
+		local h = pad + PLAN.HEAD_H + PLAN.SUB_H + 6 + rowsH + 8 + PLAN.BUTTON_H + pad
+		f.AnchorPoint = Vector2.new(0, 0.5)
+		f.Position = UDim2.new(0, PLAN.X, 0.5, 0)
+		f.Size = UDim2.fromOffset(PLAN.W, h)
+		plan.title.TextSize = 16
+		plan.title.Position = UDim2.fromOffset(14, pad)
+		plan.title.Size = UDim2.new(1, -28, 0, PLAN.HEAD_H)
+		plan.sub.TextSize = 12
+		plan.sub.Position = UDim2.fromOffset(14, pad + PLAN.HEAD_H)
+		plan.sub.Size = UDim2.new(1, -28, 0, PLAN.SUB_H)
+		for i, r in ipairs(plan.rows) do
+			r.row.Visible = true
+			r.row.Position = UDim2.fromOffset(14, pad + PLAN.HEAD_H + PLAN.SUB_H + 6 + (i - 1) * PLAN.ROW_H)
+			r.row.Size = UDim2.new(1, -28, 0, PLAN.ROW_H)
+		end
+		for _, b in ipairs({ plan.start, plan.pause }) do
+			b.AnchorPoint = Vector2.new(0, 1)
+			b.Size = UDim2.new(0.5, -(14 + 3), 0, PLAN.BUTTON_H)
+			b.Position = UDim2.new(b == plan.start and 0 or 0.5, b == plan.start and 14 or 3, 1, -pad)
+		end
+		plan.pause.Text = "PAUSE HEIST"
+	end
+	drawPlan()
+end
+
+-- Should the plan be up? A crew with its heist not paused, in free roam, not wanted, and not busy with a
+-- mission (a prep included), the Big Score, a race or a job shift.
+local function planWanted()
+	if type(player:GetAttribute("CrewPreps")) ~= "string" or player:GetAttribute("CrewPaused") == true then
+		return false
+	end
+	if os.clock() - (plan.pausedAt or -math.huge) < PLAN.PAUSE_HIDE then
+		return false -- (PAUSE was pressed: hidden until the server's answer lands)
+	end
+	if player:GetAttribute("Side") ~= "Civilian" or player:GetAttribute("TitleScreen") == true
+		or (player:GetAttribute("Heat") or 0) > 0 then
+		return false
+	end
+	return not (player:GetAttribute("Mission") or player:GetAttribute("BigScore") or player:GetAttribute("RacingId")
+		or player:GetAttribute("JobKind"))
+end
+
+local function uiPart(guiName, childName)
+	local pg = player:FindFirstChild("PlayerGui")
+	local sg = pg and pg:FindFirstChild(guiName)
+	return sg and sg:FindFirstChild(childName)
+end
+
+-- Is something else using the plan's spot right now? A stamp over it, the crew invite, a ride card, a pass
+-- offer, the phone, or (PC) a toast or Coast Feed post reaching over it.
+local function planCovered()
+	local f = plan.frame
+	if card then
+		return true
+	end
+	local ride = uiPart("RideInvite", "RideCard")
+	if ride and ride:IsA("GuiObject") and ride.Visible then
+		return true
+	end
+	local offer = uiPart("Offer", "Card")
+	if offer and offer:IsA("GuiObject") and offer.Visible then
+		return true
+	end
+	local okPhone, PhoneUI = pcall(require, script.Parent:FindFirstChild("PhoneUI"))
+	if okPhone and type(PhoneUI) == "table" and type(PhoneUI.IsOpen) == "function" and PhoneUI.IsOpen() then
+		return true
+	end
+	local origin = gui.AbsolutePosition
+	local top = f.AbsolutePosition.Y - origin.Y
+	local bottom = top + f.AbsoluteSize.Y
+	local stampTop, stampBottom
+	if HUDController.StampTop then
+		stampTop, stampBottom = HUDController.StampTop()
+	end
+	if stampTop ~= nil and stampTop < bottom and (stampBottom == nil or stampBottom > top) then
+		return true
+	end
+	if plan.touch then
+		return false
+	end
+	local right = f.AbsolutePosition.X - origin.X + f.AbsoluteSize.X
+	local playerGui = player:FindFirstChild("PlayerGui")
+	for _, path in ipairs(PLAN.CARD_STACKS) do
+		local sg = playerGui and playerGui:FindFirstChild(path[1])
+		local holder = sg and sg:FindFirstChild(path[2])
+		if holder and sg:IsA("ScreenGui") and sg.Enabled then
+			for _, c in ipairs(holder:GetChildren()) do
+				if c:IsA("GuiObject") and c.Visible then
+					local y = c.AbsolutePosition.Y - sg.AbsolutePosition.Y
+					local x = c.AbsolutePosition.X - sg.AbsolutePosition.X
+					if y < bottom and y + c.AbsoluteSize.Y > top and x < right then
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function planTick()
+	if not plan.frame then
+		return
+	end
+	local want = planWanted() and not planCovered()
+	if plan.frame.Visible ~= want then
+		plan.frame.Visible = want
+	end
+end
+
+-- The crew job's moments (see the header).
+local function onJob(kind, info)
+	info = type(info) == "table" and info or {}
+	local done, total = tonumber(info.Done) or 0, tonumber(info.Total) or 3
+	if kind == "New" or kind == "Joined" then
+		HUDController.Stamp("CREW UP!", JOB_NAME .. ": rob the Gold Reserve for " .. cash(PLAN.CUT)
+			.. "+ each (more with a bigger crew)", C.Gold,
+			"NEW CREW HEIST")
+	elseif kind == "Back" then
+		local mates = type(info.Mates) == "table" and table.concat(info.Mates, ", ") or ""
+		NotifyController.Show((mates ~= "" and ("Your crew: " .. mates .. ". ") or "")
+			.. (done >= total and (JOB_NAME .. " is unlocked!") or ("Crew preps " .. done .. "/" .. total .. " (PHONE > CREW).")),
+			nil, "crew")
+	elseif kind == "PrepDone" then
+		NotifyController.Show("Crew prep done: " .. tostring(info.Name or "") .. " (" .. done .. "/" .. total
+			.. "). Next one: PHONE > CREW.", C.Cash, "crew")
+	elseif kind == "Ready" then
+		HUDController.Stamp("BIG SCORE UNLOCKED", "Every crew prep is done. Start it: PHONE > CREW", C.Gold, "CREW JOB")
+	elseif kind == "Reset" then
+		NotifyController.Show("New score, new preps: do them again to unlock the next Big Score.", nil, "crew")
+	elseif kind == "Broke" then
+		NotifyController.Show((info.Name and (tostring(info.Name) .. " left: ") or "")
+			.. "your crew broke up, and its Big Score job with it.", nil, "warning")
+	elseif kind == "Left" then
+		NotifyController.Show(tostring(info.Name or "Someone") .. " left your crew.", nil, "crew")
+	elseif kind == "Paused" then
+		local me = info.Name == player.DisplayName
+		NotifyController.Show((me and "Heist paused." or (tostring(info.Name) .. " paused the heist."))
+			.. " Your progress is saved: find it again in PHONE > CREW.", nil, "crew")
+	elseif kind == "Resumed" then
+		NotifyController.Show(tostring(info.Name or "Your crew") .. " is back on the heist: the plan is on your screen.", C.Gold,
+			"crew")
+	elseif kind == "Toast" then
+		local t = JOB_TOASTS[info.Key]
+		if t then
+			local text = t[1]
+			if string.find(text, "%d", 1, true) then
+				text = string.format(text, done, total)
+			end
+			NotifyController.Show(text, nil, t[2])
+		end
+	end
+end
+
 function CrewClient.Init()
 	gui = Instance.new("ScreenGui")
 	gui.Name = "Crew"
@@ -288,9 +740,25 @@ function CrewClient.Init()
 	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitCard)
 	UserInputService:GetPropertyChangedSignal("MouseEnabled"):Connect(fitCard)
 	UserInputService:GetPropertyChangedSignal("TouchEnabled"):Connect(fitCard)
+	-- The heist plan: built once, placed for the screen, redrawn when the crew's progress changes.
+	buildPlan()
+	placePlan()
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(placePlan)
+	UserInputService:GetPropertyChangedSignal("MouseEnabled"):Connect(placePlan)
+	UserInputService:GetPropertyChangedSignal("TouchEnabled"):Connect(placePlan)
+	player:GetAttributeChangedSignal("PreviewTouch"):Connect(placePlan) -- (Studio's phone preview)
+	for _, name in ipairs({ "CrewPreps", "CrewPrepRun", "CivRank" }) do
+		player:GetAttributeChangedSignal(name):Connect(drawPlan)
+	end
+	player:GetAttributeChangedSignal("CrewPaused"):Connect(function()
+		if player:GetAttribute("CrewPaused") ~= true then
+			plan.pausedAt = nil -- (resumed: show it again at once)
+		end
+	end)
 	task.spawn(function()
 		Remotes.OnClient("CrewInvite", showInvite)
 	end)
+	Remotes.OnClient("CrewJob", onJob)
 	player:GetAttributeChangedSignal("FriendBonus"):Connect(function()
 		if player:GetAttribute("FriendBonus") then
 			NotifyController.Show("A friend is in this server: +10% heist cash!", C.Cash)
@@ -309,6 +777,7 @@ function CrewClient.Init()
 					card.Visible = want
 				end
 			end
+			planTick()
 		end
 		if now - lastTags > TAGS_EVERY then
 			lastTags = now
