@@ -49,4 +49,4 @@ Not checked in Studio yet:
 - Two player cops on duty: no AI boats should come. The logic test covers this.
 - The officer's seat on the boat up close. It looked fine from the chase camera.
 
-**Not live.** It goes live only when the owner says so: play test, then File > Publish (see 9-RIDE-AND-MAP.md for the steps).
+**Live as v10**, published Nov 5, 2026 at 17:27 UTC from the live v9 place (crew heist). Only the 3 Coast Guard scripts from 2856b08 were added, and a check of all 142 scripts afterwards showed nothing else changed. Servers weren't restarted, so new servers get v10.
