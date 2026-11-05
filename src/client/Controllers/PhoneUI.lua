@@ -79,6 +79,8 @@
 --             "ShopFree", ShopService: RequestShopFree, checked on the server); cash packs add cash
 --             only (they can't skip heist locks, cop ranks or passes)
 --   GOALS     both ranks with their XP bars and next unlock, and today's challenges
+--   EMPIRE    player businesses (BusinessClient; only while BusinessesOn): your Empire rank, your businesses
+--             (register, GPS, COLLECT from the phone at Empire 5+), businesses for sale, and coming soon
 --   CREW      INVITE FRIENDS (Roblox's own invite pop-up, hidden when Roblox says this player can't send
 --             invites), THE BIG SCORE (the crew heist, BigScoreService: one line on whether you could
 --             start it right now, worked out here from your crew, rank, cooldown and whether another
@@ -104,7 +106,7 @@
 -- the home screen). "Tune" and "Custom" open on one car's page: arg = its vehicle id (the dealer's
 -- TUNE IT button uses PhoneUI.Open("Tune", id)). On a phone that is already up, Open just changes the
 -- page. PhoneUI.Close(), Toggle(), IsOpen() (false from the moment it is put away; "Body" stays Visible
--- a moment longer while it slides out).
+-- a moment longer while it slides out). PhoneUI.Refresh(pageName) redraws that page if it's the one up.
 -- Names other code and the Studio test tools use (keep them): ScreenGui "Phone" > "PhoneButton" (the
 -- HUD tile, HUDController.ZoneButton) and "Body" (OfferClient, MinimapClient, AmbienceClient,
 -- DealerClient and TutorialClient watch its Visible) > "Fit", "Back", "HomeBar" and "Screen" > the page.
@@ -200,7 +202,7 @@ local K = {
 		Boats = { Name = "Marina Boat Sales", Pos = Vector3.new(1678, 0, 1096) },
 	},
 	-- The home screen, in order: the label, the PAGES key (also the tile's Name and its glyph in W.glyph)
-	-- and the tile's colour.
+	-- and the tile's colour; Show (optional) = a function: the tile is only there while it says true.
 	Apps = {
 		{ Name = "GARAGE", Page = "Garage", Color = Color3.fromRGB(226, 62, 110) },
 		{ Name = "AUTONEON", Page = "Dealer", Color = Color3.fromRGB(38, 140, 210) },
@@ -210,6 +212,10 @@ local K = {
 		{ Name = "GOALS", Page = "Goals", Color = Color3.fromRGB(200, 150, 32) },
 		{ Name = "CREW", Page = "Crew", Color = Color3.fromRGB(30, 160, 150) },
 		{ Name = "HOME", Page = "Home_", Color = Color3.fromRGB(224, 104, 58) },
+		-- Empire (BusinessClient): only while the feature runs in this server (Show; see Config.Businesses.Live).
+		{ Name = "EMPIRE", Page = "Empire", Color = Color3.fromRGB(196, 150, 40), Show = function()
+			return ReplicatedStorage:GetAttribute("BusinessesOn") == true
+		end },
 		{ Name = "SETTINGS", Page = "Settings", Color = Color3.fromRGB(98, 106, 120) },
 	},
 }
@@ -883,6 +889,16 @@ W.glyph = {
 		W.block(g, "Walls", 5, 12, 18, 13, nil, 1)
 		W.block(g, "Door", 12, 17, 4, 8, ink, 1, 2)
 	end,
+	Empire = function(g, ink) -- a shop front under a striped awning, a gold coin over it
+		for i = 0, 3 do
+			W.block(g, "Awning" .. i, 2 + i * 6, 8, 6, 5, i % 2 == 0 and C.Text or ink, 1)
+		end
+		W.block(g, "Front", 3, 13, 22, 12, nil, 1)
+		W.block(g, "Door", 6, 16, 6, 9, ink, 1, 2)
+		W.block(g, "Window", 15, 16, 7, 5, ink, 1, 2)
+		local coin = W.block(g, "Coin", 10, 0, 8, 8, C.Gold, 4, 2)
+		W.ring(coin, C.Text, 1)
+	end,
 	Settings = function(g, ink) -- three sliders
 		for i, x in ipairs({ 16, 5, 12 }) do
 			local y = 3 + (i - 1) * 9
@@ -946,18 +962,25 @@ function PAGES.Home()
 	local screen = ui.screen
 	local touch, small = touchHeight(), textPx(13)
 	local width, height = screen.Size.X.Offset, screen.Size.Y.Offset
-	-- HOW TO PLAY and its hint keep the bottom of the page; the grid's three rows share what is left, so
-	-- on a short screen the icons shrink instead of running off it.
+	-- HOW TO PLAY and its hint keep the bottom of the page; the grid's rows (three apps each: three rows,
+	-- four with EMPIRE) share what is left, so on a short screen the icons shrink instead of running off it.
+	local apps = {}
+	for _, app in ipairs(K.Apps) do
+		if not app.Show or app.Show() then
+			table.insert(apps, app)
+		end
+	end
+	local rows = math.max(1, math.ceil(#apps / 3))
 	local hintH, labelH, gap = small + 4, small + 4, 8
 	local guideTop = height - hintH - 4 - touch
-	local cellH = math.clamp(math.floor((guideTop - 10 - 2 * gap) / 3), 36 + labelH + 4, 68 + labelH + 4)
+	local cellH = math.clamp(math.floor((guideTop - 10 - (rows - 1) * gap) / rows), 36 + labelH + 4, 68 + labelH + 4)
 	local icon = cellH - labelH - 4
 	-- A tall screen has room to spare: a big clock on top, like a lock screen's, and more air between
 	-- the rows of icons.
-	local free = guideTop - 10 - (3 * cellH + 2 * gap)
+	local free = guideTop - 10 - (rows * cellH + (rows - 1) * gap)
 	local clockH = free >= 120 and 92 or 0
-	gap = math.clamp(gap + math.floor((free - clockH) / 4), gap, 26)
-	local gridH = 3 * cellH + 2 * gap
+	gap = math.clamp(gap + math.floor((free - clockH) / (rows + 1)), gap, 26)
+	local gridH = rows * cellH + (rows - 1) * gap
 	if clockH > 0 then
 		local big = themeText(screen, ui.clock.Text, UDim2.new(1, 0, 0, 56), UDim2.fromOffset(0, 12), 46, "Display", nil,
 			Enum.TextXAlignment.Center, true)
@@ -974,7 +997,7 @@ function PAGES.Home()
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.Parent = grid
-	for i, app in ipairs(K.Apps) do
+	for i, app in ipairs(apps) do
 		-- The whole cell is the button (icon and label), so the tap target is bigger than the icon.
 		local tile = Instance.new("TextButton")
 		tile.Name = app.Page
@@ -1859,6 +1882,96 @@ function PAGES.Home_()
 	end
 end
 
+------------------------------------------------------------------ EMPIRE (player businesses)
+
+-- Your Empire rank (its XP bar and the next unlock), your businesses (level, trickle, the register with its
+-- bar, GPS; COLLECT from here at Empire rank RemoteCollect+), businesses for sale (price, what unlocks them,
+-- distance, GPS) and the ones coming in later updates. Everything comes from BusinessClient (the server
+-- checks COLLECT again); BusinessClient redraws this page when its numbers change (PhoneUI.Refresh).
+function PAGES.Empire()
+	setHeader("EMPIRE", "Home")
+	local ok, BusinessClient = pcall(function()
+		return require(script.Parent:WaitForChild("BusinessClient", 2))
+	end)
+	if not ok or type(BusinessClient) ~= "table" or type(BusinessClient.On) ~= "function" or not BusinessClient.On() then
+		W.note(ui.screen, "Businesses are loading...", 0, C.Text, Enum.TextXAlignment.Center)
+		return
+	end
+	local s = W.list(0)
+	local emp = BusinessClient.Empire()
+	local info = emp.Need <= 0 and "Max rank!" or (emp.Into .. " / " .. emp.Need .. " XP" .. (emp.Next and ("  ·  next: " .. emp.Next) or ""))
+	local _, _, rankWords = W.item(s, {
+		Name = "Rank", Order = 0,
+		Title = "EMPIRE RANK " .. emp.Rank .. (emp.Title and ("  ·  " .. string.upper(tostring(emp.Title))) or ""), TitleColor = C.Gold,
+		Sub = info,
+	})
+	W.meter(rankWords, 15, emp.Share, C.Gold)
+	local owned = BusinessClient.Owned()
+	W.head(s, "YOUR BUSINESSES", 10)
+	if #owned == 0 then
+		W.note(s, "You don't own a business yet. Each one has its own job that pays more than normal work, and a register that fills while you play.", 11)
+	end
+	for i, b in ipairs(owned) do
+		local full = b.Register >= b.Cap
+		local _, _, words = W.item(s, {
+			Name = b.Id, Order = 10 + i * 2,
+			Title = b.Name .. "  ·  LEVEL " .. b.Level,
+			Sub = string.format("+$%d a minute%s  ·  %d jobs done", math.floor(b.Rate + 0.5), b.Busy and " (crew here: +25%)" or "", b.JobsDone),
+			Meta = "REGISTER " .. money(b.Register) .. " / " .. money(b.Cap) .. (full and "  ·  FULL" or ""),
+			MetaColor = full and C.Gold or C.Cash,
+			Button = "GPS", ButtonName = "Go", Width = 72,
+			OnTap = function()
+				BusinessClient.RouteTo(b.Id)
+				PhoneUI.Close()
+			end,
+		})
+		W.meter(words, 35, b.Register / math.max(b.Cap, 1), full and C.Gold or C.Cash)
+		if emp.RemoteCollect then
+			local collect = W.button(s, "Collect" .. b.Id, "COLLECT " .. money(b.Register), b.Register >= 1 and "Primary" or "Quiet", function()
+				BusinessClient.Collect(b.Id)
+			end)
+			collect.Size = UDim2.new(1, 0, 0, touchHeight())
+			collect.LayoutOrder = 11 + i * 2
+		end
+	end
+	if #owned > 0 and not emp.RemoteCollect then
+		W.note(s, "Collect at the business (Manage at its door), or from here at Empire rank " .. tostring(emp.RemoteRank) .. ".", 39)
+	end
+	local sale = BusinessClient.ForSale()
+	if #sale > 0 then
+		W.head(s, "FOR SALE", 40)
+		for i, b in ipairs(sale) do
+			W.item(s, {
+				Name = "Sale" .. b.Id, Order = 40 + i,
+				Title = b.Name,
+				Sub = tostring(b.JobLine or "") .. "  ·  register +$" .. tostring(b.Trickle) .. " a minute",
+				Meta = money(b.Price) .. (b.Locked and ("  ·  EMPIRE " .. b.Unlock .. " NEEDED") or "") .. "  ·  "
+					.. GPSClient.FormatDistance(GPSClient.Distance(b.Pos) or 0),
+				MetaColor = b.Locked and C.Purple or C.Cash,
+				Button = "GPS", ButtonName = "Go", Width = 72,
+				OnTap = function()
+					BusinessClient.RouteTo(b.Id)
+					PhoneUI.Close()
+				end,
+			})
+		end
+	end
+	local soon = BusinessClient.ComingSoon()
+	if #soon > 0 then
+		W.head(s, "COMING SOON", 70)
+		for i, b in ipairs(soon) do
+			W.item(s, {
+				Name = "Soon" .. b.Id, Order = 70 + i,
+				Title = b.Name, TitleColor = C.Dim,
+				Sub = tostring(b.JobLine or ""),
+				Meta = money(b.Price) .. ((b.Unlock or 1) > 1 and ("  ·  EMPIRE " .. b.Unlock) or "") .. (b.Kind == "Shady" and "  ·  SHADY" or ""),
+			})
+		end
+	end
+	W.note(s, "Empire XP: buy and upgrade businesses, finish their jobs, serve player customers and stop break-ins.", 100, nil,
+		Enum.TextXAlignment.Center)
+end
+
 function PAGES.GPS()
 	setHeader("GPS", "Home")
 	local places = {}
@@ -1898,7 +2011,7 @@ function PAGES.GPS()
 	local s = W.list(top)
 	local rows = {}
 	for _, p in ipairs(places) do
-		if p.c == S.gpsTab then
+		if p.c == S.gpsTab or (S.gpsTab == "Service" and p.c == "Business") then -- (businesses under PLACES)
 			local pos = Vector3.new(p.x, 0, p.z)
 			table.insert(rows, { p = p, pos = pos, d = GPSClient.Distance(pos) or 0 })
 		end
@@ -3485,6 +3598,14 @@ function PhoneUI.Toggle()
 		PhoneUI.Close()
 	else
 		PhoneUI.Open()
+	end
+end
+
+-- Redraw a page if it's the one on screen (BusinessClient: the EMPIRE app after its numbers change). The
+-- scroll position and a gamepad's selection stay where they were (show).
+function PhoneUI.Refresh(pageName)
+	if S.open and current == pageName and PAGES[pageName] then
+		show(current)
 	end
 end
 

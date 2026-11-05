@@ -4,7 +4,8 @@
 --   ReplicatedStorage attribute "Places": JSON list of { n = name, k = kind label, c = category, x, z, id, g }.
 --     Categories: "Activity" (races, stunts, drift, taxi), "Service" (hideout, chop shop, spray, fence,
 --     police, dealers, homes, the apartment towers' street doors: ApartmentService.Towers), "Heist"
---     (every heist site; id = the site's name in Workspace.Heists).
+--     (every heist site; id = the site's name in Workspace.Heists), "Business" (player businesses' doors,
+--     BusinessService.Places; id = the business id: BusinessClient.MapBlips draws them on both maps).
 --     g = group, for "the nearest one" (TutorialClient's SHOW ME): "Race" (street races), "BoatRace",
 --     "Stunt"; nil for everything else. Names SHOW ME uses as they are: "Chop Shop", "AutoNeon Motors",
 --     "Hideout", "Drift Zone", "Taxi Stand", "Rustwater Loft".
@@ -92,6 +93,14 @@ local function collect()
 	for _, h in ipairs(Housing.List) do
 		add(h.Name, "Home for sale · " .. Housing.ShortPrice(h.Price), "Service", Housing.DoorPosition(h))
 	end
+	-- Player businesses (BusinessService builds them before MapService starts; none while the feature is off):
+	-- category "Business", id = the business id (the clients' letter, colour, gold ring and break-in flash).
+	local okB, businesses = pcall(function()
+		return require(game:GetService("ServerScriptService").Services.BusinessService).Places()
+	end)
+	for _, p in ipairs(okB and type(businesses) == "table" and businesses or {}) do
+		add(p.Name, p.Kind, "Business", p.Pos, p.Id)
+	end
 	local spawns = Workspace:FindFirstChild("Spawns")
 	if spawns then
 		for key, name in pairs(SERVICE_NAMES) do
@@ -154,10 +163,14 @@ local function shapes()
 			end
 		end
 	end
-	-- Runtime-built lots (dealerships, homes) aren't in City.Art: add their big pieces too.
-	for _, name in ipairs({ "Dealerships", "Homes" }) do
+	-- Runtime-built lots (dealerships, homes, player businesses) aren't in City.Art: add their big pieces too.
+	-- (In Workspace.Shops only the businesses, "Business_<Id>": the gun shop's footprint is left as it was.)
+	for _, name in ipairs({ "Dealerships", "Homes", "Shops" }) do
 		local root = Workspace:FindFirstChild(name)
 		for _, m in ipairs(root and root:GetChildren() or {}) do
+			if name == "Shops" and string.sub(m.Name, 1, 9) ~= "Business_" then
+				continue
+			end
 			for _, p in ipairs(m:GetDescendants()) do
 				-- Tall walls, or a roof slab (the showroom's walls are thin, but its Roof is its footprint).
 				if p:IsA("BasePart") and (p.Size.Y >= 10 or p.Name == "Roof") and p.Size.X >= 14 and p.Size.Z >= 14 then

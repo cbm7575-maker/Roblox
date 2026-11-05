@@ -29,8 +29,9 @@
 --     Hideout H green, Police HQ P blue, shops and services grey (Spray & Go S, Chop Shop C, AutoNeon A,
 --     Marina Boat Sales B, Coast Arms G, apartment towers T, homes for sale ⌂), heists $ (gold while
 --     open, small and grey while shut), things to do in cyan (races R, stunt jumps J, Drift Zone D, Taxi
---     Stand T, Car Meet M, Courier Depot C), your home ⌂ white (HouseClient.HomePosition) and Florida
---     moments ! orange (ReplicatedStorage "Events"). As on the minimap a cop never sees the heists, the
+--     Stand T, Car Meet M, Courier Depot C), your home ⌂ white (HouseClient.HomePosition), Florida
+--     moments ! orange (ReplicatedStorage "Events") and player businesses in their own letter and colour
+--     (BusinessClient.MapBlips: a gold ring on yours, flashing red during a break-in you should answer). As on the minimap a cop never sees the heists, the
 --     Hideout, Spray & Go, Coast Arms (nor the Chop Shop). Each place's name sits beside its blip on a
 --     small dark pill: the main places' (K.PLACES, open heists, your home, Florida moments) at every
 --     zoom, the rest from K.NAMES_AT times closer, never on top of another name nor off the map;
@@ -383,6 +384,9 @@ end
 -- How one Places entry shows (see the header): glyph, colour, size, main (its name shows at every zoom);
 -- nil = not on your map.
 local function placeLook(p, cop, open)
+	if p.c == "Business" then
+		return nil -- (drawn by refreshLive from BusinessClient.MapBlips: a ring on yours, a flashing break-in)
+	end
 	if p.c == "Heist" then
 		if cop then
 			return nil
@@ -481,6 +485,23 @@ local function refreshLive()
 	local goal, glyph = GPSClient.MapGoal()
 	if typeof(goal) == "Vector3" then
 		blip("gps", "live", goal, glyph or "★", C.Gold, 18, { z = 7 })
+	end
+	-- Player businesses (BusinessClient.MapBlips): their letter and colour, a gold ring on yours, flashing red
+	-- during a break-in you should answer. Tap one (or its name) to route the GPS to its door.
+	local bizList = ask("BusinessClient", "MapBlips")
+	local flashRed = os.clock() % 0.6 < 0.3
+	for _, m in ipairs(type(bizList) == "table" and bizList or {}) do
+		if m.Pos then
+			local pos = Vector3.new(m.Pos.X, 0, m.Pos.Z)
+			local b = blip("biz_" .. tostring(m.Id), "live", pos, tostring(m.Letter or "$"), (m.Alarm and flashRed) and C.Danger or m.Color or C.Gold,
+				m.Owned and 18 or 16, { z = 5, go = { m.Name, pos }, main = true, order = 1, name = m.Name })
+			local ring = b.frame:FindFirstChildOfClass("UIStroke")
+			if ring then
+				ring.Color = m.Owned and C.Gold or DARK
+				ring.Thickness = m.Owned and 2 or 1
+				ring.Transparency = m.Owned and 0 or 0.2
+			end
+		end
 	end
 	-- ...and during a race, the target kept for after it, faded.
 	local kept = GPSClient.PathName() ~= nil and GPSClient.TargetPos() or nil

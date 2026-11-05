@@ -139,6 +139,9 @@ local function roadsideSpot(from, minD, maxD)
 	return nil
 end
 
+-- BusinessService's detail deliveries pick their addresses the same way (a kerb spot minD-maxD from `from`).
+JobService.RoadsideSpot = roadsideSpot
+
 local function npcFolder()
 	local folder = Workspace:FindFirstChild("NPCs")
 	if not folder then

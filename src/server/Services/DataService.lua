@@ -52,6 +52,10 @@ local function default()
 		races = {}, -- [raceId] = best time in seconds
 		stunts = {}, -- [stuntId] = true once completed
 		gear = { guns = {}, armor = 0 }, -- owned guns ([id] = true) and body armor 0-100 (CombatService)
+		-- Empire (BusinessService): [businessId] = { level, register, lifetime, jobsDone, boughtAt }, and the
+		-- Empire XP. Old saves get these two from migrate() below, so they load with no businesses.
+		businesses = {},
+		empireXP = 0,
 	}
 end
 

@@ -103,7 +103,7 @@
 --     outside homes, the title screen and the shop panel, so it never covers the speed gauge, LEAVE HOME
 --     or PLAY. The dressing room (WardrobeUI) hides and restores it itself.
 -- Other controllers are looked up softly (other(name)): PoseClient, LocomotionClient, ImpactClient,
--- DriveUI, PhoneUI, WardrobeUI, DealerClient, HouseClient. The game still works when one is missing.
+-- DriveUI, PhoneUI, WardrobeUI, DealerClient, HouseClient, BusinessClient. The game still works when one is missing.
 -- For other controllers: CombatClient.GunOut() (the camera, crosshair and mouse are in gun mode right
 -- now), CombatClient.IsShopOpen(), CombatClient.Aiming() (a gun is out and raised, plus where it points
 -- from and the camera's look: HeistClient's clerk, TrafficClient's drivers). For WeaponWheel: CombatClient.Weapons() (what the hands can switch
@@ -1049,9 +1049,10 @@ end
 -- (The house buy card too: with a pistol in hand the mouse stayed locked to the crosshair behind it, so
 -- BUY and CANCEL couldn't be clicked and the click went off as a shot at the house.)
 -- (The big map too: it is dragged and clicked all over, and the mouse must be free for it.)
+-- (And a business card or the car-wash mini-game, BusinessClient: its buttons and SCRUB spots are clicked.)
 local function panelOpen()
 	return shop.open or pickerOpen() or controllerOpen("PhoneUI") or controllerOpen("WardrobeUI") or controllerOpen("DealerClient")
-		or controllerOpen("HouseClient") or controllerOpen("MapClient")
+		or controllerOpen("HouseClient") or controllerOpen("MapClient") or controllerOpen("BusinessClient")
 end
 
 -- Knocked over (by the server, or by a traffic car on this device only) or tasered.

@@ -9,7 +9,9 @@
 -- and green. You are a white arrow a bit below the middle (more road ahead than behind). Blips are small
 -- round discs (16 px, 18 for the ones you head for) with one letter, coloured by meaning: gold = a goal or reward (the GPS target ★, open
 -- heists $), green = the Hideout (bank your cash), blue = Police HQ, grey = shops and services, white =
--- your home, purple = crewmates, orange = Florida moments. The GPS / race route is a gold line. A small
+-- your home, purple = crewmates, orange = Florida moments, and player businesses in their own colour and
+-- letter (BusinessClient.MapBlips: a gold ring on yours, flashing red during a break-in you should answer).
+-- The GPS / race route is a gold line. A small
 -- N sits on the edge, pointing north (-Z, CityGen).
 -- Other players: crewmates are purple discs with their first initial (pinned to the edge, as always).
 -- Everyone else you may see is a small plain dot (10 px, no letter, the blips' dark edge, drawn under
@@ -118,6 +120,7 @@ local KEEP_OUT = {
 	{ "LawUI", "Prison" }, { "House", "LeaveHome" }, { "House", "BuyCard" }, { "WardrobeUI", "Open" },
 	{ "Objective", "Banner" }, { "Tutorial", "Next" }, { "GPS", "Route" }, { "Phone", "Body" },
 	{ "Mission", "Step" }, { "Offer", "Card" }, { "Crew", "CrewInvite" }, { "BigScore", "Checklist" },
+	{ "Business", "Card" }, { "Business", "Hold" }, { "Business", "After" }, { "Business", "EndJob" }, -- (BusinessClient)
 	{ "TouchGui", "TouchControlFrame", "JumpButton" }, -- Roblox's jump button on foot
 	{ "TouchGui", "TouchControlFrame", "ThumbstickFrame" }, -- Roblox's classic thumbstick
 }
@@ -134,7 +137,7 @@ local gui, view, cam, overlay, frameStroke, arrow, north, routeModel, mapModel
 local staticParts = {} -- { part, pos, r } for culling
 local mapW, mapH = 240, 160 -- the map's size in pixels now (fit)
 local radius = NEAR_RADIUS
-local blips = {} -- [key] = { frame, pos, edge, track, flash }
+local blips = {} -- [key] = { frame, pos, edge, track, flash, alarm (a business break-in: its own colour, flashing red) }
 local routeStamp
 local chaseGui
 local copArrows = {} -- the MAX_ARROWS screen arrows
@@ -451,7 +454,7 @@ local function blip(key, pos, text, color, px, edge)
 	b.frame.Size = UDim2.fromOffset(px, px)
 	b.pos = pos
 	b.edge = edge -- pin to the edge when off the map (otherwise hide it)
-	b.track, b.flash = nil, nil -- callers set these again after this call when they want them
+	b.track, b.flash, b.alarm = nil, nil, nil -- callers set these again after this call when they want them
 	b.seen = true
 end
 
@@ -554,6 +557,25 @@ local function refreshBlips()
 	local homePos = okH and HouseClient and HouseClient.HomePosition()
 	if homePos then
 		blip("home", homePos, "⌂", C.Text, 18, true)
+	end
+	-- Player businesses (BusinessClient.MapBlips): their own letter and colour; yours with a gold ring and pinned
+	-- to the edge, and one with a break-in you should answer flashing red (and pinned) until it's over.
+	local okB, BusinessClient = pcall(require, script.Parent:FindFirstChild("BusinessClient"))
+	local okList, bizList = false, nil
+	if okB and type(BusinessClient) == "table" and type(BusinessClient.MapBlips) == "function" then
+		okList, bizList = pcall(BusinessClient.MapBlips)
+	end
+	for _, m in ipairs(okList and type(bizList) == "table" and bizList or {}) do
+		local key = "biz_" .. tostring(m.Id)
+		blip(key, m.Pos, m.Letter, m.Color, (m.Owned or m.Alarm) and 18 or 16, m.Owned or m.Alarm)
+		local b = blips[key]
+		local ring = b.frame:FindFirstChildOfClass("UIStroke")
+		if ring then
+			ring.Color = m.Owned and C.Gold or DARK
+			ring.Thickness = m.Owned and 2 or 1
+			ring.Transparency = m.Owned and 0 or 0.2
+		end
+		b.alarm = m.Alarm and m.Color or nil
 	end
 	-- The goal: the GPS target, or during a race the next checkpoint (its number, a flag at the finish).
 	-- GPSClient.MapGoal hides the target while a race line or route preview is up, like the road dots.
@@ -974,6 +996,8 @@ function MinimapClient.Init()
 			b.frame.Position = UDim2.fromOffset(x, y)
 			if b.flash then
 				b.frame.BackgroundColor3 = flashRed and BLUE or RED
+			elseif b.alarm then
+				b.frame.BackgroundColor3 = flashRed and RED or b.alarm -- (a business break-in: red / its colour)
 			end
 		end
 		-- N: north's direction from your arrow, on the edge.

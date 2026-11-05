@@ -40,6 +40,7 @@ local ORDER = {
 	"ObjectiveClient", -- needs HUDController + GPSClient
 	"HouseClient",
 	"PhoneUI",
+	"BusinessClient", -- Empire: business cards, the wash mini-game, level props, alerts (needs HUD, Notify, GPS; LawClient softly)
 	"DealerClient",
 	"InteractClient", -- needs PhoneUI (IsOpen) + DriveUI + ImpactClient
 	"TrafficClient",

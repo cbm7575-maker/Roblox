@@ -297,6 +297,7 @@ local S = {
 	locomotion = nil, -- LocomotionClient, looked for on first use (false: not there)
 	wardrobe = nil, -- WardrobeUI, looked for on first use (false: not there); refresh asks its IsOpen
 	bigMap = nil, -- MapClient (the big map), looked for on first use (false: not there); refresh asks its IsOpen
+	business = nil, -- BusinessClient (a business card, the wash mini-game): the same, looked for on first use
 	effectsGroup = nil, -- SettingsClient's "Effects" SoundGroup, found on first use (false: none)
 	seatNow = nil, -- the seat this character sat in at its last seat change (seatChanged)
 	riseAt = nil, -- os.clock() we stepped out of a car (straightening up until K.RISE_TIME later)
@@ -1630,6 +1631,19 @@ local function refresh()
 		end
 		if S.bigMap ~= false and S.bigMap.IsOpen() == true then
 			dressing = true -- (the same rule: nothing is offered while it's up)
+		end
+		-- A business card or the car-wash mini-game (BusinessClient) has the screen and its own F (HOLD): the
+		-- same rule again. Looked for on first use, softly.
+		if S.business == nil then
+			local module = script.Parent:FindFirstChild("BusinessClient")
+			local okB, mod = false, nil
+			if module then
+				okB, mod = pcall(require, module)
+			end
+			S.business = okB and type(mod) == "table" and type(mod.IsOpen) == "function" and mod or false
+		end
+		if S.business ~= false and S.business.IsOpen() == true then
+			dressing = true
 		end
 		if not stunned and not ImpactClient.IsKnocked() and not PhoneUI.IsOpen() and not dressing then
 			S.target = findTarget(root.Position, nil, K.ENTER_RANGE, K.STEAL_RANGE)

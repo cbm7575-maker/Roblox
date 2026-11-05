@@ -179,7 +179,8 @@ K.GUN_REASON = { Pistol = "gun_pistol", SMG = "gun_smg", Shotgun = "gun_shotgun"
 K.GUN_KEY = {} -- [gun id] = its RateLimit key (made once, not on every shot)
 -- People the server put in the street that can be hit (Workspace.NPCs models with the attribute
 -- NPCKind), and the service that decides what a hit on each kind does (hitNPC).
-K.NPC_OWNERS = { Officer = "PoliceOfficerService", Clerk = "HeistService" }
+-- (BizRobber: a business break-in's robbers; only their owner and crew can knock them down.)
+K.NPC_OWNERS = { Officer = "PoliceOfficerService", Clerk = "HeistService", BizRobber = "BusinessService" }
 K.THREAT_MEMORY = 8 -- seconds a wanted citizen who fired a gun may be shot by a cop at 1 star (victimProblem)
 for id in pairs(Combat.Guns) do
 	K.GUN_KEY[id] = "Gun_" .. id

@@ -30,7 +30,8 @@
 --               breath for at least 1.5 s: no sprint (a held key must be let go and pressed again) and
 --               a winded jog at most (12 x base / 16: still above the 10 studs/s at which a cop may cuff
 --               you), with a slight hunch while you keep moving and the full hands-on-knees pose when
---               you stop.
+--               you stop. A cold brew (Palm Grind; player attribute ColdBrewUntil, server time) drains
+--               it slower while it lasts: Config.Businesses.ColdBrewDrain (+25% stamina).
 --   * SLOWING THE PLAYER DOWN from other code: do NOT write Humanoid.WalkSpeed. Ask instead:
 --       player attribute "MoveBase" = n          a different base while it is set (cuffs, carrying a bag)
 --       LocomotionClient.SetCap(source, speed)   a ceiling on this device (aiming = 10); nil lifts it
@@ -748,6 +749,16 @@ end
 
 ------------------------------------------------------------------ speed and stamina
 
+-- The sprint's drain multiplier from a cold brew (see the header; the config is looked up softly, once).
+local coldBrew
+local function brewDrain()
+	if coldBrew == nil then
+		local ok, cfg = pcall(require, ReplicatedStorage.Shared.Config.Businesses)
+		coldBrew = ok and type(cfg) == "table" and type(cfg.ColdBrewDrain) == "function" and cfg.ColdBrewDrain or false
+	end
+	return coldBrew and coldBrew(player:GetAttribute("ColdBrewUntil"), Workspace:GetServerTimeNow()) or 1
+end
+
 local function speedStep(b, dt, now, active, state)
 	local hum = b.hum
 	local base = baseSpeed()
@@ -855,7 +866,7 @@ local function speedStep(b, dt, now, active, state)
 
 	-- Stamina.
 	if draining then
-		S.stamina = math.max(0, S.stamina - L.Drain * dt)
+		S.stamina = math.max(0, S.stamina - L.Drain * dt * brewDrain())
 		S.lastDrainAt = now
 		S.everSprinted = true
 		if S.stamina <= 0 then

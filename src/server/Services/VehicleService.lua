@@ -513,6 +513,14 @@ local function ejectAll(car)
 	end
 end
 
+-- Everyone out of a car another service owns, beside it, as a normal exit (BusinessService: a customer car
+-- going away at the end of a detail delivery).
+function VehicleService.EjectAll(car)
+	if car then
+		ejectAll(car)
+	end
+end
+
 ------------------------------------------------------------------ taxi fares (non-player riders)
 
 -- Sit a non-player rider (an R15 model: JobService's taxi fare) in the car's passenger seat, for everyone
