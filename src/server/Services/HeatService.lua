@@ -2,14 +2,16 @@
 -- The wanted system: cops only know what they've seen.
 --   Heat 1-5 (player attribute "Heat") comes from crimes; only citizens get heat.
 --   HeatSpotted = true while a cop (player or AI "eye") can see you: within 250 studs and a clear
---     line of sight. Cops then see your exact position (attribute LastSeen follows you).
+--     line of sight. Cops then see your exact position (attribute LastSeen follows you). An eye can be
+--     given a longer reach (RegisterEye(part, range)): the police helicopter's (PoliceHeliService).
 --   Not seen for 8 s -> hollow stars: cops only see a search circle around LastSeen.
 --   Not seen for 30 + 10 x heat seconds -> heat gone ("You lost the cops!").
 --   EscapeFrom / EscapeAt (server times, GetServerTimeNow) are set only while the stars are hollow: when
 --     the unseen clock started (the last sighting or crime report) and when it will let you go. The
 --     HUD's LOSING THEM meter fills from one to the other; both clear the moment you're seen again.
 --   A heist site with an active alarm is a hot zone: a wanted player within 60 studs is spotted.
---   At 4+ stars LastSeen updates every 20 s even while hollow (the helicopter-style ping).
+--   At 4+ stars LastSeen updates every 20 s even while hollow (the helicopter-style ping). It moves the
+--     cops' search circle only: the real helicopter (PoliceHeliService) searches where it last saw you.
 --   WantedSince (server time, GetServerTimeNow) is set when heat goes from 0 to more, and cleared
 --     with the heat. AIPoliceService uses it for the head start before patrols come.
 -- Bounty for arresting someone = $500 per paid star + 25% of their carried cash. Stars that cost the
@@ -92,7 +94,7 @@ local RADAR = "On"
 local lastSeenAt = {} -- [player] = os.clock()
 local lastPing = {} -- [player] = os.clock()
 local pvpChase = {} -- [player] = true once a player cop has been on the server during this chase
-local eyes = {} -- [BasePart] = true: extra eyes (AI police cars)
+local eyes = {} -- [BasePart] = studs it sees: extra eyes (AI police cars, the police helicopter)
 
 local notify, feed
 
@@ -224,8 +226,9 @@ function HeatService.Reduce(player, amount, reason)
 	end
 end
 
-function HeatService.RegisterEye(part)
-	eyes[part] = true
+-- range: how far this eye sees (studs); a cop's SIGHT_RANGE if left out.
+function HeatService.RegisterEye(part, range)
+	eyes[part] = type(range) == "number" and range > 0 and range or SIGHT_RANGE
 end
 
 function HeatService.UnregisterEye(part)
@@ -236,9 +239,9 @@ local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 losParams.IgnoreWater = true
 
-local function canSee(fromPos, target)
+local function canSee(fromPos, target, range)
 	local toTarget = target.Position - fromPos
-	if toTarget.Magnitude > SIGHT_RANGE then
+	if toTarget.Magnitude > (range or SIGHT_RANGE) then
 		return false
 	end
 	local hit = Workspace:Raycast(fromPos, toTarget, losParams)
@@ -248,7 +251,7 @@ end
 local function tick()
 	-- Everything that isn't a wall: characters and cars never block sight.
 	local exclude = { Workspace:FindFirstChild("Vehicles") }
-	local copEyes = {}
+	local copEyes = {} -- { position, range }
 	local playerCops = false
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p.Character then
@@ -258,13 +261,13 @@ local function tick()
 			playerCops = true
 			local root = rootOf(p)
 			if root then
-				table.insert(copEyes, root.Position + Vector3.new(0, 2, 0))
+				table.insert(copEyes, { root.Position + Vector3.new(0, 2, 0), SIGHT_RANGE })
 			end
 		end
 	end
-	for part in pairs(eyes) do
+	for part, range in pairs(eyes) do
 		if part.Parent then
-			table.insert(copEyes, part.Position + Vector3.new(0, 3, 0))
+			table.insert(copEyes, { part.Position + Vector3.new(0, 3, 0), range })
 		else
 			eyes[part] = nil
 		end
@@ -288,7 +291,7 @@ local function tick()
 		if root then
 			local spotted = false
 			for _, eye in ipairs(copEyes) do
-				if canSee(eye, root) then
+				if canSee(eye[1], root, eye[2]) then
 					spotted = true
 					break
 				end

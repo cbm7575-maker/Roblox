@@ -33,6 +33,7 @@ local ORDER = {
 	"RobberToolsService",
 	"PoliceOfficerService", -- officers on foot: ride in the patrol cars, get out, chase, cuff or shoot (before AIPoliceService)
 	"AIPoliceService",
+	"PoliceHeliService", -- the police helicopter at 5 stars (an eye for HeatService; after AIPoliceService)
 	"DisguiseService",
 	"CarBoostService",
 	"CarjackService", -- street carjacking (moving traffic + car-park break-ins)

@@ -487,3 +487,47 @@ local p = wantedPlayer(1, 2, Vector3.new(2200, 1, 0))
 local boat = inBoat(p, "Splash", Vector3.new(2600, 1, 0))
 sim(40, circle(boat.PrimaryPart, Vector3.new(2200, 1, 0), 400, 100))
 check("two cops patrolling: no AI boats (they have the Harbor Patrol)", built("HarborPatrol") == 0, built("HarborPatrol"))'
+
+# More patrol cars from 3 stars (owner, Nov 4): 3 at 3 stars, 4 at 4, 5 at 5, 3 s apart.
+scenario more_stars_more_cars '
+local p = wantedPlayer(1, 3, Vector3.new(200, 3, 0))
+local run = circle(p.Character.HumanoidRootPart, Vector3.new(0, 3, 0), 200, 60)
+sim(7, run)
+check("head start (3 stars: 8 s): nobody yet", patrols() == 0, patrols())
+sim(6, run)
+check("then they come 3 s apart (not 6): two by 13 s", patrols() == 2, patrols())
+sim(4, run)
+check("3 stars: three patrol cars (was two)", patrols() == 3, patrols())
+sim(6, run)
+check("and no more than three", patrols() == 3, patrols())
+p:SetAttribute("Heat", 4)
+sim(4, run)
+check("4 stars: four", patrols() == 4, patrols())
+p:SetAttribute("Heat", 5)
+sim(4, run)
+check("5 stars: five", patrols() == 5, patrols())
+p:SetAttribute("Heat", 2)
+sim(6, run)
+check("back down to 2 stars: one car again", patrols() == 1, patrols())
+check("nobody arrested a runner", ARRESTS == 0, ARRESTS)'
+
+scenario server_cap '
+local a = wantedPlayer(1, 5, Vector3.new(200, 3, 0))
+local b = wantedPlayer(2, 5, Vector3.new(-600, 3, 600))
+local ra = circle(a.Character.HumanoidRootPart, Vector3.new(0, 3, 0), 200, 60)
+local rb = circle(b.Character.HumanoidRootPart, Vector3.new(-800, 3, 600), 200, 60)
+sim(40, function(dt) ra(dt) rb(dt) end)
+check("two players at 5 stars: 8 cars in all (the server cap)", patrols() == 8, patrols())'
+
+scenario one_cop_on_duty '
+copPlayer(10)
+local p = wantedPlayer(1, 2, Vector3.new(200, 3, 0))
+local run = circle(p.Character.HumanoidRootPart, Vector3.new(0, 3, 0), 200, 60)
+sim(30, run)
+check("2 stars with a player cop on duty: no AI car (as before)", built("SunrayPatrol") == 0, built("SunrayPatrol"))
+p:SetAttribute("Heat", 3)
+sim(12, run)
+check("3 stars with one player cop: three cars", patrols() == 3, patrols())
+copPlayer(11)
+sim(5, run)
+check("a second player cop on duty: the AI cars go", patrols() == 0, patrols())'

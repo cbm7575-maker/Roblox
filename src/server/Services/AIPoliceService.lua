@@ -2,7 +2,11 @@
 -- AI patrol cars keep crime exciting when few players are cops.
 --   * Only while fewer than 2 player cops are online and patrolling (a cop away from the keys doesn't
 --     count: ArrestService.IsActiveCop). Per wanted player: 1 car at 1-2 stars (only if there are no
---     such player cops at all), heat - 1 cars at 3+ stars (max 3). At most 6 in the server.
+--     such player cops at all), then 3 cars at 3 stars, 4 at 4 and 5 at 5 (CARS_BY_STARS; owner, Nov 4:
+--     "If you have 3 stars, I think there should be more cops trying to get you"; it was 2, 3 and 3).
+--     From 3 stars they come SPAWN_GAP_HOT seconds apart instead of SPAWN_GAP, so they arrive as a pack.
+--     Coast Guard boats keep the old count (heat - 1, max 3). At most MAX_TOTAL in the server.
+--     (The police helicopter that joins at 5 stars is PoliceHeliService's.)
 --   * Head start: no patrol comes until the player has been wanted (WantedSince, set by HeatService)
 --     for 20 s at 1 star, 14 s at 2, 8 s at 3, 4 s at 4+ (well inside HeatService's 30 + 10 x heat s
 --     escape timer, so patrols get time to search). While waiting, the player attribute
@@ -65,7 +69,9 @@ local Officers = require(ServerScriptService.Services.PoliceOfficerService)
 
 local AIPoliceService = {}
 
-local MAX_TOTAL = 6
+local MAX_TOTAL = 8 -- (was 6: two players at 4 stars now bring 4 cars each)
+local CARS_BY_STARS = { 1, 1, 3, 4, 5 } -- patrol cars per wanted player (1-2 stars: only with no player cop)
+local BOATS_MAX = 3 -- Coast Guard boats per wanted player: heat - 1, at most this many
 local SPAWN_MIN, SPAWN_MAX = 350, 600 -- preferred spawn distance from the target
 local SPAWN_FAR = 900 -- fallback ring when no road is in the preferred band
 local SPAWN_LAST = 150 -- last resort when neither ring has a road: never spawn closer than this
@@ -78,6 +84,7 @@ local ARREST_SECONDS = 3
 local LOST_RANGE = 900
 local LOST_SECONDS = 15
 local SPAWN_GAP = 6 -- seconds between spawns for the same target
+local SPAWN_GAP_HOT = 3 -- the same from 3 stars, so the bigger pack arrives together
 local GONE_WAIT = 15 -- seconds a car whose officers are all down waits before it goes
 
 -- Coast Guard (see the header)
@@ -153,13 +160,14 @@ local function targetInfo(p)
 	return { pos = root.Position, vel = root.AssemblyLinearVelocity, maxSpeed = 120, inCar = false }
 end
 
-local function desiredFor(p, cops)
+-- How many units this wanted player gets: patrol cars on land, Coast Guard boats at sea (see the header).
+local function desiredFor(p, cops, sea)
 	if cops >= 2 then
 		return 0
 	end
-	local heat = p:GetAttribute("Heat") or 0
+	local heat = math.clamp(math.floor(p:GetAttribute("Heat") or 0), 0, #CARS_BY_STARS)
 	if heat >= 3 then
-		return math.min(3, heat - 1)
+		return sea and math.min(BOATS_MAX, heat - 1) or CARS_BY_STARS[heat]
 	end
 	return cops == 0 and 1 or 0
 end
@@ -715,18 +723,19 @@ local function manage()
 	setWaterFilter()
 	for _, p in ipairs(Players:GetPlayers()) do
 		if wanted(p) then
-			local want = desiredFor(p, cops)
 			local info = targetInfo(p)
 			-- Out on the water it's Coast Guard boats, on land patrol cars (each kind leaves the other's
 			-- place by itself: drive / driveBoat).
 			local sea = info ~= nil and atSea(info)
 			atSeaNow[p] = sea or nil
+			local want = desiredFor(p, cops, sea)
 			local have = unitsFor(p, sea)
+			local gap = (p:GetAttribute("Heat") or 0) >= 3 and SPAWN_GAP_HOT or SPAWN_GAP
 			-- Head start: nobody comes until the grace time for this many stars is over.
 			local arriveAt = arrivalTime(p)
 			local waiting = t < arriveAt
 			setETA(p, (waiting and want > 0 and unitsFor(p) == 0) and arriveAt or nil)
-			if info and have < want and not waiting and #units < MAX_TOTAL and os.clock() - (lastSpawnFor[p] or 0) > SPAWN_GAP then
+			if info and have < want and not waiting and #units < MAX_TOTAL and os.clock() - (lastSpawnFor[p] or 0) > gap then
 				if sea then
 					spawnBoatFor(p, info)
 				else

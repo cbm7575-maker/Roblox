@@ -36,6 +36,7 @@ local ORDER = {
 	"ActivityClient",
 	"SkyClient",
 	"AmbienceClient", -- area names, sound beds, background life, the dusk neon wave (needs SettingsClient)
+	"PoliceHeliClient", -- draws PoliceHeliService's helicopters: rotor, beacons, night searchlight, sound (SettingsClient looked up softly)
 	"GPSClient",
 	"ObjectiveClient", -- needs HUDController + GPSClient
 	"HouseClient",
