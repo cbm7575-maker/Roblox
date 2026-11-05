@@ -134,22 +134,36 @@ for example, citizens could get a small tip for "reporting" a bot.
   LUAU=<path to luau.exe> bash tools/logic-tests/robberbots.sh
   ```
 
-**Studio: not run yet.** The owner declined computer access to Studio that evening.
+**Studio (Nov 5 2026, scratch copy of the place, saves off): 32 of 33 PASS, 0 script errors.** The self-driving
+test BotTest / BotTestClient used the real remotes and the real Cuff prompts.
 
-A ready-made self-driving test (scripts `BotTest` and `BotTestClient`) plays the checklist below by itself.
-- Its saves are forced to memory.
-- It only needs Play pressed in a scratch copy of the place.
-- It prints `[BOTTEST] PASS/FAIL` lines.
+Results:
+- **Who's on and when:** no cop means no bots; a cop on duty brings 2, each 2,000+ studs away and posed in
+  its car.
+- **Crimes:** each one trips the alarm, the cop gets DISPATCH, and the store's cooldown is untouched.
+- **On foot:** taser from 10 studs with a clear line, then the Cuff hold. The cop got BOUNTY $630 (VIP), the
+  Coast Feed posted "Flip-Flop Frank was just cuffed", Arrests went +1, and the bot was taken away. Its slot
+  comes back.
+- **Car:** CuffDriver on a boxed-in bot paid BOUNTY $1,093 (Glow Mart bag at night, VIP).
+- **Escapes:** an unseen bot escapes ("gave the cops the slip").
+- **Citizens:** a citizen sees no Cuff prompts and no markers.
+- **Leaving:** with no cop, the bots leave.
 
-The scripts and the step-by-step instructions are in the sessions' shared notes folder
-(robber-bots-handover.md and robber-bots-studio-test/).
+The one miss was a spike strip dropped where the cop stood in the bot's path: the bot re-routed away from
+the cop (by design). A separate check, with the cop stepping away after dropping the strip, flattened a
+fleeing bot's tyres.
 
-What only Studio can show:
-- How the bots look and move.
-- Whether pathfinding gets them to the till.
-- Ragdoll on a taser hit.
-- Hands-up poses.
-- The marker and Cuff prompts on screen.
+Fixes from the run:
+- A bot gets in from anywhere beside its car (BOARD_REACH 9 studs). It used to hop onto its own roof when it
+  came from the far side.
+- No hops right next to its goal.
+
+**Live: published as v11 on Nov 5 2026, about 11:45.**
+- It's commit 6a46f42, synced onto live v10. The 5 shared scripts and Main were checked byte for byte against
+  v8/v10 first.
+- Main = v8 Main plus the RobberBotService line, SyncSha 9df1792f.
+- The live place started cleanly before the publish ("[Main] server ready", no warnings).
+- Servers were not restarted: new servers pick it up.
 
 ## Studio test checklist
 
