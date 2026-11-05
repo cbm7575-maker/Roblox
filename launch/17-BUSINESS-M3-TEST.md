@@ -230,3 +230,30 @@ Set `BizTestCrew` to **false**. P1 owns the Print Shop. P2 goes on duty from PHO
 - On the phone simulator, the HOLD button, strip, PHONE / CAR / END JOB tiles, joystick, jump and SPRINT all fit without overlapping.
 
 **Not seen yet:** LAUNDER, and raids (player cop and AI).
+
+## Two-player Studio test, Nov 5 2026 (Server & Clients, 2 players)
+
+Player1 owned the Print Shop. Player2 stood in as a cop (`testcop`). No server errors or warnings came up during the whole test.
+
+**Player-cop raid:**
+- The warrant read "player cops, 179 s, 1 cop sent".
+- The cop saw "RAID · BREACH THE PRINT SHOP DOOR" and a BREACH prompt. A 6 s hold opened the door ("The door's open! Hold SEARCH at the presses").
+- SEARCH at the presses seized all $9,000, and CoastFeed posted "Police raided Player1's Backlot Print Shop and seized $9,000 in fake bills!".
+- The cop was paid $2,550 ($300 + 25% of $9,000), as designed.
+
+**Hold the door:**
+- A 20 s warrant with the owner inside showed "RAID · HOLD THE DOOR!" counting down. Nothing was seized, and the owner kept the stock.
+- No bonus was paid, because the warrant was shorter than HeldMin (60 s), as designed.
+
+**AI raid (no cop on duty, owner away):**
+- About 75 s after the warrant, the officers took half the stock ($9,000 → $4,500), as designed.
+
+**LAUNDER:**
+- With the car in the bay, the strip read "LAUNDER · HOLD TO LOAD THE BAGS $4,500" and showed the HOLD button.
+- The hold loaded the bags: "$4,500 of fake cash loaded. Drop it at a nail salon: keep away from the police (watch the HEAT meter)".
+- Next came "GET BACK IN YOUR CAR" with a clock, then "DROP AT A NAIL SALON 380 m" with the HEAT meter rising and the GPS route.
+- The drive to the drop and the payout weren't finished in Studio; the logic tests cover them.
+
+**Customer purchase (Palm Grind, same test):**
+- Player2 bought a cold brew: "Cold brew! +25% sprint stamina for 5 minutes. (-$60) Player1 says thanks."
+- Player1 got exactly $42 (70%), and the sign read "Player1's Palm Grind".

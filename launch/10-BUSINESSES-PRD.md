@@ -527,11 +527,19 @@ Each milestone ends with a Studio play test (PC and phone layout) and a short no
 - the GPS readout showing through the job strip;
 - the sync tool, which now loads scripts over 200,000 characters. BusinessClient.lua is 243,873; it's worth splitting into smaller modules before launch.
 
+**Two-player test (same day):**
+- A player-cop raid seized the stock and paid the cop $300 + 25%.
+- Holding the door kept the stock.
+- An AI raid took half.
+- LAUNDER loading, the HEAT meter and the drop route all work.
+- A second player's cold brew paid the owner 70%.
+- No server errors.
+
 **Still to test:**
 - full routes (tour rings and docking);
 - the jet ski rental;
 - paparazzi;
-- LAUNDER and raids;
-- customer purchases by a second player.
+- a launder drop's payout in Studio;
+- the cover charge and VIP booth bought by a second player.
 
 The details are in launch/17, 19 and 20.
