@@ -46,19 +46,32 @@
 --      of RU.VIPHomes (Config.Housing) between NextMin and VIPMax studs away. Every address gets its road length
 --      (RoadGraph's route, never less than the straight line) and its clock (Businesses.RushTimer); the last
 --      one also the road back to the café. A refusal when no address can be found ("NoAddress").
---   3. EACH ADDRESS: "RushLeg" { Id, Leg, Of, Pos, Name, Who (a VIP's name), Vip, Timer, Ends (server time),
---      Level, First, Earned }. Drive there in your own car (the driver's seat of a car whose OwnerUserId is
---      yours, not a boat) and stop in the ring (StopRadius, under StopSpeed). Refused like a taxi fare (the job
---      ends, "Invalid", nothing paid) when the leg was done sooner than the straight line from where it began
---      at the fastest car you drove on it x FastSlack, or VehicleGuard flagged you meanwhile. Else paid:
+--   3. EACH ADDRESS: "RushLeg" { Id, Leg, Of, Pos, Name, Who (a VIP's name), Vip, Drink (what they ordered,
+--      K.DRINKS: the strip's cup), Timer, Ends (server time), Level, First, Earned, Streak (GOLDs in a row so
+--      far), Owner }. Drive there in your own car (the driver's seat of a car whose OwnerUserId is yours, not a
+--      boat) and stop in the ring (StopRadius, under StopSpeed). Refused like a taxi fare (the job ends,
+--      "Invalid", nothing paid) when the leg was done sooner than the straight line from where it began at the
+--      fastest car you drove on it x FastSlack, or VehicleGuard flagged you meanwhile. Else paid:
 --      Businesses.RushPay (the order's pay with the first address, the road back with the last, the tip by the
---      clock, x VIPMult for a VIP), reason "bizjob:<id>:rush", the worker's Empire XP Rush, the owner's books
---      (jobsDone, lifetime, crew cut), "RushPaid" { Pay, Tip, Late, Vip, Name, Leg, Of, Took, Last, Order (this
---      order so far), Count, Earned }. The next address's clock starts at once; after the last, back to 1.
+--      clock, x VIPMult for a VIP, the gold streak, +TipBoost in the owner's rush hour) and, after an order's
+--      last stop, Businesses.PerfectRunBonus (2+ stops, all GOLD), reason "bizjob:<id>:rush", the worker's Empire
+--      XP Rush, the owner's books (jobsDone, lifetime, crew cut), "RushPaid" { Pay, Tip, Bonus (the perfect run),
+--      Medal ("Gold" | "Silver" | "Bronze": Businesses.RushMedal), Streak, Mult (the streak's), Broke (the streak
+--      it ended, 2+), RushHour, Golds (this order's), Late, Vip, Who, Name, Drink, Pos, Leg, Of, Took, Last, Order
+--      (this order so far), Count, Earned }. The next address's clock starts at once; after the last, back to 1.
 --   4. ENDS (BusinessJob "Ended" from BusinessService): out of your car for CarGrace seconds after grabbing
 --      ("NoCarYet") or LeaveGrace once you've driven off ("LeftOwnCar"); no order grabbed for IdleTime
 --      ("Idle"); "Invalid"; and BusinessService's own rules (END JOB, wanted, side, died, the owner leaving,
---      another job taking JobKind).
+--      another job taking JobKind). Coffee.End adds the shift's Report { Orders, Drops, Gold, Silver, Bronze,
+--      PerfectRuns, Vips, Best (the best gold streak), RushDrops (stops made in a rush hour) }.
+--
+-- RUSH HOUR (Config.Businesses.Rush.RushHour; Coffee.Second, once a second): every owner of the café in the server
+-- has a play clock (BusinessService's, x BusinessTimeScale in Studio). Gap seconds of play after their last rush
+-- hour ended (the first: Gap into the session), their café gets a RUSH HOUR for Length (real) seconds: player
+-- attribute BizRushHour = the server time it ends (the clients read it for the banner and the strip), and every
+-- rush-order tip for that owner (theirs, or a crewmate's working for them) gets +TipBoost. BusinessResult
+-- "RushHour" { Id, Until, Owner, OwnerName, Boost } to the owner and anyone working for them there, "RushHourOver"
+-- at the end. Studio: Debug "rushhour" (value = seconds) starts one now at your café.
 --
 -- API (BusinessService calls these; A = its Api table):
 --   Coffee.Style(model, frame, def, A) -> the plate's title TextLabel
@@ -66,7 +79,12 @@
 --   Coffee.Resend(player, job, A)         START JOB pressed again while on it: the HUD again
 --   Coffee.Step(player, job, step, A)     "GrabOn" / "GrabOff"
 --   Coffee.Tick(player, job, t, A)        four times a second (t = os.clock())
+--   Coffee.End(player, job, reason, A)    the job's end: the shift Report
+--   Coffee.Second(dt, A)                  once a second: the rush hours
+--   Coffee.PlayerLeft(player, A)          forget their rush-hour clock
+--   Coffee.Debug(player, cmd, id, value, A) "rushhour" (Studio)
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
@@ -78,6 +96,9 @@ local EconomyService = require(ServerScriptService.Services.EconomyService)
 local Telemetry = require(ServerScriptService.Services.Telemetry)
 
 local Coffee = {}
+
+-- The job kinds this module runs, and the JobKind attribute for each (BusinessService's JOB MODULES).
+Coffee.Kinds = { Rush = "BizRush" }
 
 local RU = Businesses.Rush
 local E = Businesses.Empire
@@ -105,8 +126,29 @@ local K = {
 	CUSTOMERS = { "Coast FM studio", "Seaside Realty", "Dr. Patel", "the lifeguard tower", "Marina Yacht Club", "Ms. Okafor",
 		"Solana Tattoo", "Coach Rivera", "the Sunshine Gym", "Mr. Delgado", "Glow-Up Nails", "Captain Shaw", "Aunt Rosa",
 		"the film crew", "Professor Lane" },
-	VIPS = { "a movie star", "DJ Marlo", "a pop star", "a yacht broker", "the Mayor's aide", "Ms. Vanderbilt" },
+	-- VIP orders' celebrities (made up: the strip's "VIP · STELLA STARR" and the VIP DELIVERED stamp).
+	VIPS = { "Stella Starr", "DJ Marlo", "Rico Diamante", "Lexi Lux", "Captain Neon", "Ms. Vanderbilt", "Kai Sterling" },
+	-- What each address ordered (the strip's cup: "PROFESSOR LANE · ICED LATTE"; 10 letters at most so it fits).
+	DRINKS = { "Iced Latte", "Cold Brew", "Flat White", "Cortado", "Mocha", "Cafecito", "Cappuccino", "Oat Latte", "Espresso",
+		"Matcha", "Cubano", "Chai Latte" },
 }
+
+local R = {
+	next = {}, -- [owner] = play seconds of their next rush hour (cleared in Coffee.PlayerLeft)
+	def = nil, -- the café's Config entry (its Style is "Coffee")
+}
+
+-- The café's Config entry.
+local function cafe()
+	if not R.def then
+		for _, d in ipairs(Businesses.List) do
+			if d.Style == "Coffee" then
+				R.def = d
+			end
+		end
+	end
+	return R.def
+end
 
 ------------------------------------------------------------------ the building (Look 3.0)
 
@@ -458,6 +500,7 @@ local function planOrder(player, job, A)
 		if not stop then
 			break -- (a shorter order beats none)
 		end
+		stop.drink = K.DRINKS[A.rng:NextInteger(1, #K.DRINKS)]
 		table.insert(drops, stop)
 		prev = stop.pos
 	end
@@ -483,6 +526,7 @@ local function toCounter(player, job, A, back)
 	A.fire(player, "Rush", {
 		Id = job.id, Stage = "pickup", Back = back == true, Level = A.levelOf(job.owner, job.def), Owner = job.owner.UserId,
 		OwnerName = job.owner.DisplayName, Count = job.count, Earned = job.earned, Orders = job.orders or 0, Hold = RU.GrabHold,
+		Streak = job.goldStreak or 0,
 	})
 end
 
@@ -491,8 +535,8 @@ local function sendLeg(player, job, A)
 	local d = job.drops[job.leg]
 	A.fire(player, "RushLeg", {
 		Id = job.id, Leg = job.leg, Of = #job.drops, Pos = d.pos, Name = d.name, Who = d.who, Vip = d.vip == true,
-		Timer = d.timer, Ends = Workspace:GetServerTimeNow() + (d.startedAt + d.timer - os.clock()), Level = job.level,
-		First = job.leg == 1, Earned = job.earned,
+		Drink = d.drink, Timer = d.timer, Ends = Workspace:GetServerTimeNow() + (d.startedAt + d.timer - os.clock()),
+		Level = job.level, First = job.leg == 1, Earned = job.earned, Streak = job.goldStreak or 0, Owner = job.owner.UserId,
 	})
 end
 
@@ -507,6 +551,7 @@ local function beginOrder(player, job, A)
 	job.drops, job.leg, job.level = drops, 1, level
 	job.boarded, job.outSince, job.top = false, nil, 0
 	job.orderEarned = 0
+	job.orderGolds = 0 -- (GOLDs at this order's stops: all of them on 2+ stops is a PERFECT RUN)
 	drops[1].startedAt = os.clock()
 	drops[1].from = Businesses.At(job.def, job.def.Layout.Orders)
 	sendLeg(player, job, A)
@@ -527,19 +572,38 @@ local function deliver(player, job, car, t, A)
 	end
 	local level = A.levelOf(job.owner, job.def)
 	local last = job.leg >= #job.drops
-	local pay, tip = Businesses.RushPay(job.def, level, d.road, last and (d.back or 0) or 0, job.leg == 1, took, d.timer, d.vip)
-	local total = pay + tip
+	-- The medal, the gold streak and the owner's rush hour: all decided here (the strip only shows them).
+	local rushHour = Businesses.RushHourOn(job.owner:GetAttribute("BizRushHour"), Workspace:GetServerTimeNow())
+	local hadStreak = job.goldStreak or 0
+	local pay, tip, medal, streak = Businesses.RushPay(job.def, level, d.road, last and (d.back or 0) or 0, job.leg == 1, took,
+		d.timer, d.vip, hadStreak, rushHour)
+	job.goldStreak = streak
+	job.orderGolds = (job.orderGolds or 0) + (medal == "Gold" and 1 or 0)
+	local bonus = last and Businesses.PerfectRunBonus(job.def, level, #job.drops, job.orderGolds) or 0
+	local total = pay + tip + bonus
 	EconomyService.AddCash(player, total, "bizjob:" .. job.id .. ":rush")
 	job.count += 1
 	job.earned += total
 	job.orderEarned = (job.orderEarned or 0) + total
+	local st = job.stats
+	if st then
+		st.drops += 1
+		st[medal] = (st[medal] or 0) + 1
+		st.best = math.max(st.best, streak)
+		st.rushDrops += rushHour and 1 or 0
+		st.vips += d.vip and 1 or 0
+		st.perfectRuns += bonus > 0 and 1 or 0
+	end
 	A.creditOwner(job, player, total)
 	A.addEmpireXP(player, E.XP.Rush)
 	A.progressEvent(player, "BusinessJob", 1)
 	Telemetry.Custom(player, "BizRush_" .. job.id, total)
 	A.fire(player, "RushPaid", {
-		Id = job.id, Pay = pay, Tip = tip, Late = took > d.timer, Vip = d.vip == true, Name = d.name, Leg = job.leg,
-		Of = #job.drops, Took = took, Last = last, Order = job.orderEarned, Count = job.count, Earned = job.earned,
+		Id = job.id, Pay = pay, Tip = tip, Bonus = bonus, Medal = medal, Streak = streak,
+		Mult = Businesses.StreakMult(streak, Businesses.Streak), Broke = hadStreak >= 2 and streak == 0 and hadStreak or nil,
+		RushHour = rushHour, Golds = job.orderGolds, Late = took > d.timer, Vip = d.vip == true, Who = d.who, Name = d.name,
+		Drink = d.drink, Pos = d.pos, Leg = job.leg, Of = #job.drops, Took = took, Last = last, Order = job.orderEarned,
+		Count = job.count, Earned = job.earned,
 	})
 	if job.owner ~= player then
 		A.pushState(job.owner)
@@ -559,7 +623,97 @@ end
 
 function Coffee.Start(player, job, A)
 	job.orders = 0
+	job.goldStreak = 0
+	job.stats = { drops = 0, Gold = 0, Silver = 0, Bronze = 0, best = 0, rushDrops = 0, vips = 0, perfectRuns = 0 }
 	toCounter(player, job, A, false)
+end
+
+-- The job's end (any reason): the shift report's numbers (BusinessJob "Ended" Report).
+function Coffee.End(_player, job, _reason, _A)
+	local st = job.stats or {}
+	return {
+		Report = {
+			Orders = job.orders or 0, Drops = st.drops or 0, Gold = st.Gold or 0, Silver = st.Silver or 0, Bronze = st.Bronze or 0,
+			PerfectRuns = st.perfectRuns or 0, Vips = st.vips or 0, Best = st.best or 0, RushDrops = st.rushDrops or 0,
+		},
+	}
+end
+
+------------------------------------------------------------------ RUSH HOUR (see the header)
+
+-- A rush hour at this owner's café for `seconds` (real) seconds from now: the attribute, and the news to the owner
+-- and to anyone working for them there.
+local function startRushHour(owner, seconds, A)
+	local def = cafe()
+	if not def then
+		return
+	end
+	local untilT = Workspace:GetServerTimeNow() + seconds
+	owner:SetAttribute("BizRushHour", untilT)
+	local info = { Kind = "RushHour", Id = def.Id, Until = untilT, Owner = owner.UserId, OwnerName = owner.DisplayName,
+		Boost = RU.RushHour.TipBoost }
+	A.result(owner, info)
+	for _, p in ipairs(Players:GetPlayers()) do
+		local job = p ~= owner and A.jobOf(p)
+		if job and job.id == def.Id and job.owner == owner then
+			A.result(p, info)
+		end
+	end
+	Telemetry.Custom(owner, "BizRushHour_" .. def.Id, 1)
+end
+
+-- Once a second: every café owner's rush-hour clock (their play seconds), and the ones running out.
+function Coffee.Second(_dt, A)
+	local def = cafe()
+	if not def then
+		return
+	end
+	local RH = RU.RushHour
+	local now = Workspace:GetServerTimeNow()
+	for _, p in ipairs(Players:GetPlayers()) do
+		local untilT = p:GetAttribute("BizRushHour")
+		if type(untilT) == "number" and untilT <= now then
+			p:SetAttribute("BizRushHour", nil)
+			local over = { Kind = "RushHourOver", Id = def.Id, Owner = p.UserId }
+			A.result(p, over)
+			for _, q in ipairs(Players:GetPlayers()) do
+				local job = q ~= p and A.jobOf(q)
+				if job and job.id == def.Id and job.owner == p then
+					A.result(q, over)
+				end
+			end
+		end
+		local play = A.play(p)
+		if play and A.owned(p, def.Id) then
+			local nextAt = R.next[p]
+			if not nextAt then
+				R.next[p] = play + A.rng:NextNumber(RH.Gap[1], RH.Gap[2]) -- (the first: Gap into the session)
+			elseif play >= nextAt and not Businesses.RushHourOn(p:GetAttribute("BizRushHour"), now) then
+				startRushHour(p, RH.Length, A)
+				-- (the next: Gap after this one ends; Length is real time, the clock is play time x the Studio scale)
+				R.next[p] = play + RH.Length * A.timeScale() + A.rng:NextNumber(RH.Gap[1], RH.Gap[2])
+			end
+		end
+	end
+end
+
+function Coffee.PlayerLeft(player, _A)
+	R.next[player] = nil
+end
+
+-- Studio helpers (BusinessService.Debug): "rushhour" (value = seconds) starts one at your café now.
+function Coffee.Debug(player, cmd, _id, value, A)
+	if cmd ~= "rushhour" then
+		return nil
+	end
+	local def = cafe()
+	if not def or not A.owned(player, def.Id) then
+		return "doesn't own Palm Grind"
+	end
+	local seconds = math.clamp(tonumber(value) or RU.RushHour.Length, 5, 1800)
+	startRushHour(player, seconds, A)
+	R.next[player] = (A.play(player) or 0) + seconds * A.timeScale() + RU.RushHour.Gap[1]
+	return string.format("rush hour at your Palm Grind for %ds", seconds)
 end
 
 function Coffee.Resend(player, job, A)

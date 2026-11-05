@@ -1916,7 +1916,8 @@ function PAGES.Empire()
 		local _, _, words = W.item(s, {
 			Name = b.Id, Order = 10 + i * 2,
 			Title = b.Name .. "  ·  LEVEL " .. b.Level,
-			Sub = string.format("+$%d a minute%s  ·  %d jobs done", math.floor(b.Rate + 0.5), b.Busy and " (crew here: +25%)" or "", b.JobsDone),
+			Sub = b.Extra or string.format("+$%d a minute%s  ·  %d jobs done", math.floor(b.Rate + 0.5), b.Busy and " (crew here: +25%)" or "", b.JobsDone),
+			SubColor = b.ExtraColor, -- (BusinessClient: a shady business's dirty cash and raid, M3)
 			Meta = "REGISTER " .. money(b.Register) .. " / " .. money(b.Cap) .. (full and "  ·  FULL" or ""),
 			MetaColor = full and C.Gold or C.Cash,
 			Button = "GPS", ButtonName = "Go", Width = 72,

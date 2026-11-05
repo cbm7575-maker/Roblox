@@ -47,7 +47,15 @@ function DevSync.Run(only)
 				script.Name = e.name
 				created = true
 			end
-			script.Source = source
+			if #source < 200000 then
+				script.Source = source
+			else
+				-- Studio refuses Source over 200,000 characters set from code ("Unable to assign property
+				-- Source"); the script editor's own API takes it (BusinessClient passed that size on Nov 5 2026).
+				game:GetService("ScriptEditorService"):UpdateSourceAsync(script, function()
+					return source
+				end)
+			end
 			script:SetAttribute("SyncSha", e.sha)
 			script.Parent = parent
 			table.insert(report, (created and "NEW " or "UPD ") .. e.parent .. "." .. e.name)

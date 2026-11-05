@@ -171,8 +171,9 @@ The upgrade parts of each level are tagged and switched on per device, the same 
 | | Car Wash | Coffee | Print Shop | Boat Rentals | Nightclub |
 |---|---|---|---|---|---|
 | Price | $25k | $45k | $90k | $120k | $250k |
-| Trickle at Lv 1 → Lv 5 ($/min online) | 60 → 150 | 80 → 200 | 110 → 260 | 130 → 300 | 180 → 420 (×2 at night) |
-| Register size Lv 1 → Lv 5 | $2k → $9k | $3k → $12k | $4k → $15k | $5k → $18k | $8k → $25k |
+| Trickle at Lv 1 → Lv 5 ($/min online) | 60 → 150 | 96 → 240 | 192 → 450 | 256 → 590 | 375 → 875 by day, ×2 at night |
+| Register size Lv 1 → Lv 5 | $2k → $9k | $3.6k → $14.4k | $7k → $26k | $9.6k → $35.4k | $20k → $75k |
+| Trickle-only payback at Lv 1 | ~6.9 h | ~7.8 h | ~7.8 h | ~7.8 h | ~7.8 h (over a day and night) |
 | Job pay ($/min of work) | ~$1,150 | ~$1,250 | ~$1,600 (with the risk) | ~$1,400 | ~$1,500 |
 | Upgrade costs Lv 2–5 | 40% / 60% / 80% / 100% of the price, each level | | | | |
 
@@ -182,7 +183,10 @@ The upgrade parts of each level are tagged and switched on per device, the same 
   - working the job a fair share of the time: about **2–3 hours**;
   - upgrades pay back at about the same rate.
 - **One knob:** `Businesses.RateScale` turns every income up or down at once if the economy runs hot.
-- **Stacking:** owning all five trickles about $1,330/min at Lv 5. That's a big late-game reward for $500k+ of investment plus all the upgrades, and RateScale is there if it's too much.
+- **Nov 4 raise:** Coffee and the Print Shop trickled too slowly for the 6–8 h target (~9.4 h and ~13.6 h). Their trickle and register were raised ×1.2 and ×~1.75 at every level, so both now pay back in ~7.8 h and the registers still take 36–60 minutes to fill. Boat Rentals and the Nightclub get the same treatment when they're built.
+- **The Nightclub's night (M5):** the game's day is 14 minutes, and it's night (the neon on) 42.4% of it. The club's first numbers ($180 → $420, ×2 at night) averaged ~$256 a minute and paid back in ~16 h. Given the same treatment (×~2.08), it averages ~$534 a minute at level 1 over a day and night and pays back in **~7.8 h**. Its registers fill in ~37 minutes (level 1) to ~60 (level 5) on that average: slower by day, twice as fast at night.
+- **Job pay includes the bonuses:** streaks, PERFECTs, medals, special customers, rush hour and perfect runs are inside each job's $/min above, not on top (`launch/18-BUSINESS-FUN-PASS.md`).
+- **Stacking:** owning all five trickles about **$2,305/min** at Lv 5 by day and **$3,180/min** at night (it was $1,330 before the Nov 4 raise, $1,560 before M4 and $1,850 with the Nightclub's first numbers). That's a big late-game reward for $530k of businesses plus ~$1.48M of upgrades, and RateScale is there if it's too much.
 
 ## 10. Screens (phone and PC)
 
@@ -302,7 +306,7 @@ Each milestone ends with a Studio play test (PC and phone layout) and a short no
 
 **What's in: Palm Grind Coffee.**
 - **For sale:** $45,000, no Empire rank needed, on Marina Row (the lot from the first draft, checked again against the place file: clear of Marina Link, the Car Meet, the Courier Depot, every home and the Car Wash).
-- **Levels 1–5** (PRD section 9): trickle $80 → $200 a minute, register $3k → $12k, upgrades $18k / $27k / $36k / $45k. Each level changes the building (section 5):
+- **Levels 1–5** (PRD section 9): trickle $96 → $240 a minute, register $3.6k → $14.4k (the Nov 4 raise; first built at $80 → $200 and $3k → $12k), upgrades $18k / $27k / $36k / $45k. Each level changes the building (section 5):
   1. a counter and two tables;
   2. a terrace with umbrellas;
   3. the drive-through window and its lane, and the neon;
@@ -320,6 +324,214 @@ Each milestone ends with a Studio play test (PC and phone layout) and a short no
 
 **One shared file changed:** `LocomotionClient.lua` (a few lines: the sprint drains slower while `ColdBrewUntil` is ahead).
 
-**Owner's call:** the PRD's own Coffee trickle pays its price back in ~9.4 h online, a little over the 6–8 h target. Kept as written; RateScale or a higher trickle would change it.
+**Owner's call (settled):** the first Coffee trickle paid its price back in ~9.4 h online, a little over the 6–8 h target. The Nov 4 raise (section 9) brought it to ~7.8 h.
 
 **More detail:** the step-by-step Studio test plan and the numbers are in `launch/15-BUSINESS-M2-TEST.md`.
+
+## 18. M3 status (Nov 4, 2026)
+
+**Built locally. Not committed or published, and not tested in Studio yet.** Still behind `Businesses.Live = false`.
+
+**What's in: the Backlot Print Shop, the first shady business.**
+
+**For sale:** $90,000, no Empire rank needed.
+- **It moved.** The first draft's lot turned out to be on Palm Hills ground. It now stands in Rustwater Docks' back streets: on the z = 1650 street, by the container lot.
+- **Checked** against the place file: nothing in its box, 22 studs from the road, 200+ studs from the Hideout, the Chop Shop, the pads, every home and the other businesses.
+
+**Levels 1–5** (section 9): trickle $192 → $450 a minute, register $7k → $26k (the Nov 4 raise; first built at $110 → $260 and $4k → $15k), upgrades $36k / $54k / $72k / $90k. Each level changes the building (section 5):
+1. one old press;
+2. a second press and a paper store;
+3. drying racks and a hidden back door;
+4. a counting room and an armored door (breaching takes 9 s instead of 6);
+5. a full counterfeit floor.
+
+**The job: one shift with PRINT and LAUNDER** (about $1,600 a minute of work at level 1, risk included). The owner asked for jobs that are fun and satisfying, so:
+- **PRINT is a timing game.**
+  - **The holds:** three stations in order. Each is a hold with a gauge and a green band.
+  - **The grades:** let go in the band for PERFECT, anywhere after the minimum for OK. The server times and grades every hold.
+  - **The rewards:** PERFECT prints more bills, and PERFECTs in a row build a streak (×1.05 up to ×1.3, shown on the strip).
+  - **The feel:** a press "ka-chunk", sheets fluttering out, a "+$X DIRTY" pop, and a stack of fake bills on the counting table that grows on the owner's device.
+  - **The stock:** dirty cash is saved per owner (`dirty`). It isn't spendable, and its cap grows with the level.
+- **LAUNDER is a tense drive.**
+  - **Loading:** park your own car in the loading bay and hold LOAD at the cash cart.
+  - **The drive:** take the bags to a drop 800–1,600 studs away (GPS and ring).
+  - **The heat meter:** shown on the strip, it fills near police (player cops, AI patrols, officers, the police HQ) and drains when clear. Full means spotted (1–2 stars). Small random tip-offs on top.
+  - **Wanted:** it doesn't end the run.
+  - **Lost:** an arrest, death, leaving the car or the car going loses the bags.
+  - **The drop:** the clean cash counts up on screen with a register, then the LAUNDERED stamp. A clean run (never spotted) pays +10%.
+  - **Bonuses:** the streak and the clean-run bonus are part of the ~$1,600 average, not on top of it.
+- **The shift summary** when it ends: press runs, PERFECTs, best streak, runs, clean runs, $ printed and earned.
+- **Crewmates** can print into the owner's stock and launder it (20% cut to the owner).
+
+**Police raids** (pillar 3): a warrant can come while the owner's dirty cash is $5,500+.
+- **When:** never in their first 10 minutes, at most every 15 minutes, one per building, likelier the fuller the stock.
+- **Player cops on duty** (not the owner's crew) get the dispatch.
+  - They hold BREACH at the door, then SEARCH at the presses, to seize all the dirty cash.
+  - They're paid $300 each plus 25% of it (a SEIZED $X stamp).
+- **No cop on duty:** an AI raid instead. A police car pulls up and two officers breach and search more slowly, only while nobody holds the door. It takes half the stock.
+- **The owner and crew** get the warning: a toast, a siren, the X flashing red, the 3-minute countdown. They can:
+  - launder stock out;
+  - fight (the normal combat rules);
+  - or hold the door: stay inside. If the warrant runs out with no seizure, it's RAID FAILED: $1,000 and Empire XP for the owner, and $500 and XP for each crewmate who held it with them.
+- **What's at stake:** only the dirty cash. Clean money, the register and upgrades are never touched.
+- **NPC break-ins** never pick a shady business. Collecting the register gives no star (the M3 notes: raids, not collect stars).
+
+**Also:** the map (a violet **X**, a gold ring when it's yours, flashing red in a raid), the EMPIRE app (dirty cash and the raid clock), the manage card (dirty cash, what a run carries, the raid), and the Studio helpers (`dirty`, `raid`, `raid ai`, `endraid`, `testcop`, `heat`).
+
+**One shared file changed:** `PhoneUI.lua` (two lines: the EMPIRE app shows the business's own line when BusinessClient gives one).
+
+**Owner's calls:**
+- The first Print Shop trickle paid its price back in ~13.6 h online, well over the 6–8 h target. The Nov 4 raise (section 9) brought it to ~7.8 h.
+- Player cops get money for a raid but no XP yet. ProgressService has no "raid" XP; adding one is a small change to two shared files.
+
+**More detail:** the step-by-step Studio test plan (one player, two players with a cop, the AI raid alone), the "fun and feel" checklist and the numbers are in `launch/17-BUSINESS-M3-TEST.md`.
+
+## 19. M4 status (Nov 4, 2026)
+
+**Built locally. Not committed or published, and not tested in Studio yet.** Still behind `Businesses.Live = false`.
+
+**What's in: Coastline Boat Rentals, unlocked at Empire rank 2.**
+
+**For sale:** $120,000. Buying needs Empire rank 2; below it the buy card says EMPIRE 2 NEEDED, and the EMPIRE app lists it as "Unlocks at Empire 2".
+- **Where:** on the water, a floating dock just off the end of the first marina pier, beside Marina Boat Sales. A 22-stud gangway joins the pier's end to the dock.
+- **Checked** against the place file: nothing in its box (x 1706..1756, z 1072..1128); the civilian boat pads 6 studs south; Marina Boat Sales' runtime lot 6 studs west.
+- **Map:** a teal **Y**, a gold ring when it's yours.
+
+**The money (section 9's numbers, given the Nov 4 treatment):**
+- **Trickle:** $256 → $590 a minute. **Register:** $9.6k → $35.4k. These are the first $130 → $300 and $5k → $18k, ×~1.97 at every level, as section 9 said Boat Rentals would get.
+- **Payback:** ~7.8 h online on the trickle alone (it was ~15.4 h). Upgrades are $48k / $72k / $96k / $120k.
+- **Stacking:** all five at level 5 now trickle ~$1,850 a minute (it was ~$1,560 before M4). RateScale is there if that's too much.
+
+**Levels 1-5** (section 5's Boat Rentals column), each drawn per device:
+1. a dock, a ticket hut and one small boat;
+2. a second boat and a proper ticket booth;
+3. jet skis for the fleet;
+4. the tour boat (a long canopy boat);
+5. a luxury yacht.
+
+**The job: BOAT TOURS** (about **$1,400 a minute of work** at level 1, every bonus inside). It applies the fun-pass rules:
+- **The boat:** the business's own boat appears in its berth with you at the helm. Nobody can keep it, sell it, race it or take a taxi fare in it.
+  - Levels 1-3: the Marlin speedboat (with a striped canopy at 3).
+  - Levels 4-5: the bigger Moonstone yacht hull (with a canopy at 4, gold trim at 5).
+- **The tourists:** 2-6 of them, by level, in the pedestrians' looks with sun hats. They wait on the pier, hop aboard one by one, and everyone in the server sees them.
+- **The route:** floating buoy rings past the landmarks, and a white GPS line on the water.
+  - The landmarks: the marina, the Sea Dream, the cargo cranes, the beach, the lifeguard towers, the Ferris wheel and the pier's end, Flamingo Beach, Lighthouse Key.
+  - Six routes, picked at random, from ~1,490 studs (level 1) to ~5,500 (the Grand Tour at level 5). Every leg was checked clear of the place.
+  - As you pass each landmark, the tour guide's short, silly line pops up.
+- **PHOTO STOPS:** slow down inside the pink ring until the PHOTO bar fills (under 16 studs/s for 2.5 s).
+  - Glide nearly still (under 8) for 1.5 s of it for **PERFECT**. A new player lands it about 45% of the time.
+  - The tourists' cameras flash for everyone.
+- **The mood meter:** hard turns at speed, rams and running aground upset the tourists (HAPPY %), and they shout.
+- **The dock:** stop in the dock ring and the boat glides into its berth. You get a ★ / ★★ / ★★★ stamp, the pay counting up, and confetti on ★★★. Then the tourists step off and cheer.
+- **The rating:** ★ inside par, ★ every photo PERFECT, ★ the tourists 80%+ happy.
+- **The tip:** up to 40% of the tour's pay, from time, photos and mood. ★★★ tours in a row raise it ×1.1 → ×1.3.
+- **Special tours,** about 1 in 8:
+  - **Celebrity Tour:** a named star aboard; ×3 tip on ★★★.
+  - **Fishing Party:** its own slow route with two fishing stops, and a bonus.
+  - **Sunset Tour:** at dusk and at night only; ×1.3 pay.
+- **NEXT TOUR | END** at the dock, and the shift report: tours, ★★★, best streak, photos, PERFECTs, tourists, % happy, specials.
+- **The rules:** the server decides every ring, photo, mood, star and dollar, and checks every leg against the boat's top speed (as a taxi fare).
+  - It ends on END JOB, wanted, arrest, death, 15 s out of the boat, or 3 minutes idle at the dock.
+  - The boat and the tourists always go with it. Crewmates can run it for the owner (the 20% cut).
+
+**The jet ski rental** (section 6): $150 for 10 minutes on the game's own Splash Jet Ski, at the JET SKI RENTALS stand.
+- It appears in a rental slot with you aboard, and a timer counts down on the HUD. A warning comes at 1 minute, then it goes.
+- It also goes back after 60 s off it.
+- Nobody else can sit on it, and it can't race, take fares or be kept or sold.
+- The money: 70% to the featured owner, the customer-XP cap, the rest a sink (the shared path).
+
+**Also:** NPC break-ins at the ticket booth's till, the featured-owner plate, and Studio helpers: `rank` (set your Empire rank), `tour` (force a special), `route`, `mood`, `rentleft`, and `BusinessTimeScale` (it now also scales a new rental's 10 minutes).
+
+**One shared file changed:** `Config/Sounds.lua` (two pitched cues, `TourShutter` and `TourHorn`; no new assets).
+
+**Owner's calls:**
+- **The trickle raise:** applied to Boat Rentals as section 9 said (×~1.97). Keep it, or go back to $130 → $300?
+- **The yacht hull:** levels 4-5 run tours in the Moonstone yacht's hull. Players can only *buy* that yacht after 4 big heists; here it's the business's boat and stays at the dock.
+- **The bonuses' share:** the streak and the specials are worth only ~2.5% of the tour average (the tip is a smaller share of a tour than of a wash).
+
+**More detail:** the step-by-step Studio test plan, the fun and feel checklist and the numbers are in `launch/19-BUSINESS-M4-TEST.md`.
+
+## 20. M5 status (Nov 5, 2026)
+
+**Built locally. Not committed or published, and not tested in Studio yet.** Still behind `Businesses.Live = false`.
+
+**What's in: the Afterglow Nightclub, unlocked at Empire rank 3.** With it, all five businesses are built.
+
+**For sale:** $250,000. Buying needs Empire rank 3; below it the buy card says EMPIRE 3 NEEDED.
+- **Where:** on the beach side of the boardwalk, across Highway 1 from downtown, facing west over the boardwalk. Club Nova (the heist) is 426 studs south.
+- **Checked** against the place file: nothing in its box (x 1125..1175, z 327..383). The boardwalk's palm row is 9 studs in front (the palms let cars through). The highway is 95 studs in front, so the limo drives across the sand and the boardwalk to reach it.
+- **Map:** a pink **V**, a gold ring when it's yours. Not N: the minimap's north marker is a round N on its edge, and an owned blip pinned to the edge would look the same.
+
+**The money:**
+- **Trickle:** $375 → $875 a minute by day, **×2 at night**. **Register:** $20k → $75k.
+- **Night** is 42.4% of the game's 14-minute day (worked out from WorldService). On that average, the club makes ~$534 a minute at level 1 and pays its $250,000 back in **~7.8 h** online, like the others.
+- The registers take ~37 minutes (level 1) to ~60 (level 5) to fill on average: slower by day, twice as fast at night.
+- **Upgrades:** $100k / $150k / $200k / $250k.
+- **Stacking:** all five at level 5 now trickle ~$2,305 a minute by day and ~$3,180 at night. RateScale is there if that's too much.
+
+**Levels 1-5** (section 5's Nightclub column), drawn per device:
+1. a small bar and house music (a chalkboard by the door);
+2. dance floor lights: colour panels glowing behind the front glass, uplights on the facade;
+3. the DJ booth on the marquee, searchlights on the roof, neon round the AFTERGLOW sign;
+4. the VIP balcony: two wings over the marquee with lounge chairs;
+5. a rooftop pool party.
+
+**The job: VIP PICKUPS** (about **$1,500 a minute of work** at level 1, every bonus and the night inside it):
+- **The limo:** the club's own long luxury car (the Silver Egret body in black, pink neon from level 3, white and gold at level 5) appears in its LIMO bay with you at the wheel. Nobody can keep, sell or race it.
+- **The pickup:** a celebrity waits at the mansion, the villa, the penthouse, an apartment tower or a hotel's kerb, 600-1,700 studs away. Stop in the gold ring: they walk to the limo and get in.
+- **The ride back:** the VIP's **COMFORT** meter. Hard turns at speed, crashes, jumps and camera flashes lower it; calm driving brings it back. The VIP complains in a bubble.
+- **Paparazzi**, about 3 rides in 10: 1-2 dark SUVs with PAPARAZZI over the roof chase you (NPC drivers). Get 230 studs away from all of them for 3 seconds: **LOST THEM!** and a $250 bonus. Close by they flash their cameras.
+- **The red carpet:** stop in the ring at the club. How close you stop to the VIP mark is the grade: **PERFECT** (within 3 studs), GOOD (7) or OK. The VIP walks the carpet, the press's cameras flash, the crowd sting plays, the stamp and the count-up.
+- **The rating:** ★ on time, ★ a smooth ride (80%+ comfort), ★ a PERFECT stop. The tip is up to 30% of the pay. ★★★ in a row raise it ×1.1 → ×1.3.
+- **At night** VIP pickups pay ×1.25.
+- **Special VIPs**, about 1 in 8: the **Superstar** (★★★ for tip ×3), the **Tabloid Star** (paparazzi always come, the bonus doubled), **Late for the Show** (a tighter clock, the tip doubled).
+- **NEXT VIP | END** at the club, and the shift report.
+- **The rules:** the server decides every grade, star and dollar, and checks both legs against the limo's top speed (as a taxi fare). It ends on END JOB, wanted, arrest, death, 15 s out of the limo on a pickup or a ride, or 3 minutes idle at the club. Crewmates can run it for the owner (the 20% cut).
+
+**The club** (section 6):
+- **Cover charge $50** at the velvet rope: you walk into the club's inside. It's built far off the map only while someone's in it (like home insides), so it never loads for anyone else. Inside: the dance floor (its tiles light up from level 2), the bar, the DJ (level 3), the balcony (4), the pool corner (5), a few dancers, the music (the Neon FM tracks), the lights. It's a safe zone. EXIT or LEAVE takes you back outside. A pass lets you back in free for 30 minutes. Owners and their crew walk in free.
+- **VIP booth $250** inside: a private booth for you and your crew for 15 minutes. Anyone else who walks in is shown out. Owners book it free.
+- Both pay 70% to the featured owner, with the customer-XP cap, as the other services.
+
+**The shady back room:**
+- After dark, a card game in the back room makes **dirty cash** in the safe: $80 a minute at level 1 (up to $140), until the safe is full ($8k → $14k). That's ~$34 a minute on average: a small shady extra.
+- **WASH** it at the safe (a 4-second hold, the owner only): up to $2,500 (level 1) goes through the tills into your pocket, clean, every 5 minutes.
+- **Police raids** on it, with the Print Shop's raid code (now shared): a warrant can come while the safe holds $4,000+. Cops breach the back-room door and search the safe; the AI fallback; hold the door from inside the club building, or wash it out first. A raid only ever takes the back-room cash, never the register.
+- NPC break-ins still come for the club's legit till.
+
+**Also:** the Empire 3 gate, the EMPIRE app and the manage card (the night ×2 and the back room), and Studio helpers: `celeb`, `papz`, `comfort`, `night`, `pickup`, `backroom`, `washready`, `booth`, `club`, and `raid` / `endraid` with "Nightclub".
+
+**Shared files changed:**
+- `CombatService.lua`: 3 lines in `isSafe` (the club's inside is a safe zone: player attribute `BizClub`).
+- The Print Shop's raid code moved, unchanged, into `BusinessJobs/Raids.lua` (a business file), so both buildings share it.
+
+**Owner's calls:**
+- **The trickle treatment:** applied to the Nightclub (×~2.08, ~7.8 h payback over a day and night). Keep it, or go back to $180 → $420?
+- **Stacking:** all five at level 5 now make ~$2,305 a minute by day and ~$3,180 at night. Too much? RateScale turns it down.
+- **The back room:** a small shady extra (~$34 a minute on average at level 1) with the raid risk. Bigger, smaller, or keep?
+- **Map letter V** instead of N (the north marker clash). OK?
+
+**More detail:** the step-by-step Studio test plan, the fun and feel checklist and the numbers are in `launch/20-BUSINESS-M5-TEST.md`.
+
+## 21. Studio test of M3–M5 (Nov 5, 2026)
+
+**Tested in a scratch copy of the place, on PC and the iPhone 7 simulator.** No server errors came from any business code.
+
+**What worked:**
+- the boat tour's start, boarding and mood;
+- the Nightclub's VIP pickup, comfort, red carpet pay, shift report and the club inside;
+- the Print Shop's PERFECT timing hold;
+- the phone layout of the job HUD.
+
+**Fixed:**
+- the GPS readout showing through the job strip;
+- the sync tool, which now loads scripts over 200,000 characters. BusinessClient.lua is 243,873; it's worth splitting into smaller modules before launch.
+
+**Still to test:**
+- full routes (tour rings and docking);
+- the jet ski rental;
+- paparazzi;
+- LAUNDER and raids;
+- customer purchases by a second player.
+
+The details are in launch/17, 19 and 20.

@@ -77,6 +77,14 @@ Sounds.Effects = {
 	Checkpoint = { Id = 9126073001, Volume = 0.6, Looped = false }, -- Synth Sparkle Tone High Pitch Bell Tone Ding (ProSoundEffects, 1.2 s)
 	RadioTune = { Id = 9116276051, Volume = 0.14, Looped = false, Pitch = 1.6, PitchVar = 0.1 }, -- the short burst of static when the radio changes station: the Zap crackle (Lightning Flashes Quick Electrical Bursts 11) pitched up, quiet, and cut off after 0.22 s by SoundClient. Set Id = 0 to have a plain click instead
 
+	-- The Car Wash (BusinessClient; Nov 4 2026). No new assets: checked ones above, pitched into new cues.
+	WashHiss = { Id = 9112855439, Volume = 0.3, Looped = true, Pitch = 1.45, MinDistance = 10, MaxDistance = 90 }, -- the hose's hiss while SPRAY / RINSE is held: Rain On Water 2 (the Rain loop above) pitched up (Loop at the nozzle)
+	WashSqueak = { Id = 9120397746, Volume = 0.28, Looped = false, Pitch = 2.1, PitchVar = 0.12, MaxDistance = 60 }, -- a sponge squeak on every SCRUB tap: the Skid tyre squeal pitched right up (BusinessClient cuts it off after 0.2 s)
+	WashPop = { Id = 9126073001, Volume = 0.4, Looped = false, Pitch = 1.5, PitchVar = 0.08, MaxDistance = 60 }, -- a dirty spot scrubbed clean: the Checkpoint ding pitched up
+	-- Boat tours (BusinessClient, M4). No new assets: checked ones above, pitched into new cues.
+	TourShutter = { Id = 9119717523, Volume = 0.45, Looped = false, Pitch = 1.6, PitchVar = 0.1, MaxDistance = 60 }, -- a camera shutter at a photo stop: the Click (Switch Click On Or Off Toggle Button 2) pitched up to a snap
+	TourHorn = { Id = 9113019382, Volume = 0.6, Looped = false, Pitch = 0.5, MaxDistance = 300 }, -- the tour boat casting off: the car Horn pitched right down to a ship's horn
+
 	-- Weather / world ambience
 	Rain = { Id = 9112855439, Volume = 0.4, Looped = true }, -- Rain On Water 2 (ProSoundEffects, 36 s steady heavy rainfall, tagged "Loop")
 	Thunder = { Id = 9120021818, Volume = 0.6, Looped = false }, -- Thunder Sharp Striking Rumbling Crackling 1 (ProSoundEffects, 6.4 s strike + long rumble)

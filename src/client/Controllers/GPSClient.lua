@@ -306,7 +306,7 @@ end
 -- them (missions show distances on their own markers; the escape countdown and the prison / job timers
 -- matter more).
 local BANNER_OWNERS = { { "Mission", "Banner" }, { "Objective", "Escape" }, { "LawUI", "Prison" }, { "ActivityUI", "Job" },
-	{ "BigScore", "Status" } }
+	{ "BigScore", "Status" }, { "Business", "Strip" } } -- (Business: Empire's job line, which shows its own distance)
 local function bannerBusy()
 	local playerGui = player:FindFirstChild("PlayerGui")
 	for _, path in ipairs(BANNER_OWNERS) do

@@ -3,7 +3,17 @@
 -- Config.Businesses). The server decides everything here; BusinessClient only asks, and draws the cards, the
 -- wash mini-game, the level props, the job HUD and the alerts. M1 = the foundation plus the Car Wash. M2 = Palm
 -- Grind Coffee: its building and its job (RUSH ORDERS) are in the job module Services.BusinessJobs.Coffee
--- (see JOB MODULES below); the cold brew goes through the same customer path as the shine (CUSTOMERS).
+-- (see JOB MODULES below); the cold brew goes through the same customer path as the shine (CUSTOMERS). M3 = the
+-- Backlot Print Shop, the first shady business: its building, its shift (PRINT and LAUNDER, the dirty cash) and
+-- its POLICE RAIDS are all in the job module Services.BusinessJobs.PrintShop; this file only hands it the hooks
+-- listed under JOB MODULES, saves its dirty cash and keeps it out of NPC break-ins. M4 = Coastline Boat Rentals
+-- (Empire rank 2 to buy): its floating dock, its job (BOAT TOURS on water checkpoints) and its customer service
+-- (the JET SKI RENTAL) are in the job module Services.BusinessJobs.BoatRentals; the rental is paid through this
+-- file's customer path (CUSTOMERS), handed over as Api.serveCustomer. M5 = the Afterglow Nightclub (Empire rank 3 to
+-- buy): its building, its job (VIP PICKUPS in the club's limo, with paparazzi), the club's inside (the COVER CHARGE and
+-- the VIP BOOTH) and its shady BACK ROOM are in the job module Services.BusinessJobs.Nightclub; the back room's police
+-- raids run on the Print Shop's raid code, now shared as Services.BusinessJobs.Raids. Here: its register fills
+-- def.NightMult times as fast at night (settle, pushState: isNight), and the customer path takes the booth's own words.
 --
 -- LAUNCH SWITCH: runs in Studio always, in a live server only when Config.Businesses.Live is true. Off, Init
 -- sets ReplicatedStorage attribute BusinessesOn = false and does nothing else (no buildings, no remotes), and
@@ -12,16 +22,18 @@
 -- OWNERSHIP AND SAVING
 --   * Saved per player as data.businesses[id] = { level (1-5), register ($, may hold cents), lifetime (all the
 --     owner ever earned from it: collections, their own job pay, crew cuts, customer money), jobsDone,
---     boughtAt (os.time) }, plus data.empireXP. DataService's default() has businesses = {} and empireXP = 0,
+--     boughtAt (os.time), dirty (shady businesses only: the dirty cash in stock, M3) }, plus data.empireXP. DataService's default() has businesses = {} and empireXP = 0,
 --     so an old save loads with none. Entries for businesses not Enabled in the config are left in the save
 --     untouched and simply not used. Many players can own the same business; one of each per player.
 --   * Player attributes: "Businesses" = owned ids, comma separated ("CarWash"; nil for none), "Empire" = Empire
 --     rank 1-10, "EmpireXP", "EmpireTitle" ("Mogul" at 7, "Kingpin of the Coast" at 10; nil before),
---     "JobKind" = "BizWash" | "BizDetail" | "BizRush" while on a business job (so missions, races, the Big
+--     "JobKind" = "BizWash" | "BizDetail" | "BizRush" | "BizPrint" | "BizLaunder" | "BizTour" | "BizVip" (any "Biz..." kind is a
+--     business job) while on a business job (so missions, races, the Big
 --     Score and the HUD treat you as busy, as with a taxi shift), "BizJob" = that business's id, "BizAlarm" =
 --     ids of businesses with a break-in you should respond to (yours or a crewmate's; comma separated),
 --     "ShineUntil" = server time your car stops sparkling, "ColdBrewUntil" = server time your cold brew wears
---     off (LocomotionClient's sprint drains slower until then).
+--     off (LocomotionClient's sprint drains slower until then), "BizRentalUntil" = server time your rented jet ski
+--     goes back (M4), "BizTourHappy" = your boat tour's tourists' mood, 0-100 (M4, while on a tour).
 --   * Buying (at the door, the buy card's BUY): Enabled, not owned yet, Empire rank >= the business's Unlock,
 --     within Config.Reach of the lot, the cash (EconomyService.Spend, reason "bizbuy:<id>"). +Empire XP Buy,
 --     ProgressService "BuyBusiness", saved right away.
@@ -30,7 +42,9 @@
 --
 -- THE REGISTER (trickle). Every Config.TickSeconds, and before every action, each owner in the server is
 -- settled: Businesses.Accrue(the time since the last settle, x BusinessTimeScale in Studio), up to the
--- level's cap, +BusyBonus while one of the owner's crewmates is within Reach of the lot. A player's clock
+-- level's cap, +BusyBonus while one of the owner's crewmates is within Reach of the lot, x def.NightMult while it's
+-- night (M5, the Nightclub: Workspace IsNight, or in Studio the override BizTestNight; the whole stretch since the
+-- last settle counts as what it is at the settle, at most 90 s off at dusk and dawn). A player's clock
 -- starts when their save loads and stops when they leave: nothing accrues offline. COLLECT at the business
 -- (EconomyService.AddCash, reason "biz:<id>"), or from the phone ("Remote") at Empire rank RemoteCollect+.
 -- "Full" toast once per crossing of the cap.
@@ -66,44 +80,82 @@
 --   "bizcrewcut:<id>", BusinessResult CrewCut). Job pay uses the OWNER's level (JobMult) and RateScale. The
 --   owner's jobsDone / lifetime count it. The worker gets the job's Empire XP.
 --   * WASH: the server picks a free bay (Businesses.BayCount at the owner's level; one worker per bay across
---     every owner and crewmate at that building) and sends BusinessJob "Wash" { Id, Bay, Spots, Level, Owner,
---     OwnerName, Ready (seconds until the car is in), Seed, Count }. The customer car exists only on the
---     worker's device. Steps come back as RequestBusiness("Step", step, arg): "SprayOn" / "SprayOff",
---     "Scrub" (arg = spot 1..Spots), "RinseOn" / "RinseOff". The server: steps in order; nothing before the
---     car is in; a hold counts when it lasted SprayHold / RinseHold (less HoldSlack) by the server's clock,
---     else BusinessJob "WashStep" { Stage, Again = true } and the wash is no longer clean; a scrub tap counts
---     at most every ScrubGap seconds, ScrubTaps per spot; the worker within BayRange of the bay for every
---     step. After the rinse: under MinTime from "car in" that car isn't paid (warned; WashPaid with Pay 0 and
---     Refused = true; the job goes on),
---     else paid: Businesses.WashPay (the tip when clean = both holds in one go and inside TipTime), reason
---     "bizjob:<id>:wash", BusinessJob "WashPaid" { Pay, Tip, Clean, Took, Count, Earned }. Then NEXT CAR
---     ("Job" Wash again), DELIVER ("Job" Detail) or END ("EndJob"). Walking further than LeaveRange from the
---     bay (or sitting down) for LeaveGrace seconds ends it ("LeftBay").
+--     every owner and crewmate at that building), rolls the customer (a first name from K.FIRST_NAMES, a special
+--     one about 1 in 8: Businesses.RollSpecial) and every spot's dirt (Businesses.RollDirt), and sends
+--     BusinessJob "Wash" { Id, Bay, Spots, Dirt (a dense list of "Mud" | "Bugs" | "Bird"), Special, Name,
+--     Streak (★★★ washes in a row so far), Level, Owner, OwnerName, Ready (seconds until the car is in), Seed,
+--     Count }. The customer car exists only on the worker's device. Steps come back as RequestBusiness("Step",
+--     step, arg): "SprayOn" / "SprayOff", "Scrub" (arg = spot 1..Spots), "RinseOn" / "RinseOff". The server:
+--     steps in order; nothing before the car is in; SPRAY and RINSE are timing gauges graded on the server's
+--     clock (Businesses.WashGrade): EARLY (before the gauge's Min) didn't count, "WashStep" { Stage, Again =
+--     true, Early = true } and the hold starts over; else PERFECT or OK, "WashStep" { Stage, Grade, Step } for
+--     the spray (the rinse's grade rides on WashPaid); a scrub tap counts at most every ScrubGap seconds,
+--     Businesses.WashTaps(its dirt) per spot; the worker within BayRange of the bay for every step. After the
+--     rinse: under MinTime from "car in" that car isn't paid (warned; WashPaid with Pay 0 and Refused = true;
+--     the job goes on, the streak back to 0), else paid: Businesses.WashPay (pay + the bird-mess spots; the
+--     tip from the grades and the quick ★, the special's multipliers and the ★★★ streak), reason
+--     "bizjob:<id>:wash", BusinessJob "WashPaid" { Pay, Tip, Stars, Grade (the rinse's), Perfects, Quick,
+--     Streak, Mult (the streak's), Special, Name, Took, Count, Earned }. Then NEXT CAR ("Job" Wash again),
+--     DELIVER ("Job" Detail) or END ("EndJob"). Walking further than LeaveRange from the bay (or sitting down)
+--     for LeaveGrace seconds ends it ("LeftBay").
 --   * DETAIL DELIVERY: a real customer car (CarBuilder, a Config.Detail.Cars pick for the owner's level)
 --     appears on the PICK-UP box (refused "PickupBlocked" when something's on it) with the worker at the
 --     wheel. Car attributes BizCar = true, BizDriverUserId, BizId; no OwnerUserId (so no taxi, race, garage,
 --     ride or Chop Shop: the Chop Shop only buys CarBoostService's tracked cars), its DrivePrompt and
 --     RidePrompt removed and a "BizDrivePrompt" ("Drive", the way back in; only the worker may sit, anyone
---     else is unseated). The address: JobService.RoadsideSpot, DistMin-DistMax studs away (BusinessJob
---     "Detail" { Id, Pos, Name, Est, Car, Level }). Stop in its ring (StopRadius, under StopSpeed): refused
---     like a taxi fare when reached sooner than the straight line at the car's nitro top speed x FastSlack or
---     after VehicleGuard flagged it ("Invalid"); else Businesses.DetailPay (speed tip less DentCost per dent;
---     dents: see Config.Detail), reason "bizjob:<id>:detail", BusinessJob "DetailPaid" { Pay, Tip, Dents,
---     Took, Name, Count, Earned }, and the job ends ("Delivered"). Out of the car LeaveGrace seconds
---     ("LeftCar"), the car gone or sunk ("CarGone"), and the rules below end it too. The car always goes
---     with the job (everyone in it put out first: VehicleService.EjectAll).
+--     else is unseated). One in five (Detail.Sports.Chance) is a sports car from Detail.Sports.Cars instead.
+--     The address: JobService.RoadsideSpot, DistMin-DistMax studs away (BusinessJob "Detail" { Id, Pos, Name,
+--     Est, Car, Level, Sports, Streak (clean deliveries in a row so far), Owner }). Stop in its ring
+--     (StopRadius, under StopSpeed): refused like a taxi fare when reached sooner than the straight line at the
+--     car's nitro top speed x FastSlack or after VehicleGuard flagged it ("Invalid"); else Businesses.DetailPay
+--     (speed tip less the dents, x1.5 for a sports car, the no-dent streak; dents: see Config.Detail), reason
+--     "bizjob:<id>:detail", BusinessJob "DetailPaid" { Pay, Tip, Dents, Stars, Streak, Mult, Sports, Took,
+--     Name, Count, Earned }. The worker is put out (VehicleService.EjectAll), the customer takes the car (it
+--     goes HandOver seconds later: the worker's device draws them walking out to it), and the SHIFT GOES ON
+--     (stage "back"): call your own car, drive back and START the next car or wash; IdleTime seconds without
+--     one ends it ("NoNextCar"). Out of the car LeaveGrace seconds ("LeftCar"), the car gone or sunk
+--     ("CarGone"), and the rules below end it too. The car always goes with the job (everyone in it put out
+--     first: VehicleService.EjectAll).
 --   * RUSH ORDERS (Palm Grind, M2): Services.BusinessJobs.Coffee runs it (JobKind "BizRush"); see its header.
+--   * PRINT and LAUNDER (the Print Shop, M3): Services.BusinessJobs.PrintShop runs the shift (JobKind "BizPrint"
+--     at the shop, "BizLaunder" on a run with the bags); see its header. A launder run is the one job being
+--     wanted doesn't end (Module.KeepWanted): getting spotted is its risk, and the run goes on.
 --   * Every job ends on: END JOB ("Player"), wanted ("Wanted"), off the Civilian side ("Side"), death or a new
 --     character ("Died"), the owner leaving or no longer owning it ("OwnerLeft"), leaving the game. BusinessJob
---     "Ended" { Id, Reason, Jobs, Earned }; "Dent" { Dents } during a delivery. A rush job also ends when
---     another job takes the JobKind attribute (a taxi shift started on the way: "Busy").
+--     "Ended" { Id, Reason, Jobs, Earned, XP (the shift's Empire XP), Kind (the last job kind: CONTINUE starts
+--     it again), Owner (whose business), Report (the shift's numbers: the Car Wash's { Washes, Stars3,
+--     Perfects, BestWash, Specials, Deliveries, Dents, Clean, BestDetail }; a job module's own, from its End
+--     hook: Palm Grind's, or the Print Shop's Summary) }: BusinessClient's SHIFT REPORT card. "Dent" { Dents }
+--     during a delivery. A rush job also ends when another job takes the JobKind attribute (a taxi shift
+--     started on the way: "Busy"). Empire XP a worker earns during a shift (this file's, or a job module's
+--     through Api.addEmpireXP) is counted on the job (job.xp) for the report.
 --   * START JOB only offers (and the server only takes) the kinds in the business's Config Jobs list.
 --
--- JOB MODULES (M2+): a business whose Style has a module in Services.BusinessJobs (Coffee) gets its building
--- from Module.Style(model, frame, def, Api) and its job from Module.Start / Step / Tick / Resend (player, job,
--- ..., Api). Api is this file's own helpers, handed over in Init (levelOf, creditOwner, addEmpireXP,
--- progressEvent, endJob, refuse, pushState, fire = BusinessJob to the worker, service, the Build helpers...).
--- A module that won't load leaves its business unbuilt (a warning in Output), never the others.
+-- JOB MODULES (M2+): a business whose Style has a module in Services.BusinessJobs (Coffee, PrintShop) gets its
+-- building from Module.Style(model, frame, def, Api) and its job from Module.Start / Step / Tick / Resend
+-- (player, job, ..., Api). Api is this file's own helpers, handed over in Init (levelOf, creditOwner,
+-- addEmpireXP, progressEvent, endJob, refuse, pushState, fire = BusinessJob to the worker, result =
+-- BusinessResult to anyone, service, owned, sameCrew, play (a player's play clock), the Build helpers...).
+-- A module that won't load leaves its business unbuilt (a warning in Output), never the others. Optional hooks
+-- (M3), every one called in a pcall so a broken module never stops the rest:
+--   Module.Kinds = { [job kind] = JobKind attribute } the kinds it runs (Coffee: Rush = "BizRush"; the Print
+--     Shop: Print = "BizPrint", Launder = "BizLaunder"). job.mod is the module, job.jobKind the attribute it set.
+--   Module.Switch(player, job, kind, A)  START JOB with another of its kinds while on the job (Print <-> Launder)
+--   Module.KeepWanted(job) -> true: being wanted doesn't end the job right now (a launder run with the bags)
+--   Module.End(player, job, reason, A) -> extra fields for BusinessJob "Ended" (the Print Shop's shift Summary,
+--     Palm Grind's Report: the shift report card)
+--   Module.Init(A)            once, after every building is up (the Print Shop's raid prompts and remotes)
+--   Module.Second(dt, A)      once a second, with the break-ins (the Print Shop's raids, Palm Grind's rush hours)
+--   Module.State(player, def, entry) -> extra fields for that business in BusinessState (Dirty, Raid...)
+--   Module.Alarms(player) -> business ids to add to the player's BizAlarm (a raid they're part of)
+--   Module.PlayerLeft(player, A)  before this file forgets them
+--   Module.Debug(player, cmd, id, value, A) -> an answer string for a Studio helper it knows, else nil
+--   Module.Service(player, def, A)  its business's customer purchase at the BizServicePrompt (M4: Boat Rentals'
+--     jet ski rental; M5: the Nightclub's cover charge; it pays through A.serveCustomer)
+--   Module.Request(player, def, arg, arg2, A)  RequestBusiness("Mod", id, arg, arg2): a request of its own (M5: the
+--     Nightclub's LEAVE inside the club)
+-- (M5 Api: isNight() = night for the businesses, featuredOf(id) = the featured owner and their entry; serveCustomer
+-- takes a 5th argument, the words for the owner's toast, when a business sells more than its Service: the VIP booth.)
 --
 -- CUSTOMERS (PRD section 6). Every player purchase goes through serveCustomer: Spend the price ("biz<kind>:
 -- <id>"), then the featured owner (if in the server and not the buyer) gets Businesses.Split's share
@@ -117,10 +169,16 @@
 --     prisoner, within ColdBrew.Reach). ColdBrewUntil = now + ColdBrew.Seconds; the buyer gets ColdBrew
 --     { Price, Until, Owner }. Refused seated ("ColdBrewOnFoot") or while more than RebuyLeft is left
 --     ("ColdBrewAlready").
+--   * JET SKI RENTAL (Boat Rentals, M4): BizServicePrompt at the JET SKI RENTALS stand; the job module's Service
+--     runs it (BusinessJobs.BoatRentals: the checks, the jet ski for Rental.Seconds, its timer and its end) and
+--     pays through serveCustomer ("bizrental:<id>").
+--   * COVER CHARGE and VIP BOOTH (the Nightclub, M5): BizServicePrompt at the velvet rope (the job module's Service:
+--     into the club's inside, "bizcover:<id>") and the booth's own prompt inside ("bizbooth:<id>", words "a VIP booth").
 --
 -- NPC BREAK-INS (Config.BreakIn): per owner, a play clock (seconds in the server, x BusinessTimeScale in
 -- Studio). First possible at MinPlay + a random part of Window, then Gap + a random part of Window after the
--- last one. Due, it picks the owner's legit business with the fullest register (MinRegister+), only while the
+-- last one. Due, it picks the owner's legit business (Businesses.BreakInEligible: never a shady one, which gets
+-- police raids instead) with the fullest register (MinRegister+), only while the
 -- owner is a living citizen (else tried again Retry later). 1-2 robbers (PedService's looks, a dark beanie
 -- and bandana; Workspace.NPCs, model "BizRobber", attributes NPCKind = "BizRobber", AimTarget, BizId,
 -- BizOwner, Pose) appear at the register. The owner and their crewmates get BusinessResult BreakIn { Id,
@@ -135,9 +193,11 @@
 --
 -- REMOTES
 --   RequestBusiness(action, id, arg, arg2) (client -> server, rate-limited): "State"; "Buy" (id); "Collect"
---     (id, arg "Remote" from the phone); "Upgrade" (id); "Job" (id, arg "Wash" | "Detail" | "Rush", arg2 = the
---     owner's UserId when working for a crewmate); "EndJob"; "Step" (id = the step name, arg = a spot: the
---     wash's, or a rush job's "GrabOn" / "GrabOff"); "Scare" (arg = a robber model).
+--     (id, arg "Remote" from the phone); "Upgrade" (id); "Job" (id, arg "Wash" | "Detail" | "Rush" | "Print" |
+--     "Launder", arg2 = the owner's UserId when working for a crewmate); "EndJob"; "Step" (id = the step name,
+--     arg = a spot: the wash's; a module job's own steps: the rush job's "GrabOn" / "GrabOff", the Print Shop's
+--     "HoldOn" / "HoldOff"); "Scare" (arg = a robber model); "Mod" (id, arg, arg2: the business's job module's own
+--     request, Module.Request: M5, the Nightclub's "Leave").
 --   BusinessCard { Id, Mode, Owner, OwnerName, Level }; BusinessState { At (server time), Scale, XP, Rank,
 --     List = { [id] = { Level, Register, Cap, Rate ($/min now, busy included), Busy, Lifetime, JobsDone, Next
 --     (the next upgrade's price, nil at 5) } } (on join, after every action, every tick);
@@ -148,7 +208,13 @@
 --     JobElsewhere, OnDelivery, OnRush, PickupBlocked, NoAddress, NoCar, RemoteRank, ShineOwnCar, ShineStop,
 --     ShineAlready, ColdBrewOnFoot, ColdBrewAlready }.
 --   BusinessJob (server -> worker): "Wash", "WashStep", "WashPaid", "Detail", "Dent", "DetailPaid", "Ended";
---     rush orders (Coffee): "Rush", "RushStep", "RushLeg", "RushPaid".
+--     rush orders (Coffee): "Rush", "RushStep", "RushLeg", "RushPaid"; the Print Shop's: see PrintShop's header;
+--     boat tours (BoatRentals, M4): "Tour", "TourSeat", "TourGo", "TourStop", "TourPhotoOn", "TourPhoto",
+--     "TourMood", "TourPaid" (see its header).
+--   BusinessResult also carries the Print Shop's raid news (Raid, RaidBreached, RaidSeized, RaidHeld, RaidOver)
+--     and its refusals (No: StockFull, NoStock, NotInBay, BagsAway); Boat Rentals' rental news (Rented, RentalWarn,
+--     RentalOver) and refusals (No: NoBoat, BerthBlocked, RentCivOnly, RentWanted, RentOnFoot, RentAlready,
+--     RentBusy).
 --   Notify keys reused: NotEnoughCash, ActivityCivOnly, ActivityWanted, MissionBusy, GetOutFirst.
 --
 -- STUDIO ONLY (RunService:IsStudio()):
@@ -163,7 +229,19 @@
 --     "register" (value), "xp" (value: add Empire XP), "cash" (value: add cash), "breakin" (now, at id or the
 --     fullest business; value = seconds on its timer; tops the register up to MinRegister), "crew" (value
 --     true / false), "scale" (value), "shine" (clear your ShineUntil), "coldbrew" (clear your ColdBrewUntil),
---     "vip" (your next rush order ends at a VIP home, whatever the level). Returns a short answer string.
+--     "vip" (your next rush order ends at a VIP home, whatever the level), "next" (value "Muddy" | "Classic" |
+--     "Wedding": your next wash customer is that special one; "Sports": your next delivery is a sports car; kept
+--     as your player attribute BizTestNext until used). Palm Grind's own (Coffee.Debug): "rushhour" (a rush
+--     hour at your café now; value = seconds, default RushHour.Length). Returns a short answer string.
+--     The Print Shop's own (PrintShop.Debug, see its header): "dirty" (value: your stock), "raid" (a warrant at
+--     your Print Shop now; value "ai" for the AI raid, or seconds on the warrant), "endraid", "testcop" (value: a
+--     player's Name who counts as an on-duty cop for raids, "" for none), "heat" (value 0-1: your launder run's
+--     heat meter). M4: "rank" (value 1-10: your Empire rank, set exactly; to test the Empire 2 unlock); Boat
+--     Rentals' own (BoatRentals.Debug): "tour" (value "Celebrity" | "Fishing" | "Sunset": your next tour is that
+--     special one; "" clears it), "route" (value a route Id), "mood" (value 0-1: your tour's tourists now),
+--     "rentleft" (value seconds: your jet ski rental's time left). M5, the Nightclub's own (Nightclub.Debug): "celeb",
+--     "papz", "comfort", "night", "pickup", "backroom", "washready", "booth", "club", and "raid" / "endraid" with id
+--     "Nightclub" (see its header).
 
 local CollectionService = game:GetService("CollectionService")
 local HttpService = game:GetService("HttpService")
@@ -201,6 +279,9 @@ local K = {
 	SINK_TIME = 2, -- seconds a customer car may sit in the water
 	NAMES = { "Mrs. Alvarez", "Dr. Patel", "Coach Rivera", "Ms. Okafor", "Mr. Delgado", "Captain Shaw", "Aunt Rosa",
 		"DJ Marlo", "Señor Vega", "Miss Kim", "Uncle Jimmy", "Professor Lane" },
+	-- Wash customers (the tag on the car: "Carla's sedan"; short, so the tag and the strip fit).
+	FIRST_NAMES = { "Carla", "Marco", "Tasha", "Luis", "Jenny", "Omar", "Rosa", "Dev", "Kiki", "Andre", "Paula", "Benny",
+		"Nina", "Hector", "Yara", "Sam", "Lupe", "Theo", "Gabi", "Rico" },
 	BEANIE = Color3.fromRGB(28, 28, 32),
 	BANDANA = Color3.fromRGB(36, 40, 52),
 }
@@ -259,6 +340,15 @@ end
 
 local function testCrew()
 	return RunService:IsStudio() and Workspace:GetAttribute("BizTestCrew") == true
+end
+
+-- Is it night for the businesses (M5: the Nightclub's x2)? Workspace IsNight; in Studio BizTestNight overrides it.
+local function isNight()
+	local test = nil
+	if RunService:IsStudio() then
+		test = Workspace:GetAttribute("BizTestNight") -- (false must stay false: day on demand)
+	end
+	return Businesses.NightNow(Workspace:GetAttribute("IsNight"), test)
 end
 
 local function num(v, default)
@@ -346,6 +436,9 @@ local function sanitize(entry)
 	entry.lifetime = math.max(0, num(entry.lifetime, 0))
 	entry.jobsDone = math.max(0, math.floor(num(entry.jobsDone, 0)))
 	entry.boughtAt = num(entry.boughtAt, 0)
+	if entry.dirty ~= nil then
+		entry.dirty = math.max(0, num(entry.dirty, 0)) -- (M3: a shady business's dirty cash)
+	end
 	return entry
 end
 
@@ -391,6 +484,11 @@ local function publishOwned(player)
 	player:SetAttribute("EmpireXP", math.floor(xp))
 	player:SetAttribute("Empire", rank)
 	player:SetAttribute("EmpireTitle", Businesses.TitleFor(rank))
+end
+
+-- Is this JobKind attribute one of ours (a business job: "BizWash", "BizRush", "BizPrint"...)?
+local function isBizKind(kind)
+	return type(kind) == "string" and string.sub(kind, 1, 3) == "Biz"
 end
 
 local function flagsFor(player, id)
@@ -509,10 +607,11 @@ local function settle(player)
 	S.lastSettle[player] = t
 	local seconds = math.clamp(t - last, 0, Businesses.TickSeconds * 3) * timeScale()
 	local changed = false
+	local night = isNight()
 	for _, def in ipairs(Businesses.List) do
 		local entry = owned(player, def.Id)
 		if entry and seconds > 0 then
-			local register, earned = Businesses.Accrue(def, entry.register, entry.level, seconds, crewmateAt(player, def))
+			local register, earned = Businesses.Accrue(def, entry.register, entry.level, seconds, crewmateAt(player, def), night)
 			if earned > 0 then
 				entry.register = register
 				changed = true
@@ -537,6 +636,7 @@ local function pushState(player)
 		return
 	end
 	local list = {}
+	local night = isNight()
 	for _, def in ipairs(Businesses.List) do
 		local entry = owned(player, def.Id)
 		if entry then
@@ -545,12 +645,20 @@ local function pushState(player)
 				Level = entry.level,
 				Register = math.floor(entry.register * 100) / 100,
 				Cap = Businesses.Cap(def, entry.level),
-				Rate = Businesses.Trickle(def, entry.level, busy),
+				Rate = Businesses.Trickle(def, entry.level, busy, night),
 				Busy = busy,
 				Lifetime = math.floor(entry.lifetime),
 				JobsDone = entry.jobsDone,
 				Next = Businesses.UpgradePrice(def, entry.level),
 			}
+			-- A job module's own numbers for it (the Print Shop: Dirty, Stock, Carry, the raid on it).
+			local mod = Jobs[def.Style or ""]
+			if mod and type(mod.State) == "function" then
+				local ok, extra = pcall(mod.State, player, def, entry)
+				for k, v in pairs(ok and type(extra) == "table" and extra or {}) do
+					list[def.Id][k] = v
+				end
+			end
 		end
 	end
 	local xp = empireXP(player)
@@ -709,6 +817,21 @@ local function destroyCar(job)
 	end
 end
 
+-- A job module's End hook (JOB MODULES): its last word on the job (the Print Shop's bags, its shift summary).
+-- Returns the extra fields it wants in BusinessJob "Ended", or nil.
+local function moduleEnd(player, job, reason)
+	local mod = job.mod
+	if not mod or type(mod.End) ~= "function" then
+		return nil
+	end
+	local ok, extra = pcall(mod.End, player, job, reason, Api)
+	if not ok then
+		warn("[BusinessService] job module End: " .. tostring(extra))
+		return nil
+	end
+	return type(extra) == "table" and extra or nil
+end
+
 local function endJob(player, reason)
 	local job = S.jobs[player]
 	if not job then
@@ -717,13 +840,26 @@ local function endJob(player, reason)
 	S.jobs[player] = nil
 	releaseBay(player)
 	destroyCar(job)
+	local extra = moduleEnd(player, job, reason)
 	if player.Parent == Players then
-		local kind = player:GetAttribute("JobKind")
-		if kind == "BizWash" or kind == "BizDetail" or kind == "BizRush" then
+		if isBizKind(player:GetAttribute("JobKind")) then
 			player:SetAttribute("JobKind", nil)
 		end
 		player:SetAttribute("BizJob", nil)
-		R.job:FireClient(player, "Ended", { Id = job.id, Reason = reason, Jobs = job.count, Earned = job.earned })
+		-- The shift report (see the header): the Car Wash's numbers here; a job module's come from its End hook.
+		local info = { Id = job.id, Reason = reason, Jobs = job.count, Earned = job.earned, XP = job.xp or 0, Kind = job.kind,
+			Owner = job.owner and job.owner.UserId or nil }
+		local st = job.stats
+		if st and not job.mod then
+			info.Report = {
+				Washes = st.washes, Stars3 = st.stars3, Perfects = st.perfects, BestWash = st.bestWash, Specials = st.specials,
+				Deliveries = st.deliveries, Dents = st.dents, Clean = st.clean, BestDetail = st.bestDetail,
+			}
+		end
+		for k, v in pairs(extra or {}) do
+			info[k] = v
+		end
+		R.job:FireClient(player, "Ended", info)
 	end
 end
 
@@ -736,7 +872,7 @@ local function jobBlocked(player)
 	end
 	local kind = player:GetAttribute("JobKind")
 	if player:GetAttribute("Mission") or player:GetAttribute("RacingId") or player:GetAttribute("BigScore")
-		or (kind ~= nil and kind ~= "BizWash" and kind ~= "BizDetail" and kind ~= "BizRush") then
+		or (kind ~= nil and not isBizKind(kind)) then
 		return "MissionBusy" -- one thing at a time (as JobService and MissionService refuse)
 	end
 	return nil
@@ -785,6 +921,41 @@ local function creditOwner(job, worker, amount)
 	end
 end
 
+-- Empire XP for this player, counted on the shift they're on (job.xp: the shift report). Job modules get it as
+-- Api.addEmpireXP.
+local function jobXP(player, amount)
+	addEmpireXP(player, amount)
+	local job = S.jobs[player]
+	amount = math.floor(num(amount, 0))
+	if job and amount > 0 then
+		job.xp = (job.xp or 0) + amount
+	end
+end
+
+-- The Car Wash shift's numbers for the report (made on first use).
+local function statsOf(job)
+	job.stats = job.stats or { washes = 0, stars3 = 0, perfects = 0, bestWash = 0, specials = 0, deliveries = 0, dents = 0,
+		clean = 0, bestDetail = 0 }
+	return job.stats
+end
+
+-- Studio only (Debug "next"): the special customer or sports car this player's next car should be, used up here.
+local function takeTestNext(player, want)
+	if not RunService:IsStudio() then
+		return nil
+	end
+	local v = player:GetAttribute("BizTestNext")
+	if type(v) ~= "string" then
+		return nil
+	end
+	local isSports = v == "Sports"
+	if (want == "Sports") ~= isSports or (not isSports and not W.Specials[v]) then
+		return nil
+	end
+	player:SetAttribute("BizTestNext", nil)
+	return v
+end
+
 ------------------------------------------------------------------ jobs: the wash bay
 
 local function nextWash(player, job, level)
@@ -793,15 +964,25 @@ local function nextWash(player, job, level)
 	job.stage = "spray"
 	job.readyAt = now + W.ArriveTime + (job.washes and job.washes > 0 and W.DepartTime or 0)
 	job.holdAt = nil
-	job.clean = true
-	job.spots = S.rng:NextInteger(W.Spots[1], W.Spots[2])
+	job.grades = {}
+	-- The customer (rolled here: the money depends on it). A special one has its own spots and dirt odds.
+	job.special = takeTestNext(player, "Special") or Businesses.RollSpecial(S.rng:NextNumber(), S.rng:NextNumber())
+	local sp = job.special and W.Specials[job.special]
+	local range = sp and sp.Spots or W.Spots
+	job.spots = S.rng:NextInteger(range[1], range[2])
+	job.dirt = {}
+	for s = 1, job.spots do
+		job.dirt[s] = Businesses.RollDirt(S.rng:NextNumber(), job.special)
+	end
+	job.customer = K.FIRST_NAMES[S.rng:NextInteger(1, #K.FIRST_NAMES)]
 	job.taps = {}
 	job.lastTap = 0
 	job.awaySince = nil
 	R.job:FireClient(player, "Wash", {
-		Id = job.id, Bay = job.bay, Spots = job.spots, Level = level, Owner = job.owner.UserId,
-		OwnerName = job.owner.DisplayName, Ready = job.readyAt - now, Seed = S.rng:NextInteger(1, 1000000),
-		Count = job.count, Departing = job.washes ~= nil and job.washes > 0,
+		Id = job.id, Bay = job.bay, Spots = job.spots, Dirt = job.dirt, Special = job.special, Name = job.customer,
+		Streak = job.washStreak or 0, Level = level, Owner = job.owner.UserId, OwnerName = job.owner.DisplayName,
+		Ready = job.readyAt - now, Seed = S.rng:NextInteger(1, 1000000), Count = job.count,
+		Departing = job.washes ~= nil and job.washes > 0,
 	})
 end
 
@@ -817,12 +998,16 @@ end
 -- The server's stage (and every spot's counted taps, a dense list) back to the worker's device: after a
 -- stage change, or "Again" when a step didn't count (a hold let go early, a step out of order), so the
 -- mini-game puts itself back where the server is.
-local function stepReply(player, job, again)
+local function stepReply(player, job, again, extra)
 	local taps = {}
 	for s = 1, job.spots or 0 do
 		taps[s] = job.taps and job.taps[s] or 0
 	end
-	R.job:FireClient(player, "WashStep", { Stage = job.stage, Again = again == true, Taps = taps })
+	local info = { Stage = job.stage, Again = again == true, Taps = taps }
+	for k, v in pairs(extra or {}) do
+		info[k] = v
+	end
+	R.job:FireClient(player, "WashStep", info)
 end
 
 local function finishWash(player, job)
@@ -832,25 +1017,48 @@ local function finishWash(player, job)
 		-- just scraped under the line loses one car, not the shift). The AFTER panel shows NOT PAID.
 		warn(string.format("[BusinessService] refused %s's wash: %.1fs (at least %.1fs)", player.Name, total, W.MinTime))
 		job.stage = "paid"
+		job.washStreak = 0
 		R.job:FireClient(player, "WashPaid", {
-			Id = job.id, Pay = 0, Tip = 0, Clean = false, Took = total, Count = job.count, Earned = job.earned, Refused = true,
+			Id = job.id, Pay = 0, Tip = 0, Stars = 0, Took = total, Count = job.count, Earned = job.earned, Refused = true,
 		})
 		return
 	end
 	local level = levelOf(job.owner, job.def)
-	local clean = job.clean and total <= W.TipTime
-	local pay, tip = Businesses.WashPay(job.def, level, clean)
+	local taps, birds = 0, 0
+	for s = 1, job.spots do
+		taps += Businesses.WashTaps(job.dirt[s])
+		if job.dirt[s] == "Bird" then
+			birds += 1
+		end
+	end
+	local g = job.grades or {}
+	local quick = total <= Businesses.WashStarTime(taps)
+	local hadStreak = job.washStreak or 0
+	local pay, tip, stars, streak = Businesses.WashPay(job.def, level, {
+		spray = g.spray, rinse = g.rinse, quick = quick, birds = birds, special = job.special, streak = hadStreak,
+	})
+	job.washStreak = streak
 	EconomyService.AddCash(player, pay + tip, "bizjob:" .. job.id .. ":wash")
 	job.stage = "paid"
 	job.count += 1
 	job.washes = (job.washes or 0) + 1
 	job.earned += pay + tip
+	local perfects = (g.spray == "Perfect" and 1 or 0) + (g.rinse == "Perfect" and 1 or 0)
+	local st = statsOf(job)
+	st.washes += 1
+	st.perfects += perfects
+	st.stars3 += stars == 3 and 1 or 0
+	st.specials += job.special and 1 or 0
+	st.bestWash = math.max(st.bestWash, streak)
 	creditOwner(job, player, pay + tip)
-	addEmpireXP(player, E.XP.Wash)
+	jobXP(player, E.XP.Wash)
 	progressEvent(player, "BusinessJob", 1)
 	Telemetry.Custom(player, "BizWash_" .. job.id, pay + tip)
 	R.job:FireClient(player, "WashPaid", {
-		Id = job.id, Pay = pay, Tip = tip, Clean = clean, Took = total, Count = job.count, Earned = job.earned,
+		Id = job.id, Pay = pay, Tip = tip, Stars = stars, Grade = g.rinse, Perfects = perfects, Quick = quick,
+		Streak = streak, Broke = hadStreak >= 2 and streak == 0 and hadStreak or nil,
+		Mult = Businesses.StreakMult(streak, Businesses.Streak), Special = job.special, Name = job.customer, Took = total,
+		Count = job.count, Earned = job.earned,
 	})
 	if job.owner ~= player then
 		pushState(job.owner)
@@ -884,17 +1092,20 @@ local function washStep(player, step, arg)
 		end
 		local held = job.holdAt and now - job.holdAt or 0
 		job.holdAt = nil
-		if held < (want == "spray" and W.SprayHold or W.RinseHold) - W.HoldSlack then
-			job.clean = false -- let go too soon: hold it again (the tip is gone)
-			stepReply(player, job, true)
+		-- The gauge, graded on this clock (Businesses.WashGrade): EARLY didn't count, hold it again.
+		local grade = Businesses.WashGrade(want, held)
+		if grade == "Early" then
+			stepReply(player, job, true, { Early = true })
 			return
 		end
+		job.grades = job.grades or {}
+		job.grades[want] = grade
 		if want == "spray" then
 			job.stage = "scrub"
-			stepReply(player, job)
+			stepReply(player, job, false, { Grade = grade, Step = "spray" })
 		else
 			job.stage = "done"
-			finishWash(player, job)
+			finishWash(player, job) -- (WashPaid carries the rinse's grade)
 		end
 	elseif step == "Scrub" then
 		local i = tonumber(arg)
@@ -905,13 +1116,13 @@ local function washStep(player, step, arg)
 			return -- (faster than a hand: an auto-clicker's extra taps simply don't count)
 		end
 		local taps = job.taps[i] or 0
-		if taps >= W.ScrubTaps then
+		if taps >= Businesses.WashTaps(job.dirt and job.dirt[i]) then
 			return
 		end
 		job.lastTap = now
 		job.taps[i] = taps + 1
 		for s = 1, job.spots do
-			if (job.taps[s] or 0) < W.ScrubTaps then
+			if (job.taps[s] or 0) < Businesses.WashTaps(job.dirt and job.dirt[s]) then
 				return
 			end
 		end
@@ -926,14 +1137,31 @@ local function topSpeed(car)
 	return (car:GetAttribute("MaxSpeed") or 150) * (car:GetAttribute("NitroSpeed") or 1.2)
 end
 
+-- An ordinary civilian car anyone could own (never police, boats, street cars, game-pass or heist-locked ones).
+local function customerCarOk(id)
+	local v = Vehicles.ById[id]
+	return v ~= nil and not v.Police and not v.Boat and not v.Hidden and not v.Pass and not v.UnlockHeists
+end
+
 -- A customer car for the owner's level: half the time from that level's own (nicest) list, else any list up to it.
-local function pickCar(level)
+-- sports: one of Detail.Sports.Cars instead (any level). Returns the id and whether it is a sports car.
+local function pickCar(level, sports)
+	if sports then
+		local list = {}
+		for _, id in ipairs(D.Sports.Cars) do
+			if customerCarOk(id) then
+				table.insert(list, id)
+			end
+		end
+		if #list > 0 then
+			return list[S.rng:NextInteger(1, #list)], true
+		end
+	end
 	local tiers = {}
 	for l = 1, Businesses.ClampLevel(level) do
 		local list = {}
 		for _, id in ipairs(D.Cars[l] or {}) do
-			local v = Vehicles.ById[id]
-			if v and not v.Police and not v.Boat and not v.Hidden and not v.Pass and not v.UnlockHeists then
+			if customerCarOk(id) then
 				table.insert(list, id)
 			end
 		end
@@ -942,10 +1170,10 @@ local function pickCar(level)
 		end
 	end
 	if #tiers == 0 then
-		return nil
+		return nil, false
 	end
 	local tier = S.rng:NextNumber() < 0.5 and tiers[#tiers] or tiers[S.rng:NextInteger(1, #tiers)]
-	return tier[S.rng:NextInteger(1, #tier)]
+	return tier[S.rng:NextInteger(1, #tier)], false
 end
 
 -- Nothing (a car, or anyone but the worker) on the pick-up box?
@@ -1004,7 +1232,8 @@ local function beginDetail(player, job, level)
 		refuse(player, def.Id, "NoAddress")
 		return false
 	end
-	local id = pickCar(level)
+	local wantSports = takeTestNext(player, "Sports") ~= nil or S.rng:NextNumber() < D.Sports.Chance
+	local id, sports = pickCar(level, wantSports)
 	if not id then
 		refuse(player, def.Id, "NoCar")
 		return false
@@ -1103,6 +1332,8 @@ local function beginDetail(player, job, level)
 	job.sunkSince = nil
 	job.name = K.NAMES[S.rng:NextInteger(1, #K.NAMES)]
 	job.carName = car:GetAttribute("DisplayName") or id
+	job.sports = sports == true
+	job.backSince = nil
 	local hum = humOf(player)
 	task.defer(function()
 		if S.jobs[player] == job and job.car == car and car.Parent and seat.Occupant == nil and hum and hum.Parent
@@ -1110,9 +1341,36 @@ local function beginDetail(player, job, level)
 			seat:Sit(hum)
 		end
 	end)
-	R.job:FireClient(player, "Detail", { Id = def.Id, Pos = drop, Name = job.name, Est = job.est, Car = job.carName, Level = level })
+	R.job:FireClient(player, "Detail", {
+		Id = def.Id, Pos = drop, Name = job.name, Est = job.est, Car = job.carName, Level = level, Sports = job.sports,
+		Streak = job.detailStreak or 0, Owner = job.owner.UserId, Earned = job.earned, Count = job.count,
+	})
 	Telemetry.Custom(player, "BizDetailStart_" .. def.Id, 1)
 	return true
+end
+
+-- A delivery done: the worker is put out, the customer car stays HandOver seconds (its owner walks out to it on the
+-- worker's device), then goes. Nobody gets back in meanwhile (no driver, no prompt).
+local function handOver(job)
+	local car = job.car
+	job.car = nil
+	if not car or not car.Parent then
+		return
+	end
+	car:SetAttribute("BizDriverUserId", 0)
+	local prompt = car:FindFirstChild("BizDrivePrompt", true)
+	if prompt then
+		prompt:Destroy()
+	end
+	local vs = service("VehicleService")
+	if vs and type(vs.EjectAll) == "function" then
+		pcall(vs.EjectAll, car)
+	end
+	task.delay(D.HandOver, function()
+		if car.Parent then
+			car:Destroy()
+		end
+	end)
 end
 
 local function dent(player, job, t)
@@ -1179,27 +1437,54 @@ local function detailTick(player, job, t)
 		return
 	end
 	local level = levelOf(job.owner, job.def)
-	local pay, tip = Businesses.DetailPay(job.def, level, job.length, took, job.est, job.dents)
+	local hadStreak = job.detailStreak or 0
+	local pay, tip, stars, streak = Businesses.DetailPay(job.def, level, job.length, took, job.est, job.dents, job.sports, hadStreak)
+	job.detailStreak = streak
 	EconomyService.AddCash(player, pay + tip, "bizjob:" .. job.id .. ":detail")
 	job.count += 1
 	job.earned += pay + tip
+	local st = statsOf(job)
+	st.deliveries += 1
+	st.dents += job.dents
+	st.clean += job.dents == 0 and 1 or 0
+	st.bestDetail = math.max(st.bestDetail, streak)
 	creditOwner(job, player, pay + tip)
-	addEmpireXP(player, E.XP.Detail)
+	jobXP(player, E.XP.Detail)
 	progressEvent(player, "BusinessJob", 1)
 	Telemetry.Custom(player, "BizDetail_" .. job.id, pay + tip)
 	R.job:FireClient(player, "DetailPaid", {
-		Id = job.id, Pay = pay, Tip = tip, Dents = job.dents, Took = took, Name = job.name, Count = job.count, Earned = job.earned,
+		Id = job.id, Pay = pay, Tip = tip, Dents = job.dents, Stars = stars, Streak = streak,
+		Broke = hadStreak >= 2 and streak == 0 and hadStreak or nil, Mult = Businesses.StreakMult(streak, Businesses.Streak),
+		Sports = job.sports, Took = took, Est = job.est, Name = job.name, Count = job.count, Earned = job.earned,
+		Vehicle = car, At = chassis.CFrame, Back = Businesses.DoorPosition(job.def),
 	})
 	if job.owner ~= player then
 		pushState(job.owner)
 	end
-	endJob(player, "Delivered")
+	-- The customer takes their car; the shift goes on (call your own car and head back for the next one).
+	handOver(job)
+	job.stage = "back"
+	job.backSince = t
+	job.drop = nil
 end
 
 ------------------------------------------------------------------ jobs: starting and the tick
 
--- "Job" (Wash | Detail | Rush): see the header. A wash session goes on from car to car; DELIVER after a wash
--- keeps the session (and its totals) and frees the bay. RUSH ORDERS belong to the business's job module.
+-- The JobKind attribute a job module runs `kind` under (Module.Kinds; Palm Grind's RUSH ORDERS from before
+-- Kinds existed: "BizRush"), or nil when the kind isn't the module's.
+local function moduleKind(mod, kind)
+	if type(mod) ~= "table" then
+		return nil
+	end
+	if type(mod.Kinds) == "table" then
+		return mod.Kinds[kind]
+	end
+	return kind == "Rush" and "BizRush" or nil
+end
+
+-- "Job" (Wash | Detail | Rush | Print | Launder): see the header. A wash session goes on from car to car;
+-- DELIVER after a wash keeps the session (and its totals) and frees the bay. RUSH ORDERS, PRINT and LAUNDER
+-- belong to the business's job module (JOB MODULES).
 local function startJob(player, def, kind, forId)
 	if not RateLimit.Allow(player, "BizJobStart", 1, 3) then
 		return
@@ -1214,20 +1499,26 @@ local function startJob(player, def, kind, forId)
 		if job.id ~= def.Id then
 			refuse(player, def.Id, "JobElsewhere")
 			return
-		elseif job.kind == "Rush" then
-			local mod = Jobs[def.Style or ""]
-			if kind == "Rush" and mod and type(mod.Resend) == "function" then
-				mod.Resend(player, job, Api) -- (already on it: its HUD again)
-			elseif kind ~= "Rush" then
-				refuse(player, def.Id, "OnRush")
+		elseif job.mod then
+			local mod = job.mod
+			if kind == job.kind and type(mod.Resend) == "function" then
+				pcall(mod.Resend, player, job, Api) -- (already on it: its HUD again)
+			elseif moduleKind(mod, kind) and type(mod.Switch) == "function" then
+				local ok, err = pcall(mod.Switch, player, job, kind, Api) -- (the Print Shop: PRINT <-> LAUNDER)
+				if not ok then
+					warn("[BusinessService] job module Switch: " .. tostring(err))
+				end
+			elseif kind ~= job.kind then
+				refuse(player, def.Id, "OnRush") -- ("Finish them first, or END JOB")
 			end
 			return
-		elseif job.kind == "Detail" then
+		elseif job.kind == "Detail" and job.stage ~= "back" then
 			refuse(player, def.Id, "OnDelivery")
 			return
-		elseif job.stage ~= "paid" then
+		elseif job.kind == "Wash" and job.stage ~= "paid" then
 			return -- (a car is in the bay: finish it or END JOB)
 		end
+		-- (else: after a wash, or back from a delivery: the shift goes on with the next car)
 	end
 	if not canAct(player, def) then
 		return
@@ -1244,19 +1535,20 @@ local function startJob(player, def, kind, forId)
 	end
 	local level = levelOf(owner, def)
 	local isNew = job == nil
-	if kind == "Rush" then
-		local mod = Jobs[def.Style or ""]
-		if not isNew or not mod or type(mod.Start) ~= "function" then
+	local mod = Jobs[def.Style or ""]
+	local modKind = moduleKind(mod, kind)
+	if modKind then
+		if not isNew or type(mod.Start) ~= "function" then
 			return
 		end
-		job = { id = def.Id, def = def, owner = owner, count = 0, earned = 0, startedAt = os.clock(), kind = "Rush",
-			char = player.Character }
+		job = { id = def.Id, def = def, owner = owner, count = 0, earned = 0, startedAt = os.clock(), kind = kind,
+			char = player.Character, mod = mod, jobKind = modKind }
 		S.jobs[player] = job
-		player:SetAttribute("JobKind", "BizRush")
+		player:SetAttribute("JobKind", modKind)
 		player:SetAttribute("BizJob", def.Id)
 		local ok, err = pcall(mod.Start, player, job, Api)
 		if not ok then
-			warn("[BusinessService] couldn't start a rush job: " .. tostring(err))
+			warn("[BusinessService] couldn't start a " .. tostring(kind) .. " job: " .. tostring(err))
 			endJob(player, "Player")
 			return
 		end
@@ -1290,12 +1582,23 @@ local function startJob(player, def, kind, forId)
 		end
 		releaseBay(player)
 		job.bay = nil
+		job.washes = 0 -- (no car left in the bay to pull out before the next wash)
 		player:SetAttribute("JobKind", "BizDetail")
 		player:SetAttribute("BizJob", def.Id)
 	end
 	if isNew then
 		Telemetry.Custom(player, "BizJob_" .. def.Id .. (owner == player and "" or "_crew"), 1)
 	end
+end
+
+-- May this job go on while its worker is wanted (Module.KeepWanted: a launder run with the bags in the car)?
+local function keepWanted(job)
+	local mod = job.mod
+	if not mod or type(mod.KeepWanted) ~= "function" then
+		return false
+	end
+	local ok, keep = pcall(mod.KeepWanted, job)
+	return ok and keep == true
 end
 
 -- Four times a second: deliveries, and jobs that should end.
@@ -1306,7 +1609,8 @@ local function jobsTick()
 			S.jobs[player] = nil
 			releaseBay(player)
 			destroyCar(job)
-		elseif (player:GetAttribute("Heat") or 0) > 0 then
+			moduleEnd(player, job, "Left")
+		elseif (player:GetAttribute("Heat") or 0) > 0 and not keepWanted(job) then
 			endJob(player, "Wanted")
 		elseif player:GetAttribute("Side") ~= "Civilian" then
 			endJob(player, "Side")
@@ -1314,16 +1618,21 @@ local function jobsTick()
 			endJob(player, "Died")
 		elseif job.owner.Parent ~= Players or not owned(job.owner, job.id) then
 			endJob(player, "OwnerLeft")
-		elseif job.kind == "Rush" then
-			local mod = Jobs[job.def.Style or ""]
-			if player:GetAttribute("JobKind") ~= "BizRush" then
+		elseif job.mod then
+			local mod = job.mod
+			if player:GetAttribute("JobKind") ~= job.jobKind then
 				endJob(player, "Busy") -- (another job took the attribute: a taxi shift started on the way)
-			elseif mod and type(mod.Tick) == "function" then
+			elseif type(mod.Tick) == "function" then
 				local ok, err = pcall(mod.Tick, player, job, t, Api)
 				if not ok then
-					warn("[BusinessService] rush job: " .. tostring(err))
+					warn("[BusinessService] " .. tostring(job.kind) .. " job: " .. tostring(err))
 					endJob(player, "Player") -- (one broken job never stops everyone else's)
 				end
+			end
+		elseif job.kind == "Detail" and job.stage == "back" then
+			-- Between cars, after a delivery: the next one (or a wash) within IdleTime, or the shift ends.
+			if t - (job.backSince or t) > D.IdleTime then
+				endJob(player, "NoNextCar")
 			end
 		elseif job.kind == "Detail" then
 			detailTick(player, job, t)
@@ -1348,8 +1657,9 @@ end
 ------------------------------------------------------------------ customers: the shine and the cold brew
 
 -- A player customer pays `price` for this business's service (see CUSTOMERS in the header). Returns false
--- when they can't pay (told so), else true and the featured owner's name when one was paid.
-local function serveCustomer(player, def, price, reason)
+-- when they can't pay (told so), else true and the featured owner's name when one was paid. words: what the owner's
+-- toast calls it (M5: the Nightclub's VIP booth; default the business's Service Words).
+local function serveCustomer(player, def, price, reason, words)
 	if not EconomyService.Spend(player, price, reason .. ":" .. def.Id) then
 		notifyKey(player, "NotEnoughCash")
 		return false, nil
@@ -1375,7 +1685,7 @@ local function serveCustomer(player, def, price, reason)
 		addEmpireXP(featured, E.XP.Customer)
 	end
 	result(featured, { Kind = "Customer", Id = def.Id, Buyer = player.DisplayName, Amount = share,
-		Service = def.Service and def.Service.Words or "a purchase" })
+		Service = (type(words) == "string" and words) or (def.Service and def.Service.Words) or "a purchase" })
 	Telemetry.Custom(featured, "BizCustomer_" .. def.Id, share)
 	return true, featured.DisplayName
 end
@@ -1450,13 +1760,22 @@ local function onColdBrew(player, def)
 	Telemetry.Custom(player, "BizColdBrew_" .. def.Id, price)
 end
 
--- The service prompt (BizServicePrompt): which purchase it is comes from the Config Service Kind.
+-- The service prompt (BizServicePrompt): which purchase it is comes from the Config Service Kind, or the business's
+-- job module runs it (Module.Service: Boat Rentals' jet ski rental, M4).
 local function onService(player, def)
 	if not RateLimit.Allow(player, "BizService", 1, 2) or not DataService.Get(player) then
 		return
 	end
 	if def.Service and def.Service.Kind == "ColdBrew" and def.Layout.Service then
 		onColdBrew(player, def)
+		return
+	end
+	local mod = Jobs[def.Style or ""]
+	if def.Service and def.Layout.Service and mod and type(mod.Service) == "function" then
+		local ok, err = pcall(mod.Service, player, def, Api)
+		if not ok then
+			warn("[BusinessService] job module Service: " .. tostring(err))
+		end
 	end
 end
 
@@ -1470,6 +1789,17 @@ local function refreshAlarms()
 			local rec = b.active
 			if rec and owner.Parent == Players and (owner == p or sameCrew(owner, p)) and not table.find(ids, rec.id) then
 				table.insert(ids, rec.id)
+			end
+		end
+		-- (and the job modules' own: a Print Shop raid this player is part of)
+		for _, mod in pairs(Jobs) do
+			if type(mod.Alarms) == "function" then
+				local ok, more = pcall(mod.Alarms, p)
+				for _, id in ipairs(ok and type(more) == "table" and more or {}) do
+					if not table.find(ids, id) then
+						table.insert(ids, id)
+					end
+				end
 			end
 		end
 		local s = #ids > 0 and table.concat(ids, ",") or nil
@@ -1777,7 +2107,7 @@ local function breakInTarget(owner)
 	settle(owner)
 	local best, bestEntry
 	for _, def in ipairs(Businesses.List) do
-		if def.Enabled and def.Kind == "Legit" and def.Layout and def.Layout.Robbers and S.sites[def.Id] then
+		if def.Enabled and Businesses.BreakInEligible(def) and def.Layout and def.Layout.Robbers and S.sites[def.Id] then
 			local entry = owned(owner, def.Id)
 			if entry and entry.register >= B.MinRegister and (not bestEntry or entry.register > bestEntry.register) then
 				best, bestEntry = def, entry
@@ -2456,10 +2786,13 @@ local function onRequest(player, action, id, arg, arg2)
 	end
 	if action == "Step" then
 		local job = S.jobs[player]
-		if job and job.kind == "Rush" then
-			local mod = Jobs[job.def.Style or ""]
-			if mod and type(mod.Step) == "function" and RateLimit.Allow(player, "BizRushStep", 4, 6) then
-				mod.Step(player, job, id, Api)
+		if job and job.mod then
+			local mod = job.mod
+			if type(mod.Step) == "function" and RateLimit.Allow(player, "BizModStep", 4, 6) then
+				local ok, err = pcall(mod.Step, player, job, id, Api)
+				if not ok then
+					warn("[BusinessService] job module Step: " .. tostring(err))
+				end
 			end
 			return
 		end
@@ -2492,6 +2825,15 @@ local function onRequest(player, action, id, arg, arg2)
 		upgrade(player, def)
 	elseif action == "Job" and type(arg) == "string" and Businesses.HasJob(def, arg) then
 		startJob(player, def, arg, arg2)
+	elseif action == "Mod" then
+		-- (M5) A job module's own request (the Nightclub's LEAVE inside the club).
+		local mod = Jobs[def.Style or ""]
+		if mod and type(mod.Request) == "function" then
+			local ok, err = pcall(mod.Request, player, def, arg, arg2, Api)
+			if not ok then
+				warn("[BusinessService] job module Request: " .. tostring(err))
+			end
+		end
 	end
 end
 
@@ -2591,8 +2933,9 @@ function BusinessService.Debug(player, cmd, id, value)
 		for _, d in ipairs(Businesses.List) do
 			local e = owned(player, d.Id)
 			if e then
-				table.insert(parts, string.format("%s lv=%d register=%d/%d lifetime=%d jobs=%d", d.Id, e.level, math.floor(e.register),
-					Businesses.Cap(d, e.level), math.floor(e.lifetime), e.jobsDone))
+				table.insert(parts, string.format("%s lv=%d register=%d/%d lifetime=%d jobs=%d%s", d.Id, e.level, math.floor(e.register),
+					Businesses.Cap(d, e.level), math.floor(e.lifetime), e.jobsDone,
+					e.dirty and string.format(" dirty=%d/%d", math.floor(e.dirty), Businesses.DirtyCap(d, e.level)) or ""))
 			end
 		end
 		local b = S.breakins[player]
@@ -2602,6 +2945,20 @@ function BusinessService.Debug(player, cmd, id, value)
 		addEmpireXP(player, tonumber(value) or 0)
 		pushState(player)
 		return "empire xp " .. math.floor(empireXP(player))
+	elseif cmd == "rank" then
+		-- (M4) Set your Empire rank (value 1-10): your Empire XP becomes exactly what that rank needs. Going up
+		-- stamps every rank on the way, as earning it would; going down just sets it (to test the Empire 2 gate).
+		local rank = math.clamp(math.floor(tonumber(value) or 1), 1, E.MaxRank)
+		local want = E.XPFor[rank]
+		local have = empireXP(player)
+		if want > have then
+			addEmpireXP(player, want - have)
+		else
+			data.empireXP = want
+			publishOwned(player)
+		end
+		pushState(player)
+		return string.format("empire rank %d (%d xp)", empireRank(player), math.floor(empireXP(player)))
 	elseif cmd == "cash" then
 		EconomyService.AddCash(player, tonumber(value) or 0, "debug")
 		return "cash " .. tostring(player:GetAttribute("Cash"))
@@ -2614,16 +2971,37 @@ function BusinessService.Debug(player, cmd, id, value)
 	elseif cmd == "vip" then
 		S.forceVip[player] = true
 		return "the next rush order ends at a VIP home"
+	elseif cmd == "next" then
+		local v = tostring(value or id or "")
+		if v ~= "Sports" and not W.Specials[v] then
+			return "next: Muddy, Classic, Wedding (a wash customer) or Sports (a delivery)"
+		end
+		player:SetAttribute("BizTestNext", v) -- (an attribute, not a table keyed by the player: used up by the next car)
+		return "your next " .. (v == "Sports" and "delivery is a sports car" or ("wash customer is a " .. W.Specials[v].Name))
+	end
+	-- The job modules' own helpers (the Print Shop: dirty, raid, endraid, testcop, heat).
+	for _, mod in pairs(Jobs) do
+		if type(mod.Debug) == "function" then
+			local ok, answer = pcall(mod.Debug, player, cmd, id, value, Api)
+			if not ok then
+				return "error: " .. tostring(answer)
+			elseif answer ~= nil then
+				return tostring(answer)
+			end
+		end
 	end
 	local def = Businesses.ById[id or ""]
 	if cmd == "breakin" then
 		if S.breakins[player] and S.breakins[player].active then
 			return "a break-in is on already"
 		end
+		if def and not Businesses.BreakInEligible(def) then
+			return def.Id .. " is shady: it gets police raids, not break-ins (try raid)"
+		end
 		def = def or breakInTarget(player)
 		if not def then
 			for _, d in ipairs(Businesses.List) do
-				if owned(player, d.Id) then
+				if owned(player, d.Id) and Businesses.BreakInEligible(d) then
 					def = d
 					break
 				end
@@ -2682,7 +3060,8 @@ function BusinessService.Init()
 	-- The job modules (JOB MODULES in the header) and what they may use here.
 	Api.Build, Api.C, Api.DETAIL, Api.SHADE, Api.money = Build, C, DETAIL, SHADE, money
 	Api.rng = S.rng
-	Api.levelOf, Api.creditOwner, Api.addEmpireXP, Api.progressEvent = levelOf, creditOwner, addEmpireXP, progressEvent
+	-- (addEmpireXP: jobXP, which also counts it on the player's shift for the report)
+	Api.levelOf, Api.creditOwner, Api.addEmpireXP, Api.progressEvent = levelOf, creditOwner, jobXP, progressEvent
 	Api.endJob, Api.refuse, Api.pushState, Api.service = endJob, refuse, pushState, service
 	Api.rootOf, Api.humOf, Api.flat = rootOf, humOf, flat
 	Api.fire = function(player, kind, info)
@@ -2695,6 +3074,30 @@ function BusinessService.Init()
 		S.forceVip[player] = nil
 		return v
 	end
+	-- (M3: what the Print Shop's shift and raids use)
+	Api.owned, Api.sameCrew, Api.alive, Api.atLot, Api.settle = owned, sameCrew, alive, atLot, settle
+	Api.result, Api.notifyKey, Api.timeScale, Api.testCrew = result, notifyKey, timeScale, testCrew
+	Api.refreshAlarms, Api.say, Api.fadeOut, Api.npcFolder = refreshAlarms, say, fadeOut, npcFolder
+	Api.play = function(player) -- seconds of play this session (x BusinessTimeScale), nil before the save loads
+		return S.play[player]
+	end
+	Api.site = function(id) -- the business's building ({ model, def, plate }), or nil
+		return S.sites[id]
+	end
+	Api.jobOf = function(player) -- the business job this player is on, or nil
+		return S.jobs[player]
+	end
+	Api.setJobKind = function(player, job, kind) -- a module job changing its JobKind (the Print Shop: BizPrint <-> BizLaunder)
+		job.jobKind = kind
+		if player.Parent == Players then
+			player:SetAttribute("JobKind", kind)
+		end
+	end
+	-- (M4: a job module's own customer purchase, Boat Rentals' jet ski rental, goes through the same path as the
+	-- shine and the cold brew: the price spent, the featured owner's share and capped Empire XP, the rest a sink)
+	Api.serveCustomer = serveCustomer
+	-- (M5: the Nightclub's night x2 and the club's crowd by the featured owner's level)
+	Api.isNight, Api.featuredOf = isNight, featuredOf
 	local folder = script.Parent:FindFirstChild("BusinessJobs")
 	for _, def in ipairs(Businesses.List) do
 		local module = def.Enabled and def.Style and not STYLES[def.Style] and folder and folder:FindFirstChild(def.Style)
@@ -2726,6 +3129,16 @@ function BusinessService.Init()
 		end
 	end
 
+	-- The job modules' start-up, now that their buildings are up (the Print Shop: its raid prompts, BizRaids).
+	for style, mod in pairs(Jobs) do
+		if type(mod.Init) == "function" then
+			local ok, err = pcall(mod.Init, Api)
+			if not ok then
+				warn("[BusinessService] the " .. style .. " job module's Init: " .. tostring(err))
+			end
+		end
+	end
+
 	DataService.OnLoaded(function(player, data)
 		if type(data.businesses) ~= "table" then
 			data.businesses = {}
@@ -2751,6 +3164,14 @@ function BusinessService.Init()
 		settle(player)
 		endJob(player, "Left")
 		endBreakIn(player, "Gone")
+		for _, mod in pairs(Jobs) do
+			if type(mod.PlayerLeft) == "function" then
+				local ok, err = pcall(mod.PlayerLeft, player, Api) -- (a raid on them, before their save goes)
+				if not ok then
+					warn("[BusinessService] job module PlayerLeft: " .. tostring(err))
+				end
+			end
+		end
 		S.lastSettle[player] = nil
 		S.flags[player] = nil
 		S.play[player] = nil
@@ -2795,10 +3216,19 @@ function BusinessService.Init()
 		while true do
 			task.wait(1)
 			local now = os.clock()
-			local ok, err = pcall(breakInTick, now - last)
+			local dt = now - last
+			local ok, err = pcall(breakInTick, dt)
 			last = now
 			if not ok then
 				warn("[BusinessService] break-ins: " .. tostring(err))
+			end
+			for style, mod in pairs(Jobs) do
+				if type(mod.Second) == "function" then
+					local okMod, errMod = pcall(mod.Second, dt, Api) -- (the Print Shop's raids)
+					if not okMod then
+						warn("[BusinessService] " .. style .. ": " .. tostring(errMod))
+					end
+				end
 			end
 		end
 	end)

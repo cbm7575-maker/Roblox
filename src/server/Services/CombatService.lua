@@ -481,6 +481,9 @@ local function isSafe(player, root)
 	if player:GetAttribute("InHome") == true or player:GetAttribute("Side") == "Prisoner" then
 		return true
 	end
+	if player:GetAttribute("BizClub") ~= nil then
+		return true -- inside the Afterglow Nightclub (BusinessJobs.Nightclub): no fights on the dance floor
+	end
 	return root ~= nil and inZone(root.Position)
 end
 

@@ -117,8 +117,8 @@ Run them in the **server** Command Bar through DebugService's `NCCmd` door, as i
 
 | | Level 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|
-| Trickle ($/min online) | 80 | 110 | 140 | 170 | 200 |
-| Register size | $3,000 | $5,250 | $7,500 | $9,750 | $12,000 |
+| Trickle ($/min online) | 96 | 132 | 168 | 204 | 240 |
+| Register size | $3,600 | $6,300 | $9,000 | $11,700 | $14,400 |
 | Job pay multiplier | 1.00 | 1.06 | 1.12 | 1.18 | 1.25 |
 | Upgrade price (to this level) | — | $18,000 | $27,000 | $36,000 | $45,000 |
 | Stops an order | 1 | 2 | 2 | 3 | 3 |
@@ -130,20 +130,20 @@ Run them in the **server** Command Bar through DebugService's `NCCmd` door, as i
 - **The clock per stop:** road ÷ 45 + 18 s for the first (it includes walking to your car), + 8 s for the others.
 - **Pay per stop:**
   - $60 + 40¢ a stud of road;
-  - the first stop also carries the order's $330;
+  - the first stop also carries the order's $320;
   - the last stop also pays 40¢ a stud of the road back to the café.
-- **Tip per stop:** up to $200. It's full while at least 35% of the clock is left, falls to $0 at 0:00, and late pays no tip (the base is still paid).
+- **Tip per stop:** up to $150. It's full (GOLD) while at least 22% of the clock is left, falls to $0 at 0:00, and late pays no tip (the base is still paid). A perfect run (every stop GOLD) adds $150. (Changed by the fun pass, launch/18.)
 - **VIP:** ×1.5 on that stop's pay and tip (not on the drive back).
 - **Per minute of work**, counting ~17 s at the café an order, ~45 studs/s on the road and the drive back:
-  - one stop: ~$1,252 in ~60 s, **~$1,244/min**;
-  - two stops: ~$1,296/min;
-  - three stops: ~$1,328/min (+4% / +7%: fewer trips back).
+  - one stop: **~$1,252/min** (GOLD on ~57% of stops);
+  - two stops: about +7.5%;
+  - three stops: about +9% (fewer trips back).
 - **Rules:** speed check per leg (FastSlack 1.15) and VehicleGuard, the ring is 32 studs (stop under 6 studs/s), 45 s to get in your car after a grab, 10 s out of it once driving, 5 minutes idle.
 - **Empire XP:** 6 per stop (the worker).
 
 **Cold brew:** $60 for 5 minutes, +25% sprint stamina (the sprint drains at 0.8×: 12.5 s becomes 15.6 s). The featured owner gets $42 (70%) and $18 is a sink. Customer XP is 10, at most twice an hour per buyer. Buying again is refused while more than 4 minutes are left.
 
-**Payback:** the trickle alone pays back the $45,000 in ~9.4 h online (the PRD's own $80/min; over the 6-8 h target). Working the job 40% of the time adds ~$140/min over normal work (40% × ($1,250 − $900)): about 3.4 h in all.
+**Payback:** the trickle alone pays back the $45,000 in ~7.8 h online ($96/min, raised by the fun pass to sit inside the 6-8 h target). Working the job 40% of the time adds ~$140/min over normal work (40% × ($1,250 − $900)): about 3.2 h in all.
 
 ## 7. Not verified offline (check these in Studio)
 
