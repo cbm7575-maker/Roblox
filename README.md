@@ -48,4 +48,6 @@ updates (6 and 7), and the Nov 3 pre-ads audit (8: Creator Hub fixes, five test 
 `tools/logic-tests/` checks DataService's save locking and retries and ShopService's receipts and pass
 checks against stand-in Roblox services with a virtual clock (no Studio needed). It needs the Luau CLI
 (github.com/luau-lang/luau releases): `LUAU=path/to/luau.exe bash tools/logic-tests/datastore.sh`, and
-the same for `shop.sh`. Every line should read PASS. They don't replace a play test.
+the same for `shop.sh`. `coastguard.sh` runs AIPoliceService in a stand-in world (ocean, prison moat,
+pier, beach) and checks the Coast Guard boats and the hand-over between boats and patrol cars. Every
+line should read PASS. They don't replace a play test.

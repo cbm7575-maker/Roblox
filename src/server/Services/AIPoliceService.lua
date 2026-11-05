@@ -24,6 +24,26 @@
 --     on foot, and the car waits with its brakes on; they get back in when the suspect drives off. A car
 --     whose officers are all down or dead stays put for GONE_WAIT seconds, then goes (a new one comes).
 --     Without officers (their looks not built yet) the car arrests by itself, as it always did.
+--   * Coast Guard (owner, Nov 4: wanted on the water, a cop that can drive on water comes and arrests you,
+--     so the sea is no easy way out). A wanted player sitting in a boat that floats, or in the sea itself
+--     where it is SEA_DEPTH+ deep, is "at sea" (atSea): the patrol cars leave, as they always did for a
+--     boat, and Coast Guard boats come instead, as many as cars would and after the same head start. A boat
+--     run up on the sand is not at sea: patrol cars come for it and their officers cuff the driver (sitting
+--     in a beached boat used to keep every patrol away). The prison moat (6.5 deep) is too shallow for
+--     them: a swimmer there still gets the patrol cars.
+--     They are the Harbor Patrol boat player cops drive, named AICoastGuard (attribute CoastGuard), with
+--     the AIPolice / AITarget attributes of a patrol car, so sirens, lights, minimap blips, hands up and
+--     Reset Character all treat them as police. They appear in open water CG_SPAWN_DEPTH+ deep with nothing
+--     over it, 350-600 studs off (then 600-900, then 150-350), and steer straight at the target, leading
+--     it. Held to 95% of the target's top speed like the cars (their own top speed is CG_TOP, over every
+--     boat's, so that rule decides even against the fastest one).
+--     Arrest: a boat slower than CG_SLOW, or anyone in the water, within CG_ARREST_RANGE (flat) for
+--     ARREST_SECONDS. A boat's driver sees the BEING CUFFED bar (PoliceOfficerService.BoatCuff: "DRIVE to
+--     break free"); a swimmer gets the CoastGuardSwim toast instead (there's no swimming away from a boat).
+--     The officers ride along and stay aboard. Aground away from the target: back off and turn; aground
+--     CG_STRANDED s, stuck CG_STUCK_TRIES times in a row, or 900+ studs behind for 15 s: it goes and a new
+--     one comes in open water. Target ashore: it waits where it is, still watching, for CG_LINGER s, then
+--     goes, and the patrol cars take over. The target hears about it once a chase (Notify "CoastGuard").
 -- Server-owned physics (CarPhysics) so VehicleGuard never checks them. They have to stay server-owned:
 -- welding a rider in or out puts a car back on automatic ownership, the nearest player's device takes it
 -- over, and the server's suspension forces reach it late, so it bounces and flips down the road (drive
@@ -38,6 +58,7 @@ local Workspace = game:GetService("Workspace")
 
 local CarPhysics = require(ReplicatedStorage.Shared.Util.CarPhysics)
 local RoadGraph = require(ReplicatedStorage.Shared.Util.RoadGraph)
+local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local CarBuilder = require(ServerStorage.Tools.CarBuilder)
 local HeatService = require(ServerScriptService.Services.HeatService)
 local Officers = require(ServerScriptService.Services.PoliceOfficerService)
@@ -59,14 +80,44 @@ local LOST_SECONDS = 15
 local SPAWN_GAP = 6 -- seconds between spawns for the same target
 local GONE_WAIT = 15 -- seconds a car whose officers are all down waits before it goes
 
-local units = {} -- list of AI unit tables
+-- Coast Guard (see the header)
+local CG_VEHICLE = "HarborPatrol" -- the police boat player cops drive
+local CG_TOP = 180 -- studs/s: over every boat's top speed (Swordfish 175), so the 95% rule decides
+local SEA_DEPTH = 8 -- studs of water under a swimmer before it's the Coast Guard's job (the ocean is 19.5)
+local CG_SPAWN_DEPTH = 10 -- studs of water a Coast Guard boat appears in
+local CG_ROOM = 12 -- studs of open water each way around that spot (the boat is 21 long)
+local CG_SKY = 80 -- spawn rays start this high, so a pier, deck or yacht over the water rules the spot out
+local CG_SPAWN_TRIES = 24 -- random spots tried per ring
+local CG_PARK = 24 -- studs (flat, centre to centre): it stops this far from its target, never rams it
+local CG_EASE = 120 -- studs: closer than this it slows to the target's pace (boats coast a long way)
+local CG_ARREST_RANGE = 36
+local CG_ARREST_RISE = 10
+local CG_SLOW = 12 -- studs/s: a boat slower than this has stopped (boats drift on a little)
+local CG_LINGER = 10 -- seconds it waits offshore once its target has gone ashore
+local CG_STRANDED = 12 -- seconds aground (in all) before it gives up
+local CG_STUCK_TRIES = 5 -- back-offs less than 20 s apart before it gives up
+local SEABED_REACH = 80
+
+local units = {} -- list of AI unit tables (u.boat = true for a Coast Guard boat)
 local lastSpawnFor = {} -- [player] = os.clock()
 local wantedAt = {} -- [player] = server time we first saw them wanted (only used if WantedSince is missing)
+local atSeaNow = {} -- [player] = true while out on the water (manage: once a second)
+local cgToldFor = {} -- [player] = the WantedSince of the chase they heard "Coast Guard on the way" in
 local rng = Random.new()
+local notify
 
 local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 losParams.IgnoreWater = true
+
+-- Water probes: the first stops on the water's surface, the second goes through it to the bottom. Both
+-- skip vehicles, officers and players (setWaterFilter), so only the world counts.
+local waterParams = RaycastParams.new()
+waterParams.FilterType = Enum.RaycastFilterType.Exclude
+waterParams.IgnoreWater = false
+local bedParams = RaycastParams.new()
+bedParams.FilterType = Enum.RaycastFilterType.Exclude
+bedParams.IgnoreWater = true
 
 -- Player cops who are really patrolling (ArrestService.IsActiveCop): two cops away from the keys used to
 -- keep every AI patrol off the whole server. (Looked up when needed, as drive does.)
@@ -113,14 +164,85 @@ local function desiredFor(p, cops)
 	return cops == 0 and 1 or 0
 end
 
-local function unitsFor(p)
+-- Units after this player: every one, or only Coast Guard boats (boat = true) or only cars (false).
+local function unitsFor(p, boat)
 	local n = 0
 	for _, u in ipairs(units) do
-		if u.target == p then
+		if u.target == p and (boat == nil or (u.boat == true) == boat) then
 			n += 1
 		end
 	end
 	return n
+end
+
+-- The water probes skip everything that moves: vehicles, officers, smoke clouds and every player.
+local function setWaterFilter()
+	local list = {}
+	for _, name in ipairs({ "Vehicles", "NPCs", "Smoke" }) do
+		local f = Workspace:FindFirstChild(name)
+		if f then
+			table.insert(list, f)
+		end
+	end
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if pl.Character then
+			table.insert(list, pl.Character)
+		end
+	end
+	waterParams.FilterDescendantsInstances = list
+	bedParams.FilterDescendantsInstances = list
+end
+
+-- Straight down from (x, top, z): the water's surface height if the first thing there is water (not
+-- land, a pier or a deck over it), else nil.
+local function waterTop(x, top, z, reach)
+	local hit = Workspace:Raycast(Vector3.new(x, top, z), Vector3.new(0, -reach, 0), waterParams)
+	return (hit and hit.Material == Enum.Material.Water) and hit.Position.Y or nil
+end
+
+-- How deep the water is under the surface at (x, y, z).
+local function depthAt(x, y, z)
+	local bed = Workspace:Raycast(Vector3.new(x, y + 0.5, z), Vector3.new(0, -SEABED_REACH, 0), bedParams)
+	return bed and (y - bed.Position.Y) or SEABED_REACH
+end
+
+-- Out on the water (see the header): in a boat that floats, or in the sea itself where it's deep.
+local function atSea(info)
+	if info.inCar and not info.boat then
+		return false -- (a car in the water is sinking: VehicleService takes it away, then they swim)
+	end
+	local y = waterTop(info.pos.X, info.pos.Y + 6, info.pos.Z, 20)
+	if not y then
+		return false
+	end
+	return info.boat == true or depthAt(info.pos.X, y, info.pos.Z) >= SEA_DEPTH
+end
+
+-- Open water all round (x, z), at least CG_ROOM studs each way.
+local function roomAt(x, z)
+	for _, o in ipairs({ { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }) do
+		if not waterTop(x + o[1] * CG_ROOM, CG_SKY, z + o[2] * CG_ROOM, CG_SKY + 40) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Where a Coast Guard boat can appear for this target: deep, open water 350-600 studs off (600-900 if
+-- there's none, 150-350 as a last resort). nil if there's no such water anywhere near.
+local function pickWaterSpawn(info)
+	for _, ring in ipairs({ { SPAWN_MIN, SPAWN_MAX }, { SPAWN_MAX, SPAWN_FAR }, { SPAWN_LAST, SPAWN_MIN } }) do
+		for _ = 1, CG_SPAWN_TRIES do
+			local a = rng:NextNumber(0, math.pi * 2)
+			local r = rng:NextNumber(ring[1], ring[2])
+			local x, z = info.pos.X + math.cos(a) * r, info.pos.Z + math.sin(a) * r
+			local y = waterTop(x, CG_SKY, z, CG_SKY + 40)
+			if y and depthAt(x, y, z) >= CG_SPAWN_DEPTH and roomAt(x, z) then
+				return Vector3.new(x, y, z)
+			end
+		end
+	end
+	return nil
 end
 
 local function despawn(u)
@@ -238,6 +360,56 @@ local function spawnFor(p, info)
 	u.crew = ok and crew or nil
 end
 
+-- A Coast Guard boat for a target out on the water (see the header).
+local function spawnBoatFor(p, info)
+	lastSpawnFor[p] = os.clock() -- (a search that finds no water waits SPAWN_GAP before the next one too)
+	local at = pickWaterSpawn(info)
+	if not at then
+		return
+	end
+	local pos = at + Vector3.new(0, 2.5, 0) -- (as a boat pad: VehicleService.padCFrame)
+	local car = CarBuilder.Build(CG_VEHICLE)
+	car.Name = "AICoastGuard"
+	car:SetAttribute("AIPolice", true)
+	car:SetAttribute("CoastGuard", true)
+	car:SetAttribute("AITarget", p.UserId)
+	car:SetAttribute("DisplayName", "Coast Guard")
+	car:SetAttribute("MaxSpeed", CG_TOP)
+	car:PivotTo(CFrame.lookAt(pos, Vector3.new(info.pos.X, pos.Y, info.pos.Z)))
+	local prompt = car:FindFirstChild("DrivePrompt", true)
+	if prompt then
+		prompt:Destroy()
+	end
+	car.Parent = Workspace.Vehicles
+	car.PrimaryPart:SetNetworkOwner(nil)
+	HeatService.RegisterEye(car.PrimaryPart)
+	local u = {
+		car = car,
+		target = p,
+		boat = true,
+		phys = CarPhysics.New(car, {}),
+		stuckFor = 0,
+		stucks = 0,
+		lastStuckAt = -math.huge,
+		reverseUntil = 0,
+		upsideFor = 0,
+		arrestFor = 0,
+		lostFor = 0,
+		strandedFor = 0,
+		ashoreFor = 0,
+	}
+	table.insert(units, u)
+	-- Officers ride along (they stay aboard: driveBoat never lets them out).
+	local ok, crew = pcall(Officers.Board, car, (p:GetAttribute("Heat") or 0) >= 3 and 2 or 1)
+	u.crew = ok and crew or nil
+	-- Once a chase: the Coast Guard is coming.
+	local since = p:GetAttribute("WantedSince") or wantedAt[p] or 0
+	if cgToldFor[p] ~= since then
+		cgToldFor[p] = since
+		notify:FireClient(p, "CoastGuard")
+	end
+end
+
 local function drive(u, dt, now)
 	local car = u.car
 	local chassis = car.PrimaryPart
@@ -260,10 +432,13 @@ local function drive(u, dt, now)
 		require(ServerScriptService.Services.ArrestService).GaveUp(p)
 		return despawn(u)
 	end
-	if info.boat then
-		-- Road patrols can't follow a boat out to sea (player cops have the Harbor Patrol boat).
+	if atSeaNow[p] or (info.boat and atSea(info)) then
+		-- Road patrols can't follow anyone out to sea: the Coast Guard does (driveBoat).
 		return despawn(u)
 	end
+	-- A boat run up on the sand is a stopped vehicle like any other: the officers walk up and cuff the
+	-- driver (PoliceOfficerService.Step keeps them in the car for a boat).
+	info.boat = false
 	local pos = chassis.Position
 	local cf = chassis.CFrame
 	local toTarget = info.pos - pos
@@ -393,26 +568,173 @@ local function drive(u, dt, now)
 	end
 end
 
+-- A Coast Guard boat's frame (see the header): straight at the target over the water, no roads.
+local function driveBoat(u, dt, now)
+	local car = u.car
+	local chassis = car.PrimaryPart
+	if not chassis or not car.Parent then
+		return despawn(u)
+	end
+	if chassis:GetNetworkOwnershipAuto() then
+		chassis:SetNetworkOwner(nil) -- (a rider welded in: see the header)
+	end
+	local p = u.target
+	if not wanted(p) then
+		return despawn(u)
+	end
+	local info = targetInfo(p)
+	if not info then
+		-- Reset Character out at sea is giving up too, with a boat this close (as for the cars).
+		require(ServerScriptService.Services.ArrestService).GaveUp(p)
+		return despawn(u)
+	end
+	local pos = chassis.Position
+	local cf = chassis.CFrame
+	if pos.Y < -60 then
+		return despawn(u)
+	end
+	local toTarget = info.pos - pos
+	local dist = Vector3.new(toTarget.X, 0, toTarget.Z).Magnitude
+	if dist > LOST_RANGE then
+		u.lostFor += dt
+		if u.lostFor > LOST_SECONDS then
+			return despawn(u)
+		end
+	else
+		u.lostFor = 0
+	end
+	local speed = chassis.AssemblyLinearVelocity:Dot(cf.LookVector)
+
+	-- Target ashore: wait here (still watching) for a while, then go; the patrol cars take over.
+	if not atSeaNow[p] then
+		u.ashoreFor += dt
+		u.arrestFor = 0
+		Officers.BoatCuff(p, car, 0)
+		if u.ashoreFor > CG_LINGER then
+			return despawn(u)
+		end
+		CarPhysics.Step(u.phys, dt, { Throttle = math.abs(speed) > 1 and -math.sign(speed) or 0, Steer = 0, SpeedScale = 1 })
+		return
+	end
+	u.ashoreFor = 0
+
+	-- Straight at the target, leading it.
+	local aim = info.pos + info.vel * math.clamp(dist / 150, 0, 0.8)
+	local dir = Vector3.new(aim.X - pos.X, 0, aim.Z - pos.Z)
+	local look = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+	local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+	local angle = 0
+	if dir.Magnitude > 0.1 and look.Magnitude > 0.1 then
+		dir, look, right = dir.Unit, look.Unit, right.Unit
+		angle = math.atan2(dir:Dot(right), dir:Dot(look))
+	end
+	local throttle, steer = 1, math.clamp(angle * 2.2, -1, 1)
+	if math.abs(angle) > 1.2 and speed > 45 then
+		throttle = 0.15 -- ease off for a sharp turn
+	end
+	if math.abs(angle) > 2.4 and speed < 20 then
+		throttle, steer = -0.8, -steer -- target behind: back round
+	end
+	local desired = math.max(12, dist * 1.3 + info.vel.Magnitude)
+	if dist < CG_EASE and speed > desired then
+		throttle = -0.6
+	end
+	if dist < CG_PARK then
+		throttle = speed > 4 and -1 or 0 -- alongside: hold here, never ram them
+	end
+
+	-- Aground (the last step's water rays found land: CarPhysics phys.Beached) or stuck on a pier.
+	local beached = u.phys.Beached == true
+	if beached then
+		u.strandedFor += dt
+		if u.strandedFor > CG_STRANDED then
+			return despawn(u) -- (a new one comes in open water)
+		end
+	end
+	if now < u.reverseUntil then
+		throttle, steer = -1, u.reverseSteer
+	elseif (beached and dist > CG_ARREST_RANGE) or (throttle > 0.5 and math.abs(speed) < 3) then
+		u.stuckFor += dt
+		if u.stuckFor > 2 then
+			u.stuckFor = 0
+			u.reverseUntil = now + 1.5
+			u.reverseSteer = angle > 0 and -1 or 1
+			u.stucks = (now - u.lastStuckAt < 20) and u.stucks + 1 or 1
+			u.lastStuckAt = now
+			if u.stucks >= CG_STUCK_TRIES then
+				return despawn(u)
+			end
+		end
+	else
+		u.stuckFor = 0
+	end
+
+	-- Upside down? Put it back.
+	if cf.UpVector.Y < 0.3 then
+		u.upsideFor += dt
+		if u.upsideFor > 3 then
+			u.upsideFor = 0
+			car:PivotTo(CFrame.lookAt(pos + Vector3.new(0, 4, 0), pos + Vector3.new(0, 4, 0) + (look.Magnitude > 0 and look or Vector3.new(0, 0, -1))))
+			chassis.AssemblyLinearVelocity = Vector3.zero
+			chassis.AssemblyAngularVelocity = Vector3.zero
+		end
+	else
+		u.upsideFor = 0
+	end
+
+	-- Never faster than 95% of the target's boat (a swimmer counts as 120).
+	local scale = math.min(1, (info.maxSpeed * 0.95) / (car:GetAttribute("MaxSpeed") or CG_TOP))
+	CarPhysics.Step(u.phys, dt, { Throttle = throttle, Steer = steer, SpeedScale = scale })
+
+	-- Arrest: a boat that stays (nearly) stopped alongside, or anyone in the water this close.
+	local swimmer = not info.inCar
+	local slow = swimmer or info.vel.Magnitude < CG_SLOW
+	local close = dist < CG_ARREST_RANGE and math.abs(toTarget.Y) < CG_ARREST_RISE
+	if close and slow then
+		if swimmer and not u.toldSwim then
+			u.toldSwim = true
+			notify:FireClient(p, "CoastGuardSwim")
+		end
+		u.arrestFor += dt
+		if u.arrestFor >= ARREST_SECONDS then
+			u.arrestFor = 0
+			Officers.BoatCuff(p, car, 0)
+			require(ServerScriptService.Services.ArrestService).Arrest(p, nil)
+			return
+		end
+	else
+		u.arrestFor = math.max(0, u.arrestFor - dt * (close and 0.5 or 2))
+	end
+	-- The driver's BEING CUFFED bar ("DRIVE to break free").
+	Officers.BoatCuff(p, car, (not swimmer and u.arrestFor > 0) and u.arrestFor / ARREST_SECONDS or 0)
+end
+
 local function manage()
 	local cops = copCount()
 	local t = serverNow()
+	setWaterFilter()
 	for _, p in ipairs(Players:GetPlayers()) do
 		if wanted(p) then
 			local want = desiredFor(p, cops)
-			local have = unitsFor(p)
 			local info = targetInfo(p)
-			if info and info.boat then
-				want = 0
-			end
+			-- Out on the water it's Coast Guard boats, on land patrol cars (each kind leaves the other's
+			-- place by itself: drive / driveBoat).
+			local sea = info ~= nil and atSea(info)
+			atSeaNow[p] = sea or nil
+			local have = unitsFor(p, sea)
 			-- Head start: nobody comes until the grace time for this many stars is over.
 			local arriveAt = arrivalTime(p)
 			local waiting = t < arriveAt
-			setETA(p, (waiting and want > 0 and have == 0) and arriveAt or nil)
+			setETA(p, (waiting and want > 0 and unitsFor(p) == 0) and arriveAt or nil)
 			if info and have < want and not waiting and #units < MAX_TOTAL and os.clock() - (lastSpawnFor[p] or 0) > SPAWN_GAP then
-				spawnFor(p, info)
+				if sea then
+					spawnBoatFor(p, info)
+				else
+					spawnFor(p, info)
+				end
 			elseif have > want then
 				for _, u in ipairs(units) do
-					if u.target == p then
+					if u.target == p and (u.boat == true) == sea then
 						despawn(u)
 						break
 					end
@@ -420,6 +742,7 @@ local function manage()
 			end
 		else
 			wantedAt[p] = nil
+			atSeaNow[p] = nil
 			setETA(p, nil)
 		end
 	end
@@ -430,6 +753,7 @@ function AIPoliceService.Count()
 end
 
 function AIPoliceService.Init()
+	notify = Remotes.Event("Notify")
 	RoadGraph.BuildFromWorld()
 	RoadGraph.Publish()
 	task.spawn(function()
@@ -446,7 +770,7 @@ function AIPoliceService.Init()
 		for i = #units, 1, -1 do
 			local u = units[i]
 			if u then
-				local ok, err = pcall(drive, u, dt, now)
+				local ok, err = pcall(u.boat and driveBoat or drive, u, dt, now)
 				if not ok then
 					warn("[AIPolice] " .. tostring(err))
 					despawn(u)
@@ -457,6 +781,8 @@ function AIPoliceService.Init()
 	Players.PlayerRemoving:Connect(function(p)
 		lastSpawnFor[p] = nil
 		wantedAt[p] = nil
+		atSeaNow[p] = nil
+		cgToldFor[p] = nil
 	end)
 end
 

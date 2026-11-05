@@ -55,7 +55,8 @@
 --     attribute CuffProgress (0..1 in 0.05 steps; the furthest along when several officers are at it)
 --     tells their LawClient, which draws BEING CUFFED with a bar ("RUN to break free" unless the hands
 --     are up). nil the rest of the time, set every K.TICK by a loop of its own (Init), so officers who
---     go (back in the car, down, removed) take it with them.
+--     go (back in the car, down, removed) take it with them. A Coast Guard boat arresting a boat's
+--     driver feeds the same bar (BoatCuff, from AIPoliceService): its officers stay aboard.
 --   * Walking officers are HeatService eyes, like the patrol cars, and carry the attribute AimTarget
 --     (CombatClient's AIM swing can lock onto them). Riders don't (bullets pass through them to the car).
 -- Look: navy uniform (body colours), a cap, a gold badge, POLICE on the back, a pistol that shows only
@@ -140,6 +141,7 @@ local crews = {} -- every crew from Board, until Remove
 local byModel = setmetatable({}, { __mode = "k" }) -- [walking officer Model] = its officer record
 local assaultAt = setmetatable({}, { __mode = "k" }) -- [player] = os.clock() they last hit an officer
 local officerHeatAt = setmetatable({}, { __mode = "k" }) -- [player] = os.clock() of their last officer star
+local boatCuff = {} -- [player] = { [Coast Guard boat] = { frac, at } } (BoatCuff)
 local templates = {} -- built at Init
 local rng = Random.new()
 local notify
@@ -1130,6 +1132,22 @@ function PoliceOfficerService.NPCHit(model, attacker, damage, dir, kind)
 	return true
 end
 
+-- AIPoliceService: a Coast Guard boat (source) is `frac` (0..1) of the way to arresting this player's boat.
+-- Their officers can't walk on water, so the boat does the cuffing; this puts it on the same BEING CUFFED
+-- bar. Called every frame while it runs (0 or nil ends it); a value not renewed for 3 ticks is dropped.
+function PoliceOfficerService.BoatCuff(p, source, frac)
+	local bySource = boatCuff[p]
+	if type(frac) == "number" and frac > 0 then
+		if not bySource then
+			bySource = {}
+			boatCuff[p] = bySource
+		end
+		bySource[source] = { frac = frac, at = os.clock() }
+	elseif bySource then
+		bySource[source] = nil
+	end
+end
+
 -- Is any walking officer within `range` studs of `pos`? (Giving up near them counts like near a patrol.)
 function PoliceOfficerService.Near(pos, range)
 	for _, o in pairs(byModel) do
@@ -1265,6 +1283,20 @@ function PoliceOfficerService.Init()
 					if p and o.state == "Out" and (o.cuffFor or 0) > 0 then
 						local need = p:GetAttribute("Surrender") == true and K.SURRENDER_CUFF or K.CUFF
 						best[p] = math.max(best[p] or 0, o.cuffFor / need)
+					end
+				end
+				-- Coast Guard boats cuffing a boat's driver (BoatCuff).
+				local clock = os.clock()
+				for p, bySource in pairs(boatCuff) do
+					for source, c in pairs(bySource) do
+						if clock - c.at > K.TICK * 3 then
+							bySource[source] = nil
+						else
+							best[p] = math.max(best[p] or 0, c.frac)
+						end
+					end
+					if next(bySource) == nil or p.Parent ~= Players then
+						boatCuff[p] = nil
 					end
 				end
 				for _, p in ipairs(Players:GetPlayers()) do
