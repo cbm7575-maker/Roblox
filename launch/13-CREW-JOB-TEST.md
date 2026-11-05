@@ -1,6 +1,8 @@
 # Crew Heist: saved crews, ride-to-crew, crew preps and the Big Score
 
-**Status (Nov 4, 2026):** built locally and **play-tested in Studio with two players**. Offline checks pass too: compile, a lint diff, and `tools/logic-tests/crew.sh` (89 checks). It is **not** live and not committed.
+**Status (Nov 5, 2026):** **live as v9**, published Nov 5 at 16:57 UTC. Committed as 06d216a and **play-tested in Studio with two players** on Nov 4. Offline checks pass too: compile, a lint diff, and `tools/logic-tests/crew.sh` (89 checks).
+
+The publish added only the 10 crew game files on top of live v8. Servers weren't restarted, so new servers get v9.
 
 ### Studio test results (Nov 4, about 7:10–7:35 PM, Server & Clients with 2 players)
 
@@ -84,6 +86,68 @@ Before syncing scripts, run `python tools/manifest.py`. Note that another sessio
 9. **Phone layout.** Repeat steps 1 to 4 in phone layout (`PreviewTouch`). Check the CREW UP? card and the plan row fit a 667 x 375 screen.
 
 **Solo in Studio:** `["call","CrewService","Debug","$me","solo"]` makes a crew of one, so the preps can be driven alone. It only works in Studio.
+
+## Crew tip: "WAY MORE MONEY" (Nov 5, live as v13)
+
+The owner asked (Nov 5) for something that tells players they can make a lot more money with a crew, and that they can join up with anyone in the server.
+
+**Status:**
+- **Live as v13**, published Nov 5 at 19:20 UTC on top of v12. Servers weren't restarted.
+- **What the publish added:** exactly 3 client scripts on top of v12.
+  - Shared.Util.CrewTip (new).
+  - CrewClient.
+  - PhoneUI: the live 06d216a version plus only the two tip hunks. The Empire hunks in the repo's PhoneUI are not live.
+- **Checks:** the offline checks pass (compile, a lint diff, and `tools/logic-tests/crewtip.sh` with 30 checks), and the two-player Studio test passed (results below).
+- **Not committed yet.**
+
+**Studio test results (Nov 5, ~12:07–12:20 PM, a copy of live v12 plus the 3 scripts, Server and 2 clients):**
+
+| What | Result |
+|---|---|
+| The Big Score refusing for want of a crew (Player1) | The tip came up within a second: "WAY MORE MONEY / Crews unlock The Big Score: $48,000+ each. You can team up with anyone in this server!" All three lines show on PC, with FIND A CREW and LATER. |
+| A $2,500 payout (Player2, no crew) | The tip came up straight away. The $1,000 daily-streak bonus at login didn't trigger it (first 60 s). |
+| The tutorial still running | No tip until the tutorial was finished (by design). |
+| FIND A CREW | The phone opened on CREW, showing the new note ("Crews make way more money... team up with anyone in this server...") and "Anyone here can join your crew: tap INVITE to ask them." above Player2's INVITE button. The first try fell exactly on the card's 20 s timeout. |
+| LATER | The card went. |
+| An invite while the tip is up | Player1's INVITE replaced Player2's tip with the CREW INVITE card. JOIN formed the crew (the CREW HEIST section with PAUSE HEIST), and the tip didn't come back. |
+| Phone layout (PreviewTouch) | One row. **Fixed in the test:** on the narrowest cards (330 px, a 667 px-wide phone) the second line was cut off, so the phone words now shrink to fit (13 px down to 9). Retested at a ~490 px view: "Crews earn $48K+ each. Team up with anyone here!" shows in full. |
+| Crew saved between sessions | The crew from the first session was still there in the second, and the heist plan was on screen. |
+| Errors | 0 in the server and client logs, in both sessions. |
+
+**What players see:**
+- **The crew tip card**, for players with no crew. It appears in the crew invite's spot:
+  - A green **WAY MORE MONEY** tag.
+  - PC: "Crews unlock The Big Score: $48,000+ each. You can team up with anyone in this server!"
+  - Phones: "Crews earn $48K+ each. Team up with anyone here!"
+  - **FIND A CREW** opens PHONE > CREW. **LATER** closes the card, which also goes after 20 s.
+- **When the card comes up:**
+  - About 3 minutes into a session.
+  - Right after a solo payout of $1,000 or more.
+  - Straight away when The Big Score refuses to start because there's no crew.
+- **Limits:**
+  - The card only appears in free roam, past the tutorial, and when nothing else is on screen in that spot: no mission, race, job, wanted level or open phone.
+  - It needs another free-roam player in the server.
+  - At most 3 timed or payout tips a session, at most one every 8 minutes, and none after LATER is pressed twice. The Big Score refusal still brings it up.
+- **PHONE > CREW (no crew):**
+  - The CREW HEIST note now reads: "Crews make way more money: The Big Score pays $48,000+ each. You can team up with anyone in this server: tap INVITE by a name under PLAYERS HERE, or give someone a ride..."
+  - PLAYERS HERE starts with "Anyone here can join your crew: tap INVITE to ask them."
+
+**Where it lives:**
+- Timing rules: `src/shared/Util/CrewTip.lua`.
+- The card: `CrewClient` (frame "CrewInvite" with attribute Kind = "Tip", so the HUD pieces that keep clear of the invite keep clear of it too).
+- The phone text: `PhoneUI`.
+- There are no server changes.
+
+**Studio test (two players, Server & Clients):**
+1. **Big Score refusal.** On Player1 (no crew), press START on THE BIG SCORE in PHONE > CREW, then close the phone. Or fire Notify "BigScoreNeedCrew" to Player1 from the server bar.
+   - Expected: the tip card, with the words not cut off.
+2. **FIND A CREW.** Expected: PHONE > CREW opens, showing the new note, "Anyone here can join your crew", and Player2 with INVITE.
+3. **Payout.** 60 s or more into the session, add $2,500 to Player2 (no crew).
+   - Expected: the tip comes up within a second or two.
+   - Press LATER. Expected: it goes.
+4. **Joining.** With the tip up, Player2 joins a crew. Expected: the tip goes.
+5. **Phone layout.** Repeat step 1 with `PreviewTouch`. Expected: one 60 px row with FIND A CREW and LATER, and the words fit.
+6. **Errors:** none in the server log or either client log.
 
 ## Owner decisions (defaults chosen; easy to change in Config/Missions.lua)
 

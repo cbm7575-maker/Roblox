@@ -34,6 +34,17 @@
 --     reaches over it. Phones: one 60 px row in the invite card's band ("THE BIG SCORE 1/4", "Next: ...",
 --     START, PAUSE HEIST). Either steps aside for a stamp, the crew invite, a ride card, a pass offer
 --     and the open phone.
+--   * The crew tip (for players with no crew). It uses the invite card's spot and its frame name
+--     "CrewInvite", with attribute Kind = "Tip", so every HUD piece that keeps clear of the invite keeps
+--     clear of it too.
+--     - What it says: "MAKE WAY MORE MONEY". A crew earns The Big Score's $48,000+ each, and anyone in this
+--       server can be a crewmate.
+--     - Buttons: FIND A CREW opens PHONE > CREW (PLAYERS HERE has an INVITE button by every name); LATER.
+--     - When it comes up (Util/CrewTip): a few minutes into the session, after a solo payout of $1,000 or
+--       more, and when The Big Score refuses for want of a crew. At most a few times a session, and only in
+--       free roam, past the tutorial, not busy, with another free-roam player in the server.
+--     - It goes after TIP_FOR seconds, when you join a crew, or when an invite arrives (the invite takes
+--       the spot).
 --   CrewClient.Crewmates() -> the other players in your crew
 
 local Players = game:GetService("Players")
@@ -45,6 +56,8 @@ local Remotes = require(ReplicatedStorage.Shared.Util.Remotes)
 local Theme = require(ReplicatedStorage.Shared.Util.Theme)
 local Heists = require(ReplicatedStorage.Shared.Config.Heists)
 local Missions = require(ReplicatedStorage.Shared.Config.Missions)
+local Tutorial = require(ReplicatedStorage.Shared.Config.Tutorial)
+local CrewTip = require(ReplicatedStorage.Shared.Util.CrewTip)
 local HUDController = require(script.Parent:WaitForChild("HUDController"))
 local NotifyController = require(script.Parent:WaitForChild("NotifyController"))
 
@@ -56,7 +69,13 @@ local C = Theme.Color
 
 local CARD_W = 320 -- PC: two rows
 local CARD_W_TOUCH, MIN_W_TOUCH = 380, 330 -- phones: one row (it narrows to MIN_W_TOUCH before covering the minimap)
-local JOIN_W, NO_W = 64, 92 -- phone button widths
+-- Per card kind: the phone button widths (yes, no) and the PC card's lines of words.
+local CARD_KINDS = {
+	Invite = { yes = 64, no = 92, lines = 2 }, -- JOIN, NO THANKS
+	Tip = { yes = 104, no = 72, lines = 3 }, -- FIND A CREW, LATER
+}
+local TIP_FOR = 20 -- seconds before the crew tip goes
+local TIP_CHECK_EVERY = 1 -- seconds between checks for whether the crew tip is due
 local GAP = 8 -- pixels kept from the zones beside the card
 local GAP_Y = 4 -- ...and above / below it
 local EDGE = 12
@@ -65,7 +84,10 @@ local TAGS_EVERY = 1 -- seconds between name tag checks
 local CHECK_EVERY = 0.2 -- seconds between checks for a stamp over the card
 
 local gui, card
+local cardKind = "Invite" -- what the card is: "Invite" or "Tip" (CARD_KINDS)
+local cardWords -- { pc = words, touch = words } on the card (fitCard picks one for the screen)
 local tags = {} -- [player] = BillboardGui
+local tip = CrewTip.new(os.clock()) -- when the crew tip may come up (Util/CrewTip)
 
 local JOB_NAME = (Missions.CrewJob and Missions.CrewJob.Name) or "The Big Score"
 
@@ -198,9 +220,11 @@ local function fitCard()
 		return
 	end
 	local touch = Theme.IsTouch()
+	local kind = CARD_KINDS[cardKind] or CARD_KINDS.Invite
 	local pad = touch and 8 or 10
 	local buttonH = touch and Theme.Touch or 32
-	local h = touch and (pad + buttonH + pad) or (pad + 18 + 36 + 6 + buttonH + pad) -- 60 on phones, 112 on a PC
+	local wordsH = 18 * kind.lines -- PC: the words' height (two lines for an invite, three for the tip)
+	local h = touch and (pad + buttonH + pad) or (pad + 18 + wordsH + 6 + buttonH + pad) -- 60 on phones; 112 / 130 on a PC
 	-- Across: right of the left column (feed; minimap on phones), left of the Status column.
 	local lx, _, lw = zoneBox(touch and "Minimap" or "Feed", touch, screen)
 	local left = lx + lw + GAP
@@ -223,9 +247,22 @@ local function fitCard()
 	card.Size = UDim2.fromOffset(w, h)
 	local tagLabel, line = card:FindFirstChild("Tag"), card:FindFirstChild("Line")
 	local accept, decline = card:FindFirstChild("Accept"), card:FindFirstChild("Decline")
+	if cardWords then
+		line.Text = touch and cardWords.touch or cardWords.pc
+	end
+	-- Phones: the words shrink a little where the card is narrow (330 px on a 667 px-wide phone) rather
+	-- than being cut off; never past 9 or over 13.
+	line.TextScaled = touch
+	local fit = line:FindFirstChildOfClass("UITextSizeConstraint")
+	if touch and not fit then
+		fit = Instance.new("UITextSizeConstraint")
+		fit.MinTextSize = 9
+		fit.MaxTextSize = 13
+		fit.Parent = line
+	end
 	if touch then
 		-- One row: [CREW INVITE / <name> wants you in their crew] .... [JOIN] [NO THANKS]
-		local reserved = 14 + 10 + JOIN_W + 6 + NO_W + 8 -- the words' left inset, a gap, the two buttons
+		local reserved = 14 + 10 + kind.yes + 6 + kind.no + 8 -- the words' left inset, a gap, the two buttons
 		tagLabel.TextSize = 13
 		tagLabel.Position = UDim2.fromOffset(14, 6)
 		tagLabel.Size = UDim2.new(1, -reserved, 0, 14)
@@ -234,18 +271,18 @@ local function fitCard()
 		line.Size = UDim2.new(1, -reserved, 0, 32) -- two lines
 		decline.AnchorPoint = Vector2.new(1, 0.5)
 		decline.Position = UDim2.new(1, -8, 0.5, 0)
-		decline.Size = UDim2.fromOffset(NO_W, buttonH)
+		decline.Size = UDim2.fromOffset(kind.no, buttonH)
 		accept.AnchorPoint = Vector2.new(1, 0.5)
-		accept.Position = UDim2.new(1, -(8 + NO_W + 6), 0.5, 0)
-		accept.Size = UDim2.fromOffset(JOIN_W, buttonH)
+		accept.Position = UDim2.new(1, -(8 + kind.no + 6), 0.5, 0)
+		accept.Size = UDim2.fromOffset(kind.yes, buttonH)
 	else
-		-- Two rows: the tag and the words, then JOIN and NO THANKS side by side.
+		-- Two rows: the tag and the words, then the two buttons side by side.
 		tagLabel.TextSize = 14
 		tagLabel.Position = UDim2.fromOffset(16, pad)
 		tagLabel.Size = UDim2.new(1, -32, 0, 16)
 		line.TextSize = 15
 		line.Position = UDim2.fromOffset(16, pad + 18)
-		line.Size = UDim2.new(1, -32, 0, 36) -- two lines
+		line.Size = UDim2.new(1, -32, 0, wordsH)
 		for _, b in ipairs({ accept, decline }) do
 			b.AnchorPoint = Vector2.new(0, 1)
 			b.Size = UDim2.new(0.5, -(16 + 4), 0, buttonH)
@@ -275,15 +312,16 @@ local function button(parent, name, text, kind, onClick)
 	return b
 end
 
-local function showInvite(info)
-	if type(info) ~= "table" then
-		return
-	end
+-- Put up the card (see the header), in place of any card already up. o = { kind = "Invite" | "Tip",
+-- tag, tagColor, words = { pc, touch }, yes, no (button words), onYes, onNo, seconds (before it goes) }.
+local function openCard(o)
 	if card then
 		card:Destroy()
 	end
+	cardKind, cardWords = o.kind, o.words
 	card = Instance.new("Frame")
-	card.Name = "CrewInvite"
+	card.Name = "CrewInvite" -- (the crew tip too: the HUD pieces that keep clear of this spot look for this name)
+	card:SetAttribute("Kind", o.kind)
 	card.AnchorPoint = Vector2.new(0.5, 0)
 	card.Active = true -- taps on the card don't reach the world behind it
 	Theme.Panel(card, 0.2)
@@ -298,43 +336,56 @@ local function showInvite(info)
 	local tag = Instance.new("TextLabel")
 	tag.Name = "Tag"
 	Theme.Text(tag, 14, "Display")
-	tag.TextColor3 = C.Gold
+	tag.TextColor3 = o.tagColor or C.Gold
 	tag.TextXAlignment = Enum.TextXAlignment.Left
 	tag.Size = UDim2.new(1, -32, 0, 16)
-	tag.Text = "CREW INVITE"
+	tag.Text = o.tag
 	tag.Parent = card
 	local line = Instance.new("TextLabel")
 	line.Name = "Line"
 	Theme.Text(line, 15, "Body")
 	line.TextXAlignment = Enum.TextXAlignment.Left
-	line.TextYAlignment = Enum.TextYAlignment.Top -- right under the tag, one line or two
+	line.TextYAlignment = Enum.TextYAlignment.Top -- right under the tag, however many lines
 	line.TextWrapped = true
 	line.TextTruncate = Enum.TextTruncate.AtEnd
 	line.Size = UDim2.new(1, -32, 0, 36)
-	line.Text = tostring(info.FromName) .. " wants you in their crew" .. (info.Switch and " (you'd leave yours)" or "")
+	line.Text = o.words.pc
 	line.Parent = card
 	local mine = card
-	local function answer(action)
-		Remotes.Event("RequestCrew"):FireServer(action)
+	local function close()
 		if card == mine then
 			card:Destroy()
 			card = nil
 		end
 	end
-	button(card, "Accept", "JOIN", "Primary", function()
-		answer("Accept")
+	button(card, "Accept", o.yes, "Primary", function()
+		close()
+		o.onYes()
 	end)
-	button(card, "Decline", "NO THANKS", "Quiet", function()
-		answer("Decline")
+	button(card, "Decline", o.no, "Quiet", function()
+		close()
+		o.onNo()
 	end)
 	fitCard()
 	card.Visible = cardWanted()
-	task.delay(INVITE_FOR, function()
-		if card == mine then
-			card:Destroy()
-			card = nil
-		end
-	end)
+	task.delay(o.seconds, close)
+end
+
+local function showInvite(info)
+	if type(info) ~= "table" then
+		return
+	end
+	local words = tostring(info.FromName) .. " wants you in their crew" .. (info.Switch and " (you'd leave yours)" or "")
+	openCard({
+		kind = "Invite", tag = "CREW INVITE", words = { pc = words, touch = words },
+		yes = "JOIN", no = "NO THANKS", seconds = INVITE_FOR,
+		onYes = function()
+			Remotes.Event("RequestCrew"):FireServer("Accept")
+		end,
+		onNo = function()
+			Remotes.Event("RequestCrew"):FireServer("Decline")
+		end,
+	})
 end
 
 ------------------------------------------------------------------ the heist plan
@@ -600,15 +651,9 @@ local function placePlan()
 	drawPlan()
 end
 
--- Should the plan be up? A crew with its heist not paused, in free roam, not wanted, and not busy with a
--- mission (a prep included), the Big Score, a race or a job shift.
-local function planWanted()
-	if type(player:GetAttribute("CrewPreps")) ~= "string" or player:GetAttribute("CrewPaused") == true then
-		return false
-	end
-	if os.clock() - (plan.pausedAt or -math.huge) < PLAN.PAUSE_HIDE then
-		return false -- (PAUSE was pressed: hidden until the server's answer lands)
-	end
+-- In free roam, on the HUD (not the title screen), not wanted, and not busy with a mission (a prep
+-- included), the Big Score, a race or a job shift.
+local function freeRoamIdle()
 	if player:GetAttribute("Side") ~= "Civilian" or player:GetAttribute("TitleScreen") == true
 		or (player:GetAttribute("Heat") or 0) > 0 then
 		return false
@@ -617,19 +662,30 @@ local function planWanted()
 		or player:GetAttribute("JobKind"))
 end
 
+-- Should the plan be up? A crew with its heist not paused, and the player free (freeRoamIdle).
+local function planWanted()
+	if type(player:GetAttribute("CrewPreps")) ~= "string" or player:GetAttribute("CrewPaused") == true then
+		return false
+	end
+	if os.clock() - (plan.pausedAt or -math.huge) < PLAN.PAUSE_HIDE then
+		return false -- (PAUSE was pressed: hidden until the server's answer lands)
+	end
+	return freeRoamIdle()
+end
+
 local function uiPart(guiName, childName)
 	local pg = player:FindFirstChild("PlayerGui")
 	local sg = pg and pg:FindFirstChild(guiName)
 	return sg and sg:FindFirstChild(childName)
 end
 
--- Is something else using the plan's spot right now? A stamp over it, the crew invite, a ride card, a pass
--- offer, the phone, or (PC) a toast or Coast Feed post reaching over it.
-local function planCovered()
-	local f = plan.frame
-	if card then
-		return true
-	end
+local function phoneModule()
+	local ok, PhoneUI = pcall(require, script.Parent:FindFirstChild("PhoneUI"))
+	return ok and type(PhoneUI) == "table" and PhoneUI or nil
+end
+
+-- Is a ride card, a pass offer or the phone up? (They share the card's band, or cover it.)
+local function bandTaken()
 	local ride = uiPart("RideInvite", "RideCard")
 	if ride and ride:IsA("GuiObject") and ride.Visible then
 		return true
@@ -638,8 +694,15 @@ local function planCovered()
 	if offer and offer:IsA("GuiObject") and offer.Visible then
 		return true
 	end
-	local okPhone, PhoneUI = pcall(require, script.Parent:FindFirstChild("PhoneUI"))
-	if okPhone and type(PhoneUI) == "table" and type(PhoneUI.IsOpen) == "function" and PhoneUI.IsOpen() then
+	local PhoneUI = phoneModule()
+	return PhoneUI ~= nil and type(PhoneUI.IsOpen) == "function" and PhoneUI.IsOpen() == true
+end
+
+-- Is something else using the plan's spot right now? A stamp over it, the crew card, a ride card, a pass
+-- offer, the phone, or (PC) a toast or Coast Feed post reaching over it.
+local function planCovered()
+	local f = plan.frame
+	if card or bandTaken() then
 		return true
 	end
 	local origin = gui.AbsolutePosition
@@ -683,6 +746,54 @@ local function planTick()
 	if plan.frame.Visible ~= want then
 		plan.frame.Visible = want
 	end
+end
+
+------------------------------------------------------------------ the crew tip
+
+-- Is someone else in this server to team up with? Another player in free roam.
+local function someoneToTeamWith()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p:GetAttribute("Side") == "Civilian" then
+			return true
+		end
+	end
+	return false
+end
+
+-- Could the crew tip come up right now? (see the header)
+local function tipReady()
+	if card or player:GetAttribute("Crew") ~= nil or not freeRoamIdle() then
+		return false
+	end
+	local step = player:GetAttribute("TutorialStep")
+	if type(step) ~= "number" or step < #Tutorial.Steps then
+		return false
+	end
+	if not cardWanted() or bandTaken() then
+		return false
+	end
+	return someoneToTeamWith()
+end
+
+local function showTip(why)
+	CrewTip.Shown(tip, why, os.clock())
+	openCard({
+		kind = "Tip", tag = "WAY MORE MONEY", tagColor = C.Cash,
+		words = {
+			pc = "Crews unlock " .. JOB_NAME .. ": " .. cash(PLAN.CUT) .. "+ each. You can team up with anyone in this server!",
+			touch = "Crews earn " .. PLAN.CUT_SHORT .. ". Team up with anyone here!",
+		},
+		yes = "FIND A CREW", no = "LATER", seconds = TIP_FOR,
+		onYes = function()
+			local PhoneUI = phoneModule()
+			if PhoneUI and type(PhoneUI.Open) == "function" then
+				PhoneUI.Open("Crew") -- (PLAYERS HERE: an INVITE button by every name)
+			end
+		end,
+		onNo = function()
+			CrewTip.Later(tip, os.clock())
+		end,
+	})
 end
 
 -- The crew job's moments (see the header).
@@ -765,7 +876,28 @@ function CrewClient.Init()
 		end
 	end)
 	player:GetAttributeChangedSignal("TitleScreen"):Connect(refreshTags)
-	local lastTags, lastCheck = 0, 0
+	-- The crew tip's moments (Util/CrewTip): a payout, The Big Score refusing for want of a crew. Joining a
+	-- crew takes the tip away.
+	local lastCash = player:GetAttribute("Cash")
+	player:GetAttributeChangedSignal("Cash"):Connect(function()
+		local value = player:GetAttribute("Cash")
+		if type(value) == "number" and type(lastCash) == "number" and value > lastCash and player:GetAttribute("Crew") == nil then
+			CrewTip.Payout(tip, value - lastCash, os.clock())
+		end
+		lastCash = value
+	end)
+	Remotes.OnClient("Notify", function(key)
+		if key == "BigScoreNeedCrew" and player:GetAttribute("Crew") == nil then
+			CrewTip.NeedCrew(tip, os.clock())
+		end
+	end)
+	player:GetAttributeChangedSignal("Crew"):Connect(function()
+		if player:GetAttribute("Crew") ~= nil and card and cardKind == "Tip" then
+			card:Destroy()
+			card = nil
+		end
+	end)
+	local lastTags, lastCheck, lastTip = 0, 0, 0
 	RunService.Heartbeat:Connect(function()
 		local now = os.clock()
 		if now - lastCheck >= CHECK_EVERY then
@@ -778,6 +910,13 @@ function CrewClient.Init()
 				end
 			end
 			planTick()
+		end
+		if now - lastTip >= TIP_CHECK_EVERY then
+			lastTip = now
+			local why = CrewTip.Due(tip, now, tipReady())
+			if why then
+				showTip(why)
+			end
 		end
 		if now - lastTags > TAGS_EVERY then
 			lastTags = now

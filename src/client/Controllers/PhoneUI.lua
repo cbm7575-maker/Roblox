@@ -2559,8 +2559,9 @@ function PAGES.Crew()
 	elseif not myCrew then
 		W.head(s, "CREW HEIST", order, C.Gold)
 		order += 1
-		W.note(s, "Crew up (2 to 4 players) to get a crew heist: " .. prepsTotal .. " preps you drive together unlock The Big"
-			.. " Score. Tip: give someone a ride, then add them to your crew.", order).Name = "JobNote"
+		W.note(s, "Crews make way more money: The Big Score pays " .. money(Heists.BigScoreCut(2)) .. "+ each. You can team up"
+			.. " with anyone in this server: tap INVITE by a name under PLAYERS HERE, or give someone a ride. A crew of 2 to 4"
+			.. " drives " .. prepsTotal .. " preps together to unlock it.", order).Name = "JobNote"
 		order += 1
 	end
 	-- THE BIG SCORE (BigScoreService): whether you could start it right now (PhoneUI.Init's 0.5 s loop
@@ -2673,6 +2674,10 @@ function PAGES.Crew()
 	end
 	W.head(s, "PLAYERS HERE", order)
 	order += 1
+	if not myCrew and #Players:GetPlayers() > 1 then
+		W.note(s, "Anyone here can join your crew: tap INVITE to ask them.", order).Name = "AnyoneNote"
+		order += 1
+	end
 	local any = false
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player and (not myCrew or p:GetAttribute("Crew") ~= myCrew) then
