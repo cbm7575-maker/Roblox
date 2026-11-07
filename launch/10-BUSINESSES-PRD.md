@@ -553,3 +553,26 @@ The details are in launch/17, 19 and 20.
 - **Owning all five:** keep the level-5 total (about $2,300 a minute by day, $3,200 at night). Tune it after the private live test, once real players show how fast they get there. `RateScale` is the one setting that turns every trickle down.
 - **Map letter:** the Nightclub stays a pink **V**.
 - **The back room** stays small (about $34 a minute averaged over a day at level 1). The Print Shop remains the main dirty-money business.
+
+## 23. Launch: live as v15 (Nov 6, 2026, 03:26:13 UTC)
+
+The owner said: "do the test and push to live".
+
+**How it was published:**
+- **Started from the live place (v14, the Lucky Wheel).** I opened it with `RobloxStudioBeta.exe -task EditPlace -placeId 121416734424826 -universeId 10774451152` and copied all 150 scripts out byte for byte.
+- **Compared them with the working tree.** 133 were identical, the 8 business scripts were missing, and 16 differed:
+  - The 15 shared files the business commits touch: Main, ClientMain, PhoneUI, CombatService, MapService, DataService, JobService, VehicleService, Sounds, CombatClient, GPSClient, InteractClient, LocomotionClient, MapClient and MinimapClient.
+  - DesignDoc, which was left as live has it.
+- **Checked the shared files.** Taking the business commits (474ac6e, 5d62dfa) back out of each working-tree copy gave the live copy byte for byte for 12 files. For Main, ClientMain and PhoneUI, a line-by-line check found nothing but business lines.
+- **Synced exactly 23 files.** These were the 8 business scripts (`Businesses.Live = true`) and the 15 shared files, through a filtered DevSync on port 34996, with `ScriptEditorService` for BusinessClient (243,873 chars).
+- **Checked the result.** I copied everything out again. All 158 scripts except DesignDoc now equal the working tree, and the Lucky Wheel's three scripts and its start-order line are intact.
+
+**Smoke test** in that copy (Play Solo):
+- No server or client errors.
+- `BusinessesOn` is true, and all five buildings are in Workspace.Shops.
+- The service, wash and shine prompts are there, and so are the EMPIRE and SPIN phone apps.
+- The Car Wash card opens, showing $25,000 and "NEED $13,800 MORE".
+
+**Published** with File > Publish ("Add publish notes to v15"). The games API now shows `updated` 2026-11-07T03:26:13Z. Servers were not restarted (owner's rule): new servers get the businesses.
+
+**Watch from Nov 8:** BizJob_*, BizTourStart_*, BizRental_*, Empire XP. Then do the balance pass on the earnings (section 22).

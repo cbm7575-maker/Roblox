@@ -246,7 +246,8 @@ local Businesses = {}
 ------------------------------------------------------------------ switches and the economy
 
 -- Live servers only run the feature when this is true (Studio always does; see LAUNCH SWITCH above).
-Businesses.Live = false
+-- Turned on Nov 6 2026 with the owner's go-ahead ("do the test and push to live").
+Businesses.Live = true
 
 Businesses.RateScale = 1 -- x every business income (trickle and job pay). 1 = the numbers below.
 Businesses.TickSeconds = 30 -- the server settles every register this often (and before every action)

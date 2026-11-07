@@ -260,7 +260,7 @@ for _, def in ipairs(Businesses.List) do
 end
 check("M5: all five businesses are enabled, in the PRD order", #enabled == 5 and enabled[1] == "CarWash"
 	and enabled[2] == "PalmGrind" and enabled[3] == "PrintShop" and enabled[4] == "BoatRentals" and enabled[5] == "Nightclub", table.concat(enabled, ","))
-check("the launch switch is off for live servers", Businesses.Live == false)
+check("the launch switch is on (the owner said go, Nov 6 2026)", Businesses.Live == true)
 local want = { CarWash = { 25000, 1, "Legit" }, PalmGrind = { 45000, 1, "Legit" }, PrintShop = { 90000, 1, "Shady" },
 	BoatRentals = { 120000, 2, "Legit" }, Nightclub = { 250000, 3, "Legit" } }
 local ok = true
